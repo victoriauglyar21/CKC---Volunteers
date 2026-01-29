@@ -355,6 +355,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [profileSaveMessage, setProfileSaveMessage] = useState("");
   const [profileSaveLoading, setProfileSaveLoading] = useState(false);
   const scrollYRef = useRef(0);
+  const todayCellRef = useRef<HTMLDivElement | null>(null);
+  const pendingTodayScrollRef = useRef<string | null>(null);
+  const todayKey = getDateKey(today);
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
 
   useEffect(() => {
@@ -1537,12 +1542,88 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!showMenu) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!menuRef.current) return;
+      if (menuRef.current.contains(event.target as Node)) return;
+      setShowMenu(false);
+    };
+    document.addEventListener("click", handleClick);
+    return () => {
+      document.removeEventListener("click", handleClick);
+    };
+  }, [showMenu]);
+
+  const findScrollParent = (node: HTMLElement | null) => {
+    let current: HTMLElement | null = node?.parentElement ?? null;
+    while (current) {
+      const style = window.getComputedStyle(current);
+      const overflowY = style.overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  };
+
+  const scrollToDateKey = (dateKey: string) => {
+    const target = document.getElementById(`day-${dateKey}`) as HTMLDivElement | null;
+    if (!target) return;
+    const scrollParent = findScrollParent(target);
+    if (scrollParent) {
+      const parentRect = scrollParent.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const offset = targetRect.top - parentRect.top - 24;
+      scrollParent.scrollTo({ top: scrollParent.scrollTop + offset, behavior: "smooth" });
+      return;
+    }
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    const rect = target.getBoundingClientRect();
+    const top = window.scrollY + rect.top - 24;
+    window.scrollTo({ top, behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    const targetKey = pendingTodayScrollRef.current;
+    if (weekOffset !== 0 || !targetKey) return;
+    pendingTodayScrollRef.current = null;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollToDateKey(targetKey);
+        window.setTimeout(() => scrollToDateKey(targetKey), 200);
+      });
+    });
+  }, [todayKey, weekOffset]);
+
+  const handleTodayClick = () => {
+    const now = startOfDay(new Date());
+    const nowKey = getDateKey(now);
+
+    setToday(now);
+    pendingTodayScrollRef.current = nowKey;
+
+    if (weekOffset !== 0) {
+      setWeekOffset(0);
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollToDateKey(nowKey);
+        window.setTimeout(() => scrollToDateKey(nowKey), 200);
+      });
+    });
+  };
+
   return (
     <div className="calendar-shell">
       <header className="calendar-header">
         <div>
           <p className="calendar-eyebrow">Team schedule</p>
           <h1 className="calendar-title">CKC Shift Calendar</h1>
+          <p className="calendar-subtitle">{rangeLabel}</p>
           <div className="month-nav month-nav-left">
             <button
               className="nav-button"
@@ -1551,7 +1632,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             >
               Prev
             </button>
-            <button className="nav-button" onClick={() => setWeekOffset(0)}>
+            <button className="nav-button" onClick={handleTodayClick}>
               Today
             </button>
             <button
@@ -1562,30 +1643,73 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               Next
             </button>
           </div>
-          <p className="calendar-subtitle">{rangeLabel}</p>
         </div>
         <div className="calendar-actions">
-          <button className="account-button" type="button" onClick={() => setShowMyShifts(true)}>
-            My shifts
-          </button>
-          <button
-            className="account-button notification-button"
-            type="button"
-            onClick={() => setShowNotifications(true)}
-          >
-            Notifications
-            {notificationCount > 0 ? (
-              <span className="notification-badge">
-                {notificationCount > 9 ? "9+" : notificationCount}
-              </span>
+          <div className="menu-shell" ref={menuRef}>
+            <button
+              className="menu-button"
+              type="button"
+              aria-label="Open menu"
+              aria-haspopup="menu"
+              aria-expanded={showMenu}
+              onClick={() => setShowMenu((value) => !value)}
+            >
+              ⋯
+              {notificationCount > 0 ? (
+                <span className="notification-badge">
+                  {notificationCount > 9 ? "9+" : notificationCount}
+                </span>
+              ) : null}
+            </button>
+            {showMenu ? (
+              <div className="menu-dropdown" role="menu">
+                <button
+                  className="menu-item"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setShowMyShifts(true);
+                  }}
+                >
+                  My shifts
+                </button>
+                <button
+                  className="menu-item"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setShowNotifications(true);
+                  }}
+                >
+                  Notifications
+                </button>
+                <button
+                  className="menu-item"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setShowVolunteers(true);
+                  }}
+                >
+                  All volunteers
+                </button>
+                <button
+                  className="menu-item"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setShowProfile(true);
+                  }}
+                >
+                  My profile
+                </button>
+              </div>
             ) : null}
-          </button>
-          <button className="account-button" type="button" onClick={() => setShowVolunteers(true)}>
-            All volunteers
-          </button>
-          <button className="account-button" type="button" onClick={() => setShowProfile(true)}>
-            My profile
-          </button>
+          </div>
         </div>
       </header>
 
@@ -1597,9 +1721,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ) : null}
 
       <section className="calendar-panel">
+        <div className="calendar-jump">
+          <button className="account-button jump-today" type="button" onClick={handleTodayClick}>
+            Jump to Today
+          </button>
+        </div>
         <div className="calendar-header">
           <div>
-            <p className="calendar-eyebrow">Month view</p>
+            <p className="calendar-eyebrow">Week View</p>
             <h2 className="calendar-title">{monthLabel}</h2>
             <p className="calendar-subtitle">{rangeLabel}</p>
           </div>
@@ -1629,7 +1758,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             const dayShifts = shiftsByDate[dateKey] ?? [];
 
             return (
-              <div key={`${monthLabel}-${dateKey}`} className="day-cell">
+              <div
+                key={`${monthLabel}-${dateKey}`}
+                className="day-cell"
+                data-date={dateKey}
+                id={`day-${dateKey}`}
+                ref={dateKey === todayKey ? todayCellRef : undefined}
+              >
                 <div className="day-weekday">
                   {WEEKDAYS[cell.date.getDay()]}
                 </div>

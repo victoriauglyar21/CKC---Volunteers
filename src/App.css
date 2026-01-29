@@ -44,12 +44,62 @@
   gap: 12px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  margin-left: auto;
+}
+
+.menu-shell {
+  position: relative;
+}
+
+.menu-button {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  font-weight: 600;
+  font-size: 1.1rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  position: relative;
+}
+
+.menu-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  background: rgba(8, 16, 24, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+  min-width: 180px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+  z-index: 5;
+}
+
+.menu-item {
+  border-radius: 10px;
+  border: 1px solid transparent;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  font-weight: 600;
+  text-align: left;
+}
+
+.menu-item:hover {
+  border-color: rgba(125, 207, 255, 0.4);
 }
 
 .account-button {
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.2);
-  padding: 10px 16px;
+  padding: 7px 12px;
   background: rgba(255, 255, 255, 0.12);
   color: inherit;
   font-weight: 600;
@@ -81,10 +131,41 @@
   border-color: rgba(125, 207, 255, 0.6);
 }
 
+.jump-today {
+  align-self: flex-start;
+}
+
+.calendar-jump {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 6px 0;
+  margin-bottom: 10px;
+}
+
+@media (max-width: 600px) {
+  .calendar-jump {
+    justify-content: flex-start;
+    padding: 6px 6px 0;
+  }
+
+  .calendar-jump .jump-today {
+    justify-content: center;
+  }
+
+  .weekday {
+    font-size: 1.15rem;
+    font-weight: 700;
+  }
+
+  .day-number {
+    font-size: 1rem;
+  }
+}
+
 .nav-button {
   border-radius: 999px;
   border: 1px solid rgba(255, 135, 180, 0.5);
-  padding: 10px 16px;
+  padding: 7px 12px;
   background: rgba(255, 135, 180, 0.35);
   color: inherit;
   font-weight: 600;
@@ -102,7 +183,36 @@
 }
 
 .month-nav-left {
-  margin-bottom: 12px;
+  margin-top: 8px;
+  margin-bottom: 16px;
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .calendar-actions {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: flex-end;
+  }
+
+  .calendar-actions .account-button {
+    width: auto;
+    justify-content: flex-start;
+  }
+
+  .month-nav {
+    width: auto;
+  }
+
+  .month-nav .nav-button {
+    flex: 0;
+  }
+}
+
+.calendar-panel .calendar-header {
+  margin-top: 4px;
+  margin-bottom: 10px;
 }
 
 .calendar-panel {
@@ -122,8 +232,9 @@
 .weekday {
   text-transform: uppercase;
   letter-spacing: 0.18em;
-  font-size: 0.7rem;
-  color: rgba(255, 255, 255, 0.55);
+  font-size: 1rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.78);
   padding: 8px 6px;
   text-align: center;
 }
@@ -143,14 +254,20 @@
   gap: 8px;
 }
 
+@media (max-width: 600px) {
+  .day-cell {
+    scroll-margin-top: 120px;
+  }
+}
+
 .day-cell.outside {
   opacity: 0.4;
 }
 
 .day-number {
   font-weight: 700;
-  font-size: 0.95rem;
-  color: rgba(255, 255, 255, 0.85);
+  font-size: 1.15rem;
+  color: rgba(255, 255, 255, 0.95);
 }
 
 .day-weekday {
@@ -944,6 +1061,10 @@
 
   .day-weekday {
     display: block;
+    font-size: 1.2rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: rgba(255, 255, 255, 0.9);
   }
 }
 
