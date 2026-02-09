@@ -288,6 +288,16 @@ function getDayCode(value: string | null | undefined) {
   return map[date.getDay()] ?? null;
 }
 
+function formatPhone(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 10);
+  const part1 = digits.slice(0, 3);
+  const part2 = digits.slice(3, 6);
+  const part3 = digits.slice(6, 10);
+  if (digits.length <= 3) return part1;
+  if (digits.length <= 6) return `${part1}-${part2}`;
+  return `${part1}-${part2}-${part3}`;
+}
+
 export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [today, setToday] = useState(() => startOfDay(new Date()));
   const [templates, setTemplates] = useState<ShiftTemplate[]>([]);
@@ -359,8 +369,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const pendingTodayScrollRef = useRef<string | null>(null);
   const todayKey = getDateKey(today);
   const [showMenu, setShowMenu] = useState(false);
+  const [showHelpfulLinks, setShowHelpfulLinks] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
+  const helpfulLinks = useMemo(
+    () => [
+      {
+        label: "Medical Report Form",
+        url: "https://forms.gle/grAvV1s3xraMXAUW9",
+      },
+      {
+        label: "Photos/Personality Form",
+        url: "https://forms.gle/nzvEKXq687bgejUE6",
+      },
+    ],
+    [],
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -631,6 +655,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, []);
 
   const handleSignOut = useCallback(async () => {
+    try {
+      sessionStorage.removeItem("volunteer-access-code");
+    } catch {
+      // Ignore storage cleanup failures.
+    }
     await supabase.auth.signOut();
   }, []);
 
@@ -1645,6 +1674,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           </div>
         </div>
         <div className="calendar-actions">
+          <button
+            className="account-button"
+            type="button"
+            onClick={() => setShowHelpfulLinks(true)}
+          >
+            Resources
+          </button>
           <div className="menu-shell" ref={menuRef}>
             <button
               className="menu-button"
@@ -1789,6 +1825,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         const rightCreated = right.created_at ?? "";
                         return leftCreated.localeCompare(rightCreated);
                       });
+                    const leadAssignment =
+                      sortedAssignments.find(
+                        (assignment) =>
+                          assignment.assignment_role === "lead" ||
+                          assignment.volunteer?.role === "Admin",
+                      ) ?? null;
+                    const regularAssignments = leadAssignment
+                      ? sortedAssignments.filter((assignment) => assignment !== leadAssignment)
+                      : sortedAssignments;
                     return (
                       <div
                         key={shift.id}
@@ -1808,27 +1853,32 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         </div>
                         <div className="shift-assignment-list">
                           {Array.from({ length: 6 }).map((_, index) => {
-                            const assignment = sortedAssignments[index];
+                            const assignment =
+                              index === 0 ? leadAssignment : regularAssignments[index - 1];
                             const name =
                               assignment?.volunteer?.preferred_name ||
                               assignment?.volunteer?.full_name ||
                               null;
-                            const slotClass = assignment
-                              ? assignment.status === "pending"
-                                ? "pending"
-                                : assignment.volunteer?.role === "Admin"
-                                  ? "admin"
-                                  : assignment.assignment_role === "lead"
-                                    ? "lead"
-                                    : "assigned"
-                              : "none";
+                            const hasVolunteer = Boolean(assignment?.volunteer?.id);
+                            const slotClass =
+                              !assignment || !assignment.volunteer?.id
+                                ? index === 0
+                                  ? "needs-lead"
+                                  : "none"
+                                : assignment.status === "pending"
+                                  ? "pending"
+                                  : assignment.volunteer?.role === "Admin"
+                                    ? "admin"
+                                    : assignment.assignment_role === "lead"
+                                      ? "lead"
+                                      : "assigned";
                             return (
                               <button
                                 key={`${shift.id}-slot-${index}`}
                                 className={`capacity-slot ${slotClass}`}
                                 type="button"
                                 disabled={
-                                  Boolean(assignment) &&
+                                  hasVolunteer &&
                                   profile?.role !== "Admin" &&
                                   assignment?.volunteer?.id !== session.user.id
                                 }
@@ -1855,7 +1905,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                               >
                                 {assignment?.status === "pending" ? (
                                   "Pending"
-                                ) : assignment ? (
+                                ) : assignment && hasVolunteer ? (
                                   <div className="capacity-slot-content">
                                     <span>{name ?? "No Volunteer Assigned"}</span>
                                     {(assignment.assignment_role === "lead" ||
@@ -1880,7 +1930,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                     ) : null}
                                   </div>
                                 ) : (
-                                  "No Volunteer Assigned"
+                                  index === 0 ? "Needs Lead Coverage" : "No Volunteer Assigned"
                                 )}
                               </button>
                             );
@@ -2228,6 +2278,78 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   })}
                 </div>
               ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showHelpfulLinks ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-panel account-panel">
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow">Resources</p>
+                <h3 className="modal-title">Helpful Links</h3>
+              </div>
+              <button
+                className="modal-close"
+                type="button"
+                onClick={() => setShowHelpfulLinks(false)}
+              >
+                Close
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="helpful-links">
+                {helpfulLinks.map((link) => (
+                  <a
+                    key={link.url}
+                    className="helpful-link"
+                    href={link.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {link.label}
+                  </a>
+                ))}
+              </div>
+              <div className="helpful-section">
+                <h4 className="helpful-heading">Volunteer Outreach Numbers</h4>
+                <div className="helpful-contacts">
+                  <div className="helpful-contact">
+                    <span className="helpful-name">Victoria</span>
+                    <div className="helpful-phone-actions">
+                      <a className="helpful-phone" href="tel:9704855211">
+                        970-485-5211
+                      </a>
+                      <a className="helpful-text" href="sms:9704855211">
+                        Text
+                      </a>
+                    </div>
+                  </div>
+                  <div className="helpful-contact">
+                    <span className="helpful-name">Megan</span>
+                    <div className="helpful-phone-actions">
+                      <a className="helpful-phone" href="tel:9704028197">
+                        970-402-8197
+                      </a>
+                      <a className="helpful-text" href="sms:9704028197">
+                        Text
+                      </a>
+                    </div>
+                  </div>
+                  <div className="helpful-contact">
+                    <span className="helpful-name">Arika</span>
+                    <div className="helpful-phone-actions">
+                      <a className="helpful-phone" href="tel:2623530988">
+                        262-353-0988
+                      </a>
+                      <a className="helpful-text" href="sms:2623530988">
+                        Text
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -2832,7 +2954,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       onChange={(event) =>
                         setProfileForm((prev) => ({
                           ...prev,
-                          phone: event.target.value,
+                          phone: formatPhone(event.target.value),
                         }))
                       }
                     />
@@ -2841,42 +2963,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   )}
                 </div>
                 <div className="modal-row">
-                  <span className="modal-label">Emergency contact</span>
-                  <span>{profile?.emergency_contact_name ?? "—"}</span>
-                </div>
-                <div className="modal-row">
-                  <span className="modal-label">Emergency phone</span>
-                  <span>{profile?.emergency_contact_phone ?? "—"}</span>
-                </div>
-                <div className="modal-row">
-                  <span className="modal-label">Status</span>
-                  <span>{profile?.status ?? "—"}</span>
-                </div>
-                <div className="modal-row">
                   <span className="modal-label">Joined</span>
                   <span>{formatDate(profile?.joined_at)}</span>
-                </div>
-                <div className="modal-row modal-row-stack">
-                  <span className="modal-label">Interests</span>
-                  <div className="pill-row">
-                    {(profile?.interests?.length ?? 0) > 0 ? (
-                      profile?.interests?.map((interest) => (
-                        <span key={interest} className="pill">
-                          {interest}
-                        </span>
-                      ))
-                    ) : (
-                      <span>—</span>
-                    )}
-                  </div>
-                </div>
-                <div className="modal-row modal-row-stack">
-                  <span className="modal-label">Internal notes</span>
-                  <span className="account-notes">{profile?.internal_notes ?? "—"}</span>
-                </div>
-                <div className="modal-row">
-                  <span className="modal-label">Training completed at</span>
-                  <span>{formatDateTime(profile?.training_completed_at)}</span>
                 </div>
               </div>
             </div>

@@ -9,13 +9,10 @@ type ProfileRecord = {
   pronouns: string | null;
   date_of_birth: string | null;
   phone: string | null;
-  emergency_contact_name: string | null;
-  emergency_contact_phone: string | null;
-  status: string | null;
   joined_at: string | null;
   internal_notes: string | null;
   interests: string[] | null;
-    training_completed: boolean | null;
+  training_completed: boolean | null;
   training_completed_at: string | null;
   created_at?: string | null;
 };
@@ -33,9 +30,6 @@ const DEFAULT_PROFILE: Omit<ProfileRecord, "id"> = {
   pronouns: "",
   date_of_birth: "",
   phone: "",
-  emergency_contact_name: "",
-  emergency_contact_phone: "",
-  status: "active",
   joined_at: "",
   internal_notes: "",
   interests: [],
@@ -49,18 +43,18 @@ function toDateInput(value: string | null | undefined) {
   return value.split("T")[0] ?? "";
 }
 
-function toDateTimeLocalInput(value: string | null | undefined) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const pad = (num: number) => `${num}`.padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}`;
-}
-
 function normalizeText(value: string) {
   return value.trim();
+}
+
+function formatPhone(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 10);
+  const part1 = digits.slice(0, 3);
+  const part2 = digits.slice(3, 6);
+  const part3 = digits.slice(6, 10);
+  if (digits.length <= 3) return part1;
+  if (digits.length <= 6) return `${part1}-${part2}`;
+  return `${part1}-${part2}-${part3}`;
 }
 
 export default function ProfileOnboarding({ userId, initialProfile, onComplete }: Props) {
@@ -74,14 +68,7 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
       pronouns: string;
       date_of_birth: string;
       phone: string;
-      emergency_contact_name: string;
-      emergency_contact_phone: string;
-      status: string;
       joined_at: string;
-      internal_notes: string;
-      interests: string;
-      training_completed: boolean;
-      training_completed_at: string;
     }> | null = null;
 
     try {
@@ -100,29 +87,13 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
       pronouns: seed.pronouns ?? "",
       date_of_birth: toDateInput(seed.date_of_birth),
       phone: seed.phone ?? "",
-      emergency_contact_name: seed.emergency_contact_name ?? "",
-      emergency_contact_phone: seed.emergency_contact_phone ?? "",
-      status: seed.status ?? "active",
       joined_at: toDateInput(seed.joined_at),
-      internal_notes: seed.internal_notes ?? "",
-      interests: seed.interests?.join(", ") ?? "",
-      training_completed: true,
-      training_completed_at: toDateTimeLocalInput(seed.training_completed_at),
     };
 
     return { ...baseForm, ...(draft ?? {}) };
   });
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-
-  const parsedInterests = useMemo(
-    () =>
-      form.interests
-        .split(",")
-        .map((item) => normalizeText(item))
-        .filter(Boolean),
-    [form.interests],
-  );
 
   const handleChange =
     (key: keyof typeof form) =>
@@ -133,8 +104,11 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
         | ChangeEvent<HTMLSelectElement>,
     ) => {
       const target = event.target as HTMLInputElement;
-      const value =
+      let value =
         target.type === "checkbox" ? target.checked : (target.value ?? "");
+      if (key === "phone" && typeof value === "string") {
+        value = formatPhone(value);
+      }
       setForm((prev) => ({ ...prev, [key]: value }));
     };
 
@@ -143,16 +117,7 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
     if (!form.preferred_name.trim()) return "Preferred name is required.";
     if (!form.pronouns.trim()) return "Pronouns are required.";
     if (!form.phone.trim()) return "Phone number is required.";
-    if (!form.emergency_contact_name.trim())
-      return "Emergency contact name is required.";
-    if (!form.emergency_contact_phone.trim())
-      return "Emergency contact phone is required.";
-    if (!form.status.trim()) return "Status is required.";
     if (!form.joined_at) return "Joined date is required.";
-    if (!form.internal_notes.trim()) return "Internal notes are required.";
-    if (parsedInterests.length === 0) return "Add at least one interest.";
-    if (!form.training_completed_at)
-      return "Training completion time is required.";
     return "";
   };
 
@@ -188,16 +153,7 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
       preferred_name: normalizeText(form.preferred_name),
       pronouns: normalizeText(form.pronouns),
       phone: normalizeText(form.phone),
-      emergency_contact_name: normalizeText(form.emergency_contact_name),
-      emergency_contact_phone: normalizeText(form.emergency_contact_phone),
-      status: normalizeText(form.status),
       joined_at: form.joined_at || null,
-      internal_notes: normalizeText(form.internal_notes),
-      interests: parsedInterests,
-      training_completed: true,
-      training_completed_at: form.training_completed_at
-        ? new Date(form.training_completed_at).toISOString()
-        : null,
     };
     if (dobISO) {
       payload.date_of_birth = dobISO;
@@ -314,78 +270,12 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
             </label>
 
             <label className="form-field">
-              <span className="form-label">Emergency contact name</span>
-              <input
-                className="form-input"
-                type="text"
-                value={form.emergency_contact_name}
-                onChange={handleChange("emergency_contact_name")}
-                required
-              />
-            </label>
-
-            <label className="form-field">
-              <span className="form-label">Emergency contact phone</span>
-              <input
-                className="form-input"
-                type="tel"
-                value={form.emergency_contact_phone}
-                onChange={handleChange("emergency_contact_phone")}
-                required
-              />
-            </label>
-
-            <label className="form-field">
-              <span className="form-label">Status</span>
-              <input
-                className="form-input"
-                type="text"
-                value={form.status}
-                onChange={handleChange("status")}
-                required
-              />
-            </label>
-
-            <label className="form-field">
               <span className="form-label">Joined date</span>
               <input
                 className="form-input"
                 type="date"
                 value={form.joined_at}
                 onChange={handleChange("joined_at")}
-                required
-              />
-            </label>
-
-            <label className="form-field form-field-wide">
-              <span className="form-label">Interests (comma-separated)</span>
-              <input
-                className="form-input"
-                type="text"
-                value={form.interests}
-                onChange={handleChange("interests")}
-                required
-              />
-            </label>
-
-            <label className="form-field form-field-wide">
-              <span className="form-label">Internal notes</span>
-              <textarea
-                className="form-input form-textarea"
-                rows={3}
-                value={form.internal_notes}
-                onChange={handleChange("internal_notes")}
-                required
-              />
-            </label>
-
-            <label className="form-field">
-              <span className="form-label">Training completed at</span>
-              <input
-                className="form-input"
-                type="datetime-local"
-                value={form.training_completed_at}
-                onChange={handleChange("training_completed_at")}
                 required
               />
             </label>
