@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      devOptions: { enabled: true }, // important for dev
+      devOptions: { enabled: false },
       manifest: {
         name: "CKC Shift Calendar",
         short_name: "CKC Shifts",

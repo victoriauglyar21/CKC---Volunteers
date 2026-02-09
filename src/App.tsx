@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent, type ChangeEvent } from "react";
 import "./App.css";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
 import Auth from "./Auth";
 import AuthedApp from "./AuthedApp";
 import ProfileOnboarding from "./ProfileOnboarding";
+
+const ACCESS_CODE_STORAGE_KEY = "volunteer-access-code";
 
 type ProfileRecord = {
   id: string;
@@ -23,6 +25,83 @@ type ProfileRecord = {
   training_completed: boolean | null;
   training_completed_at: string | null;
 };
+
+type AccessCodeGateProps = {
+  requiredCode: string;
+  onVerified: () => void;
+};
+
+function isAccessCodeValid(value: string) {
+  return /^[A-Za-z0-9]+$/.test(value);
+}
+
+function AccessCodeGate({ requiredCode, onVerified }: AccessCodeGateProps) {
+  const [code, setCode] = useState("");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setMessage("");
+
+    if (!isAccessCodeValid(code)) {
+      setMessage("Enter the access code using letters and numbers only.");
+      return;
+    }
+
+    if (code !== requiredCode) {
+      setMessage("That code doesn’t match. Double-check with your organizer.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      sessionStorage.setItem(ACCESS_CODE_STORAGE_KEY, requiredCode);
+    } catch {
+      // Ignore storage failures; still allow access for this session.
+    }
+    onVerified();
+    setSubmitting(false);
+  };
+
+  return (
+    <div className="auth-shell auth-shell--signin">
+      <div className="auth-card">
+        <div className="auth-header">
+          <p className="auth-eyebrow">One more step</p>
+          <h2 className="auth-title">Enter access code</h2>
+          <p className="auth-subtitle">
+            This volunteer portal requires a shared numeric code.
+          </p>
+        </div>
+
+        <form className="auth-form" onSubmit={handleSubmit}>
+          <label className="auth-field">
+            <span className="auth-label">Access code</span>
+            <input
+              className="auth-input"
+              type="text"
+              inputMode="text"
+              autoCapitalize="characters"
+              placeholder="CKC2026"
+              value={code}
+              onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                setCode(event.target.value.trim())
+              }
+              required
+            />
+          </label>
+
+          <button className="auth-submit" type="submit" disabled={submitting}>
+            {submitting ? "Checking..." : "Continue"}
+          </button>
+        </form>
+
+        {message ? <p className="auth-message">{message}</p> : null}
+      </div>
+    </div>
+  );
+}
 
 function isProfileComplete(profile: ProfileRecord) {
   const hasText = (value: string | null) => Boolean(value && value.trim());
@@ -52,12 +131,51 @@ function isProfileComplete(profile: ProfileRecord) {
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
+  const [profileMissing, setProfileMissing] = useState(false);
+  const isRecentAccount = (() => {
+    if (!session?.user?.created_at) return false;
+    const createdAtMs = Date.parse(session.user.created_at);
+    if (Number.isNaN(createdAtMs)) return false;
+    return Date.now() - createdAtMs < 30 * 60 * 1000;
+  })();
+  const requiredAccessCode = (
+    import.meta.env.VITE_VOLUNTEER_ACCESS_CODE as string | undefined
+  )?.trim();
+  const accessCodeRequired = Boolean(requiredAccessCode);
+  const [accessVerified, setAccessVerified] = useState(() => {
+    if (!accessCodeRequired) return true;
+    try {
+      return (
+        sessionStorage.getItem(ACCESS_CODE_STORAGE_KEY) === requiredAccessCode
+      );
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
     let mounted = true;
+
+    const hasRecoveryType = () => {
+      if (typeof window === "undefined") return false;
+      const searchParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      return (
+        searchParams.get("type") === "recovery" ||
+        hashParams.get("type") === "recovery"
+      );
+    };
+
+    const isResetRoute =
+      typeof window !== "undefined" && window.location.pathname === "/reset-password";
+
+    if (hasRecoveryType() || isResetRoute) {
+      setPasswordRecovery(true);
+    }
 
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
@@ -68,6 +186,9 @@ export default function App() {
     const { data: sub } = supabase.auth.onAuthStateChange(
       (event: AuthChangeEvent, newSession) => {
         // Avoid clearing the UI on transient auth refresh/visibility changes.
+        if (event === "PASSWORD_RECOVERY") {
+          setPasswordRecovery(true);
+        }
         if (event === "SIGNED_OUT") {
           setSession(null);
         } else if (newSession) {
@@ -84,12 +205,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!accessCodeRequired) {
+      setAccessVerified(true);
+      return;
+    }
+    if (!session?.user) {
+      setAccessVerified(false);
+      return;
+    }
+    try {
+      setAccessVerified(
+        sessionStorage.getItem(ACCESS_CODE_STORAGE_KEY) === requiredAccessCode,
+      );
+    } catch {
+      setAccessVerified(false);
+    }
+  }, [accessCodeRequired, requiredAccessCode, session?.user?.id]);
+
+  useEffect(() => {
     let mounted = true;
 
     const fetchProfile = async () => {
       if (!session?.user) {
         setProfile(null);
         setNeedsOnboarding(false);
+        setProfileMissing(false);
         setProfileLoading(false);
         return;
       }
@@ -103,12 +243,24 @@ export default function App() {
       if (!mounted) return;
 
       if (error) {
+        setProfile(null);
+        setNeedsOnboarding(false);
+        setProfileMissing(true);
         setProfileLoading(false);
         return;
       }
 
-      setProfile(data as ProfileRecord | null);
-      setNeedsOnboarding(!data);
+      if (!data) {
+        setProfile(null);
+        setNeedsOnboarding(isRecentAccount);
+        setProfileMissing(!isRecentAccount);
+        setProfileLoading(false);
+        return;
+      }
+
+      setProfile(data as ProfileRecord);
+      setNeedsOnboarding(false);
+      setProfileMissing(false);
 
       setProfileLoading(false);
     };
@@ -122,7 +274,31 @@ export default function App() {
 
   if (loading) return <div style={{ padding: 16 }}>Loading…</div>;
 
+  if (passwordRecovery) {
+    return (
+      <Auth
+        resetOnly
+        onResetDone={() => {
+          setPasswordRecovery(false);
+        }}
+      />
+    );
+  }
+
   if (!session) return <Auth />;
+
+  if (accessCodeRequired && !accessVerified && requiredAccessCode) {
+    return (
+      <AccessCodeGate
+        requiredCode={requiredAccessCode}
+        onVerified={() => setAccessVerified(true)}
+      />
+    );
+  }
+
+  if (profileMissing && !profileLoading) {
+    return <div style={{ padding: 16 }}>Oops Profile Not Found</div>;
+  }
 
   if (profileLoading && !profile) return <div style={{ padding: 16 }}>Loading profile...</div>;
 
