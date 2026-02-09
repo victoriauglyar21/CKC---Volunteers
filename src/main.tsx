@@ -1,10 +1,15 @@
-import { registerSW } from "virtual:pwa-register";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
 
-registerSW({ immediate: true });
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      // Ignore registration failures; push is optional.
+    });
+  });
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

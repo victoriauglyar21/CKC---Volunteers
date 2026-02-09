@@ -87,6 +87,7 @@ type ProfileRecord = {
   interests: string[] | null;
   training_completed: boolean | null;
   training_completed_at: string | null;
+  notification_pref?: "email_only" | "push_and_email" | null;
   created_at?: string | null;
 };
 
@@ -298,6 +299,17 @@ function formatPhone(value: string) {
   return `${part1}-${part2}-${part3}`;
 }
 
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i += 1) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
 export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [today, setToday] = useState(() => startOfDay(new Date()));
   const [templates, setTemplates] = useState<ShiftTemplate[]>([]);
@@ -317,6 +329,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [notifications, setNotifications] = useState<ShiftAssignmentDetail[]>([]);
   const [notificationCount, setNotificationCount] = useState(0);
   const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(new Set());
+  const [showAssignVolunteer, setShowAssignVolunteer] = useState(false);
+  const [assignShiftInstanceId, setAssignShiftInstanceId] = useState<number | null>(null);
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assignMessage, setAssignMessage] = useState("");
   const [showDenyPrompt, setShowDenyPrompt] = useState(false);
   const [denyReason, setDenyReason] = useState("");
   const [denyTargetId, setDenyTargetId] = useState<string | null>(null);
@@ -364,6 +380,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   });
   const [profileSaveMessage, setProfileSaveMessage] = useState("");
   const [profileSaveLoading, setProfileSaveLoading] = useState(false);
+  const [notificationMessage, setNotificationMessage] = useState("");
+  const [notificationLoading, setNotificationLoading] = useState(false);
   const scrollYRef = useRef(0);
   const todayCellRef = useRef<HTMLDivElement | null>(null);
   const pendingTodayScrollRef = useRef<string | null>(null);
@@ -372,6 +390,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [showHelpfulLinks, setShowHelpfulLinks] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
+  const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
+  if (import.meta.env.DEV && !vapidPublicKey) {
+    console.warn("Missing VITE_VAPID_PUBLIC_KEY");
+  }
   const helpfulLinks = useMemo(
     () => [
       {
@@ -594,6 +616,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     fetchWeekAssignments();
   }, [fetchWeekAssignments]);
 
+
   const handleProfileSave = useCallback(async () => {
     if (!displayProfile) return;
     setProfileSaveMessage("");
@@ -653,6 +676,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setVolunteers(data as unknown as VolunteerRow[]);
     setVolunteersLoading(false);
   }, []);
+
+  useEffect(() => {
+    if (!showAssignVolunteer) return;
+    fetchVolunteers();
+  }, [showAssignVolunteer, fetchVolunteers]);
 
   const handleSignOut = useCallback(async () => {
     try {
@@ -1311,6 +1339,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowTakeShiftPrompt(false);
     setTakeShiftLoading(false);
 
+    if (takeShiftMode === "request") {
+      await supabase.functions.invoke("send-admin-push", {
+        body: {
+          title: "Shift request",
+          body: "A volunteer requested to join a shift.",
+          url: "/",
+        },
+      });
+    }
+
     const baseDate = addDays(today, weekOffset * 7);
     const weekStart = addDays(startOfDay(baseDate), -baseDate.getDay());
     const weekEnd = addDays(weekStart, 6);
@@ -1360,6 +1398,113 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
     await fetchWeekAssignments();
     await fetchPersonalAssignments();
+  };
+
+  const handleEnableNotifications = async () => {
+    setNotificationMessage("");
+    if (!vapidPublicKey) {
+      setNotificationMessage("Missing VAPID public key configuration.");
+      return;
+    }
+    if (
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window) ||
+      !("Notification" in window)
+    ) {
+      setNotificationMessage("Push notifications are not supported on this device.");
+      return;
+    }
+
+    setNotificationLoading(true);
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        setNotificationMessage("Notifications are blocked. Enable them in your browser settings.");
+        return;
+      }
+
+      const registration = await navigator.serviceWorker.register("/sw.js");
+      await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+      });
+
+      const json = subscription.toJSON();
+      const p256dh = json.keys?.p256dh;
+      const authKey = json.keys?.auth;
+      if (!p256dh || !authKey) {
+        setNotificationMessage("Unable to read subscription keys.");
+        return;
+      }
+
+      const { error } = await supabase.from("push_subscriptions").upsert(
+        {
+          user_id: session.user.id,
+          endpoint: subscription.endpoint,
+          p256dh,
+          auth: authKey,
+        },
+        { onConflict: "user_id,endpoint" },
+      );
+
+      if (error) {
+        setNotificationMessage(error.message);
+        return;
+      }
+
+      await supabase
+        .from("profiles")
+        .update({ notification_pref: "push_and_email" })
+        .eq("id", session.user.id);
+
+      setNotificationMessage("Notifications enabled!");
+    } catch (error) {
+      setNotificationMessage(
+        error instanceof Error ? error.message : "Unable to enable notifications.",
+      );
+    } finally {
+      setNotificationLoading(false);
+    }
+  };
+
+  const handleAssignVolunteer = async (volunteerId: string) => {
+    if (!assignShiftInstanceId) {
+      setAssignMessage("Shift instance not found.");
+      return;
+    }
+    const volunteer = volunteers.find((item) => item.id === volunteerId);
+    if (!volunteer) {
+      setAssignMessage("Volunteer not found.");
+      return;
+    }
+    setAssignLoading(true);
+    setAssignMessage("");
+    const assignmentRole = volunteer.role === "Lead" ? "lead" : "regular";
+    const { error } = await supabase
+      .from("shift_assignments")
+      .upsert(
+        {
+          shift_instance_id: assignShiftInstanceId,
+          volunteer_id: volunteerId,
+          status: "active",
+          assignment_role: assignmentRole,
+          dropped_at: null,
+          dropped_reason: null,
+        },
+        { onConflict: "shift_instance_id,volunteer_id" },
+      );
+
+    if (error) {
+      setAssignMessage(error.message);
+      setAssignLoading(false);
+      return;
+    }
+
+    await fetchWeekAssignments();
+    setAssignLoading(false);
+    setShowAssignVolunteer(false);
+    setAssignShiftInstanceId(null);
   };
 
   const handleNotificationDecision = async (
@@ -1541,6 +1686,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowDropConfirm(false);
     setDropTargetId(null);
     setDropReason("");
+
+    if (profile?.role !== "Admin") {
+      await supabase.functions.invoke("send-admin-push", {
+        body: {
+          title: "Shift dropped",
+          body: "A volunteer dropped a shift.",
+          url: "/",
+        },
+      });
+    }
 
     await fetchMyShifts();
     await fetchPersonalAssignments();
@@ -1886,11 +2041,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                   setActiveShiftInstanceId(shift.instanceId);
 
                                   if (!assignment) {
-                                    setTakeShiftMessage("");
-                                    setTakeShiftMode(
-                                      profile?.role === "Admin" ? "join" : "request",
-                                    );
-                                    setShowTakeShiftPrompt(true);
+                                    if (profile?.role === "Admin") {
+                                      setAssignMessage("");
+                                      setAssignShiftInstanceId(shift.instanceId);
+                                      setShowAssignVolunteer(true);
+                                    } else {
+                                      setTakeShiftMessage("");
+                                      setTakeShiftMode("request");
+                                      setShowTakeShiftPrompt(true);
+                                    }
                                   } else if (
                                     assignment.volunteer?.id === session.user.id &&
                                     profile?.role !== "Admin"
@@ -2278,6 +2437,68 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   })}
                 </div>
               ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showAssignVolunteer ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-panel account-panel">
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow">Admin</p>
+                <h3 className="modal-title">Add volunteer to shift</h3>
+              </div>
+              <button
+                className="modal-close"
+                type="button"
+                onClick={() => {
+                  setShowAssignVolunteer(false);
+                  setAssignShiftInstanceId(null);
+                  setAssignMessage("");
+                }}
+              >
+                Close
+              </button>
+            </div>
+            <div className="modal-body">
+              {assignMessage ? <div className="error-banner">{assignMessage}</div> : null}
+              {volunteersLoading ? (
+                <div className="loading-banner">Loading volunteers...</div>
+              ) : null}
+              {volunteersMessage ? (
+                <div className="error-banner">{volunteersMessage}</div>
+              ) : null}
+              <div className="volunteers-list">
+                {[...volunteers]
+                  .sort((left, right) => {
+                    const leftName = left.preferred_name || left.full_name || "";
+                    const rightName = right.preferred_name || right.full_name || "";
+                    return leftName.localeCompare(rightName);
+                  })
+                  .map((volunteer) => {
+                    const name = volunteer.preferred_name || volunteer.full_name || "Volunteer";
+                    return (
+                      <button
+                        key={volunteer.id}
+                        className="volunteer-row"
+                        type="button"
+                        disabled={assignLoading}
+                        onClick={() => handleAssignVolunteer(volunteer.id)}
+                      >
+                        <div>
+                          <p className="volunteer-name">{name}</p>
+                          <p className="volunteer-meta">
+                            {(volunteer.pronouns ?? "—") + " · " + volunteer.role}
+                          </p>
+                        </div>
+                        <span className="volunteer-joined">
+                          Joined {formatDate(volunteer.joined_at)}
+                        </span>
+                      </button>
+                    );
+                  })}
+              </div>
             </div>
           </div>
         </div>
@@ -2862,6 +3083,28 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     Log Out
                   </button>
                 </div>
+              </div>
+
+              <div className="account-section">
+                <p className="account-section-title">Notifications</p>
+                <p className="modal-text">
+                  Enable notifications to get push alerts when this app is installed on your
+                  phone. On iPhone: open in Safari → Share → Add to Home Screen, then open the
+                  app from the icon to enable notifications.
+                </p>
+                <div className="modal-row">
+                  <button
+                    className="account-button"
+                    type="button"
+                    onClick={handleEnableNotifications}
+                    disabled={notificationLoading}
+                  >
+                    {notificationLoading ? "Enabling..." : "Enable notifications"}
+                  </button>
+                </div>
+                {notificationMessage ? (
+                  <div className="error-banner">{notificationMessage}</div>
+                ) : null}
               </div>
 
               <div className="account-section">

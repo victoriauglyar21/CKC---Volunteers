@@ -24,6 +24,7 @@ type ProfileRecord = {
   interests: string[] | null;
   training_completed: boolean | null;
   training_completed_at: string | null;
+  notification_pref?: "email_only" | "push_and_email" | null;
 };
 
 type AccessCodeGateProps = {

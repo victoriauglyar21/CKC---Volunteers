@@ -14,6 +14,7 @@ type ProfileRecord = {
   interests: string[] | null;
   training_completed: boolean | null;
   training_completed_at: string | null;
+  notification_pref?: "email_only" | "push_and_email" | null;
   created_at?: string | null;
 };
 
@@ -170,6 +171,16 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
       setMessage(error?.message ?? "Unable to save profile.");
       setSaving(false);
       return;
+    }
+
+    if (!initialProfile) {
+      await supabase.functions.invoke("send-admin-push", {
+        body: {
+          title: "New volunteer",
+          body: "A new volunteer completed their profile.",
+          url: "/",
+        },
+      });
     }
 
     onComplete(data as ProfileRecord);
