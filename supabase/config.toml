@@ -1,0 +1,2 @@
+[functions.send-shift-reminders]
+schedule = "*/5 * * * *"
