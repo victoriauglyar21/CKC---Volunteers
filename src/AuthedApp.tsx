@@ -2061,6 +2061,21 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     await fetchWeekAssignments();
   };
 
+  const sendAdminDropPush = async (message: string) => {
+    const { error } = await supabase.functions.invoke("send-admin-push", {
+      body: {
+        title: "Shift dropped",
+        body: message,
+        url: "/?view=notifications",
+      },
+    });
+    if (error) {
+      console.warn("Failed to send admin drop push:", error.message);
+      return error.message;
+    }
+    return null;
+  };
+
   const handleRemoveVolunteer = async () => {
     if (!removeTarget) return;
     setRemoveLoading(true);
@@ -2079,6 +2094,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setRemoveMessage(error.message);
       setRemoveLoading(false);
       return;
+    }
+
+    const adminName =
+      displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
+    const volunteerName =
+      removeTarget.volunteer?.preferred_name ||
+      removeTarget.volunteer?.full_name ||
+      "A volunteer";
+    const pushError = await sendAdminDropPush(`${adminName} removed ${volunteerName} from a shift.`);
+    if (pushError) {
+      setAssignmentsMessage(`Volunteer removed, but push notification failed: ${pushError}`);
     }
 
     setShowRemovePrompt(false);
@@ -2116,29 +2142,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowDropReason(false);
     setShowDropConfirm(false);
     setDropTargetId(null);
+    const actorName =
+      displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "A volunteer";
+    const reasonText = dropReason.trim();
+    const pushMessage = reasonText
+      ? `${actorName} dropped a shift. Reason: ${reasonText}`
+      : `${actorName} dropped a shift.`;
+    const pushError = await sendAdminDropPush(pushMessage);
     setDropReason("");
-
-    if (profile?.role !== "Admin") {
-      const volunteerName =
-        displayProfile?.preferred_name ||
-        displayProfile?.full_name ||
-        session.user.email ||
-        "A volunteer";
-      const reasonText = dropReason.trim();
-      await supabase.functions.invoke("send-admin-push", {
-        body: {
-          title: "Shift dropped",
-          body: reasonText
-            ? `${volunteerName} dropped a shift. Reason: ${reasonText}`
-            : `${volunteerName} dropped a shift.`,
-          url: "/?view=notifications",
-        },
-      });
+    if (pushError) {
+      setAssignmentsMessage(`Shift dropped, but push notification failed: ${pushError}`);
     }
 
     await fetchMyShifts();
     await fetchPersonalAssignments();
     await fetchWeekAssignments();
+    setAssignmentsLoading(false);
   };
 
   useEffect(() => {
