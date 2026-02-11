@@ -1374,6 +1374,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     };
   }, [fetchWeekAssignments, fetchMyShifts, fetchPersonalAssignments]);
 
+  const computeUnreadCount = useCallback(
+    (items: ShiftAssignmentDetail[]) =>
+      items.filter((item) => !readNotificationIds.has(item.id)).length,
+    [readNotificationIds],
+  );
+
   const fetchNotifications = useCallback(async () => {
     setNotificationsLoading(true);
     setNotificationsMessage("");
@@ -1558,12 +1564,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     localStorage.setItem(readKey, JSON.stringify(Array.from(next)));
     setReadNotificationIds(next);
   };
-
-  const computeUnreadCount = useCallback(
-    (items: ShiftAssignmentDetail[]) =>
-      items.filter((item) => !readNotificationIds.has(item.id)).length,
-    [readNotificationIds],
-  );
 
   useEffect(() => {
     fetchNotificationCount();
