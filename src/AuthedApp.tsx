@@ -564,6 +564,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [showMenu, setShowMenu] = useState(false);
   const [showHelpfulLinks, setShowHelpfulLinks] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const baseDocumentTitleRef = useRef<string>(
+    typeof document !== "undefined" ? document.title : "CKC Shift Calendar",
+  );
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
   const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
   if (import.meta.env.DEV && !vapidPublicKey) {
@@ -1424,14 +1427,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const items = (data as unknown as ShiftAssignmentDetail[]) ?? [];
     setNotifications(items);
-    const unreadCount =
-      profile?.role === "Admin"
-        ? items.filter((item) => item.status === "pending" || !readNotificationIds.has(item.id))
-            .length
-        : items.filter((item) => !readNotificationIds.has(item.id)).length;
-    setNotificationCount(unreadCount);
+    setNotificationCount(computeUnreadCount(items));
     setNotificationsLoading(false);
-  }, [profile?.role, session.user.id, readNotificationIds]);
+  }, [profile?.role, session.user.id, computeUnreadCount]);
 
   const fetchNotificationCount = useCallback(async () => {
     const baseSelect = `
@@ -1479,13 +1477,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     const items = (data as unknown as ShiftAssignmentDetail[]) ?? [];
-    const unreadCount =
-      profile?.role === "Admin"
-        ? items.filter((item) => item.status === "pending" || !readNotificationIds.has(item.id))
-            .length
-        : items.filter((item) => !readNotificationIds.has(item.id)).length;
-    setNotificationCount(unreadCount);
-  }, [profile?.role, session.user.id, readNotificationIds]);
+    setNotificationCount(computeUnreadCount(items));
+  }, [profile?.role, session.user.id, computeUnreadCount]);
 
   useEffect(() => {
     if (!showNotifications) return;
@@ -1566,6 +1559,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setReadNotificationIds(next);
   };
 
+  const computeUnreadCount = useCallback(
+    (items: ShiftAssignmentDetail[]) =>
+      items.filter((item) => !readNotificationIds.has(item.id)).length,
+    [readNotificationIds],
+  );
+
   useEffect(() => {
     fetchNotificationCount();
   }, [fetchNotificationCount]);
@@ -1589,13 +1588,30 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [volunteers]);
 
   const unreadNotifications = useMemo(() => {
-    if (profile?.role === "Admin") {
-      return notifications.filter(
-        (item) => item.status === "pending" || !readNotificationIds.has(item.id),
-      );
-    }
     return notifications.filter((item) => !readNotificationIds.has(item.id));
-  }, [notifications, readNotificationIds, profile?.role]);
+  }, [notifications, readNotificationIds]);
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.title =
+        notificationCount > 0
+          ? `(${notificationCount}) ${baseDocumentTitleRef.current}`
+          : baseDocumentTitleRef.current;
+    }
+
+    const nav = navigator as Navigator & {
+      setAppBadge?: (contents?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+
+    if (typeof nav.setAppBadge === "function" && typeof nav.clearAppBadge === "function") {
+      if (notificationCount > 0) {
+        void nav.setAppBadge(notificationCount);
+      } else {
+        void nav.clearAppBadge();
+      }
+    }
+  }, [notificationCount]);
 
   const shiftsByDate = useMemo(
     () =>
