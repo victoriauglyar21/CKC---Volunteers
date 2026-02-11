@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.204.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
-import webpush from "https://esm.sh/web-push@3.6.7";
+import webpush from "npm:web-push@3.6.7";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -13,15 +13,9 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "
 const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY") ?? "";
 const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY") ?? "";
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error("Missing Supabase service role configuration.");
-}
-if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-  throw new Error("Missing VAPID key configuration.");
-}
-
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-webpush.setVapidDetails("mailto:notifications@cokittyvolunteers.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+const hasConfig = Boolean(
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY,
+);
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -31,6 +25,20 @@ serve(async (req) => {
   if (req.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405, headers: corsHeaders });
   }
+
+  if (!hasConfig) {
+    return new Response("Missing edge function configuration.", {
+      status: 500,
+      headers: corsHeaders,
+    });
+  }
+
+  const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  webpush.setVapidDetails(
+    "mailto:notifications@cokittyvolunteers.com",
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY,
+  );
 
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.replace("Bearer ", "");
