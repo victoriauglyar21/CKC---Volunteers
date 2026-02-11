@@ -137,12 +137,6 @@ export default function App() {
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [profileMissing, setProfileMissing] = useState(false);
-  const isRecentAccount = (() => {
-    if (!session?.user?.created_at) return false;
-    const createdAtMs = Date.parse(session.user.created_at);
-    if (Number.isNaN(createdAtMs)) return false;
-    return Date.now() - createdAtMs < 30 * 60 * 1000;
-  })();
   const requiredAccessCode = (
     import.meta.env.VITE_VOLUNTEER_ACCESS_CODE as string | undefined
   )?.trim();
@@ -253,8 +247,8 @@ export default function App() {
 
       if (!data) {
         setProfile(null);
-        setNeedsOnboarding(isRecentAccount);
-        setProfileMissing(!isRecentAccount);
+        setNeedsOnboarding(true);
+        setProfileMissing(false);
         setProfileLoading(false);
         return;
       }

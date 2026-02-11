@@ -10,6 +10,7 @@ export default function Auth({ resetOnly = false, onResetDone }: AuthProps) {
   const [isSignup, setIsSignup] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [signupConfirmPassword, setSignupConfirmPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [accessCode, setAccessCode] = useState("");
@@ -57,6 +58,9 @@ export default function Auth({ resetOnly = false, onResetDone }: AuthProps) {
     }
 
     if (isSignup) {
+      if (password !== signupConfirmPassword) {
+        return setMsg("Passwords do not match. Try again.");
+      }
       if (accessCodeRequired && requiredAccessCode) {
         if (!accessCode.trim()) {
           return setMsg("Enter the access code to create an account.");
@@ -196,6 +200,22 @@ export default function Auth({ resetOnly = false, onResetDone }: AuthProps) {
               required
             />
           </label>
+
+          {isSignup ? (
+            <label className="auth-field">
+              <span className="auth-label">Confirm password</span>
+              <input
+                className="auth-input"
+                type="password"
+                placeholder="••••••••"
+                value={signupConfirmPassword}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setSignupConfirmPassword(e.target.value)
+                }
+                required
+              />
+            </label>
+          ) : null}
 
           {isSignup && accessCodeRequired ? (
             <label className="auth-field">
