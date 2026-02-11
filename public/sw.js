@@ -14,7 +14,26 @@ self.addEventListener("push", (event) => {
     data: { url: payload.url || "/" },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    Promise.all([
+      self.registration.showNotification(title, options),
+      (async () => {
+        try {
+          if (self.navigator && typeof self.navigator.setAppBadge === "function") {
+            const badgeCount =
+              typeof payload.badgeCount === "number" && Number.isFinite(payload.badgeCount)
+                ? Math.max(0, Math.floor(payload.badgeCount))
+                : 1;
+            if (badgeCount > 0) {
+              await self.navigator.setAppBadge(badgeCount);
+            }
+          }
+        } catch {
+          // Ignore badge failures; notifications should still work.
+        }
+      })(),
+    ]),
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {

@@ -1597,6 +1597,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [notifications, readNotificationIds]);
 
   useEffect(() => {
+    setNotificationCount(computeUnreadCount(notifications));
+  }, [notifications, readNotificationIds, computeUnreadCount]);
+
+  useEffect(() => {
     if (typeof document !== "undefined") {
       document.title =
         notificationCount > 0
@@ -1609,10 +1613,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       clearAppBadge?: () => Promise<void>;
     };
 
-    if (typeof nav.setAppBadge === "function" && typeof nav.clearAppBadge === "function") {
+    if (typeof nav.setAppBadge === "function") {
       if (notificationCount > 0) {
         void nav.setAppBadge(notificationCount);
-      } else {
+      } else if (typeof nav.clearAppBadge === "function") {
         void nav.clearAppBadge();
       }
     }
@@ -1932,6 +1936,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
+    const shiftTitle =
+      instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId)?.title || "a shift";
+    const pushError = await sendVolunteerPush({
+      userId: volunteerId,
+      title: "Shift added",
+      body: `You were added to ${shiftTitle}.`,
+    });
+    if (pushError) {
+      setAssignmentsMessage(`Volunteer added, but push notification failed: ${pushError}`);
+    }
+
     await fetchWeekAssignments();
     setAssignLoading(false);
     setShowAssignVolunteer(false);
@@ -1961,6 +1976,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setNotificationsMessage(error.message);
       setNotificationsLoading(false);
       return;
+    }
+
+    const approvedRequest = notifications.find((item) => item.id === assignmentId);
+    const approvedVolunteerId = approvedRequest?.volunteer?.id;
+    const approvedShiftTitle = approvedRequest?.shift_instance?.template?.title ?? "your shift";
+    if (approvedVolunteerId) {
+      const pushError = await sendVolunteerPush({
+        userId: approvedVolunteerId,
+        title: "Shift approved",
+        body: `Your request for ${approvedShiftTitle} was approved.`,
+      });
+      if (pushError) {
+        setNotificationsMessage(`Approved, but push notification failed: ${pushError}`);
+      }
     }
 
     const { data } = await supabase
@@ -2071,6 +2100,32 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     });
     if (error) {
       console.warn("Failed to send admin drop push:", error.message);
+      return error.message;
+    }
+    return null;
+  };
+
+  const sendVolunteerPush = async ({
+    userId,
+    title,
+    body,
+    url = "/?view=notifications",
+  }: {
+    userId: string;
+    title: string;
+    body: string;
+    url?: string;
+  }) => {
+    const { error } = await supabase.functions.invoke("send-push", {
+      body: {
+        user_id: userId,
+        title,
+        body,
+        url,
+      },
+    });
+    if (error) {
+      console.warn("Failed to send volunteer push:", error.message);
       return error.message;
     }
     return null;
