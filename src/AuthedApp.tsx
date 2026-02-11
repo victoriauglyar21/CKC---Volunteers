@@ -1261,6 +1261,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         .upsert(payload, { onConflict: "shift_instance_id,volunteer_id" });
     }
 
+    const adminName =
+      displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
+    const recurringPushError = await sendVolunteerPush({
+      userId: selectedVolunteer.id,
+      title: "Recurring shifts added",
+      body: `${adminName} added reaccuring shifts to your schedule. Please check them here`,
+    });
+    if (recurringPushError) {
+      setRecurringMessage(`Recurring shifts saved, but push notification failed: ${recurringPushError}`);
+    }
+
     setRecurringForm({ templateId: "", startsOn: "", endsOn: "" });
     setRecurringDays([]);
     setShowAddRecurring(false);
