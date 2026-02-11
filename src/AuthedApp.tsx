@@ -17,6 +17,11 @@ const monthFormatter = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
 });
 
+const monthJumpFormatter = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  year: "2-digit",
+});
+
 const dayFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",
@@ -557,9 +562,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationLoading, setNotificationLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [todayJumpToken, setTodayJumpToken] = useState(0);
   const scrollYRef = useRef(0);
   const todayCellRef = useRef<HTMLDivElement | null>(null);
-  const pendingTodayScrollRef = useRef<string | null>(null);
   const todayKey = getDateKey(today);
   const [showMenu, setShowMenu] = useState(false);
   const [showHelpfulLinks, setShowHelpfulLinks] = useState(false);
@@ -1653,7 +1658,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const offset = Math.max(0, Math.floor(diffInDays(calendarStartWeek, monthStartWeek) / 7));
       options.push({
         key: getMonthKey(monthDate),
-        label: monthFormatter.format(monthDate),
+        label: monthJumpFormatter.format(monthDate),
         weekOffset: Math.min(maxWeekOffset, offset),
       });
     }
@@ -2180,59 +2185,36 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     };
   }, [showMenu]);
 
-  const findScrollParent = (node: HTMLElement | null) => {
-    let current: HTMLElement | null = node?.parentElement ?? null;
-    while (current) {
-      const style = window.getComputedStyle(current);
-      const overflowY = style.overflowY;
-      if (overflowY === "auto" || overflowY === "scroll") {
-        return current;
-      }
-      current = current.parentElement;
-    }
-    return null;
-  };
-
-  const scrollToDateKey = (dateKey: string) => {
+  const scrollToDateKey = (dateKey: string, attempt = 0) => {
     const target = document.getElementById(`day-${dateKey}`) as HTMLDivElement | null;
-    if (!target) return;
-    const scrollParent = findScrollParent(target);
-    if (scrollParent) {
-      const parentRect = scrollParent.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
-      const offset = targetRect.top - parentRect.top - 24;
-      scrollParent.scrollTo({ top: scrollParent.scrollTop + offset, behavior: "smooth" });
+    if (!target) {
+      if (attempt < 12) {
+        window.setTimeout(() => scrollToDateKey(dateKey, attempt + 1), 80);
+      }
       return;
     }
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
-    const rect = target.getBoundingClientRect();
-    const top = window.scrollY + rect.top - 24;
-    window.scrollTo({ top, behavior: "smooth" });
+
+    target.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
   };
 
   useEffect(() => {
-    const targetKey = pendingTodayScrollRef.current;
-    if (weekOffset !== 0 || !targetKey) return;
-    pendingTodayScrollRef.current = null;
+    if (todayJumpToken === 0 || weekOffset !== 0) return;
+    const targetKey = getDateKey(startOfDay(new Date()));
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         scrollToDateKey(targetKey);
         window.setTimeout(() => scrollToDateKey(targetKey), 200);
       });
     });
-  }, [todayKey, weekOffset]);
+  }, [todayJumpToken, weekOffset, todayKey]);
 
   const handleTodayClick = () => {
     const now = startOfDay(new Date());
     const nowKey = getDateKey(now);
 
     setToday(now);
-    pendingTodayScrollRef.current = nowKey;
-
-    if (weekOffset !== 0) {
-      setWeekOffset(0);
-      return;
-    }
+    setWeekOffset(0);
+    setTodayJumpToken((value) => value + 1);
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {

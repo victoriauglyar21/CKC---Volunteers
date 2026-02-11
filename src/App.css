@@ -110,11 +110,6 @@
   transition: transform 0.2s ease, border-color 0.2s ease;
 }
 
-.refresh-button {
-  padding: 5px 10px;
-  font-size: 0.8rem;
-}
-
 .notification-button {
   position: relative;
 }
@@ -258,7 +253,15 @@
     font-size: 0.95rem;
   }
 
-  .calendar-actions .refresh-button {
+  .menu-dropdown {
+    min-width: 220px;
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .menu-item {
+    min-height: 44px;
+    padding: 10px 14px;
     font-size: 0.95rem;
   }
 
@@ -1075,6 +1078,43 @@
 .notification-actions {
   display: flex;
   gap: 10px;
+}
+
+.notification-actions .nav-button,
+.notification-actions .account-button,
+.modal-header-actions .nav-button,
+.modal-header-actions .modal-close {
+  min-width: 96px;
+  min-height: 40px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+}
+
+.helpful-link {
+  color: #ffb6cf;
+  text-decoration: underline;
+  font-style: italic;
+  font-weight: 500;
+}
+
+.helpful-link:hover {
+  color: #ffd0e1;
+}
+
+.helpful-phone,
+.helpful-text {
+  color: #ffb6cf;
+  text-decoration: underline;
+  font-style: italic;
+  font-weight: 500;
+}
+
+.helpful-phone:hover,
+.helpful-text:hover {
+  color: #ffd0e1;
 }
 
 .take-shift-panel {
