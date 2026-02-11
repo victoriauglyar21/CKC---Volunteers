@@ -46,6 +46,7 @@ type ShiftAssignmentDetail = {
   dropped_at?: string | null;
   status?: "active" | "dropped" | "pending";
   dropped_reason?: string | null;
+  notes?: string | null;
   assignment_role: "lead" | "regular";
   volunteer: {
     id: string;
@@ -344,6 +345,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [removeTarget, setRemoveTarget] = useState<ShiftAssignmentDetail | null>(null);
   const [removeLoading, setRemoveLoading] = useState(false);
   const [removeMessage, setRemoveMessage] = useState("");
+  const [showAssignmentNotes, setShowAssignmentNotes] = useState(false);
+  const [notesTarget, setNotesTarget] = useState<ShiftAssignmentDetail | null>(null);
+  const [notesDraft, setNotesDraft] = useState("");
+  const [notesSaving, setNotesSaving] = useState(false);
+  const [notesMessage, setNotesMessage] = useState("");
   const [showProfile, setShowProfile] = useState(false);
   const [showVolunteers, setShowVolunteers] = useState(false);
   const [volunteersLoading, setVolunteersLoading] = useState(false);
@@ -382,6 +388,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [profileSaveLoading, setProfileSaveLoading] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationLoading, setNotificationLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const scrollYRef = useRef(0);
   const todayCellRef = useRef<HTMLDivElement | null>(null);
   const pendingTodayScrollRef = useRef<string | null>(null);
@@ -578,6 +585,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         created_at,
         status,
         assignment_role,
+        notes,
         volunteer:profiles (
           id,
           full_name,
@@ -1232,6 +1240,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [fetchNotificationCount]);
 
   const shifts = useMemo(() => instanceShifts, [instanceShifts]);
+  const sortedVolunteers = useMemo(() => {
+    const rankByRole = (role: VolunteerRow["role"]) => {
+      if (role === "Admin") return 0;
+      if (role === "Lead") return 1;
+      if (role === "Regular Volunteer") return 2;
+      return 3;
+    };
+    const nameOf = (volunteer: VolunteerRow) =>
+      (volunteer.preferred_name || volunteer.full_name || "").toLowerCase();
+
+    return [...volunteers].sort((left, right) => {
+      const roleRank = rankByRole(left.role) - rankByRole(right.role);
+      if (roleRank !== 0) return roleRank;
+      return nameOf(left).localeCompare(nameOf(right));
+    });
+  }, [volunteers]);
 
   const unreadNotifications = useMemo(() => {
     if (profile?.role === "Admin") {
@@ -1361,6 +1385,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         created_at,
         status,
         assignment_role,
+        notes,
         volunteer:profiles (
           id,
           full_name,
@@ -1398,6 +1423,26 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
     await fetchWeekAssignments();
     await fetchPersonalAssignments();
+  };
+
+  const handleAssignmentNotesSave = async () => {
+    if (!notesTarget) return;
+    setNotesSaving(true);
+    setNotesMessage("");
+    const { error } = await supabase
+      .from("shift_assignments")
+      .update({ notes: notesDraft.trim() || null })
+      .eq("id", notesTarget.id);
+    if (error) {
+      setNotesMessage(error.message);
+      setNotesSaving(false);
+      return;
+    }
+    setNotesSaving(false);
+    setShowAssignmentNotes(false);
+    setNotesTarget(null);
+    setNotesDraft("");
+    await fetchWeekAssignments();
   };
 
   const handleEnableNotifications = async () => {
@@ -1801,6 +1846,23 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     });
   };
 
+  const handleRefreshClick = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        fetchWeekAssignments(),
+        fetchPersonalAssignments(),
+        fetchMyShifts(),
+        fetchMyRecurring(),
+        fetchNotifications(),
+        fetchNotificationCount(),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
     <div className="calendar-shell">
       <header className="calendar-header">
@@ -1829,6 +1891,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           </div>
         </div>
         <div className="calendar-actions">
+          <button
+            className="account-button refresh-button"
+            type="button"
+            onClick={handleRefreshClick}
+            disabled={refreshing}
+            title="Refresh shifts and notifications"
+          >
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
           <button
             className="account-button"
             type="button"
@@ -2057,8 +2128,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                     setDropTargetId(assignment.id);
                                     setShowDropConfirm(true);
                                   } else if (profile?.role === "Admin") {
-                                    setRemoveTarget(assignment);
-                                    setShowRemovePrompt(true);
+                                    setNotesTarget(assignment);
+                                    setNotesDraft(assignment.notes ?? "");
+                                    setNotesMessage("");
+                                    setShowAssignmentNotes(true);
                                   }
                                 }}
                               >
@@ -2067,9 +2140,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                 ) : assignment && hasVolunteer ? (
                                   <div className="capacity-slot-content">
                                     <span>{name ?? "No Volunteer Assigned"}</span>
-                                    {(assignment.assignment_role === "lead" ||
-                                      assignment.volunteer?.role === "Admin") &&
-                                    assignment.volunteer?.phone ? (
+                                    {assignment.notes ? (
+                                      <span className="capacity-slot-phone">{assignment.notes}</span>
+                                    ) : (assignment.assignment_role === "lead" ||
+                                        assignment.volunteer?.role === "Admin") &&
+                                      assignment.volunteer?.phone ? (
                                       isMobile ? (
                                         <span className="capacity-slot-phone">
                                           <a
@@ -2761,6 +2836,70 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         </div>
       ) : null}
 
+      {showAssignmentNotes ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-panel take-shift-panel">
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow">Admin</p>
+                <h3 className="modal-title">Volunteer shift note</h3>
+              </div>
+              <button
+                className="modal-close"
+                type="button"
+                onClick={() => {
+                  setShowAssignmentNotes(false);
+                  setNotesTarget(null);
+                  setNotesDraft("");
+                  setNotesMessage("");
+                }}
+              >
+                Close
+              </button>
+            </div>
+            <div className="modal-body">
+              <p className="modal-text">
+                {notesTarget?.volunteer?.preferred_name ||
+                  notesTarget?.volunteer?.full_name ||
+                  "Volunteer"}
+              </p>
+              <label className="form-field">
+                <span className="form-label">Shift note</span>
+                <textarea
+                  className="form-input form-textarea"
+                  value={notesDraft}
+                  onChange={(event) => setNotesDraft(event.target.value)}
+                  rows={4}
+                />
+              </label>
+              {notesMessage ? <div className="error-banner">{notesMessage}</div> : null}
+              <div className="modal-actions">
+                <button
+                  className="account-button"
+                  type="button"
+                  onClick={handleAssignmentNotesSave}
+                  disabled={notesSaving}
+                >
+                  {notesSaving ? "Saving..." : "Save note"}
+                </button>
+                <button
+                  className="account-button"
+                  type="button"
+                  onClick={() => {
+                    if (!notesTarget) return;
+                    setShowAssignmentNotes(false);
+                    setRemoveTarget(notesTarget);
+                    setShowRemovePrompt(true);
+                  }}
+                >
+                  Remove volunteer
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {showVolunteers ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal-panel account-panel">
@@ -3007,7 +3146,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               ) : null}
               {volunteers.length > 0 && !selectedVolunteer ? (
                 <div className="volunteers-list">
-                  {volunteers.map((volunteer) => {
+                  {sortedVolunteers.map((volunteer) => {
                     const name =
                       volunteer.preferred_name || volunteer.full_name || "Volunteer";
                     const roleLabel =
