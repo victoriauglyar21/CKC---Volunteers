@@ -859,7 +859,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         shift_instance:shift_instances (
           id,
           starts_at,
-          shift_date
+          shift_date,
+          ends_at,
+          template:shift_templates (
+            id,
+            title
+          )
         )
       `,
       )
@@ -1955,7 +1960,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       body: `${adminName} added you to ${shiftDate}, ${shiftTime}, ${shiftTitle}.`,
     });
     if (pushError) {
-      setAssignmentsMessage(`Volunteer added, but push notification failed: ${pushError}`);
+      setAssignMessage(`Volunteer added, but push notification failed: ${pushError}`);
+      setAssignLoading(false);
+      await fetchWeekAssignments();
+      return;
     }
 
     await fetchWeekAssignments();
@@ -2177,6 +2185,25 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const pushError = await sendAdminDropPush(`${adminName} removed ${volunteerName} from a shift.`);
     if (pushError) {
       setAssignmentsMessage(`Volunteer removed, but push notification failed: ${pushError}`);
+    }
+    const removedVolunteerId = removeTarget.volunteer?.id;
+    if (removedVolunteerId) {
+      const shiftDateValue = removeTarget.shift_instance?.starts_at ?? removeTarget.shift_instance?.shift_date;
+      const shiftDate = formatDateWithWeekday(shiftDateValue);
+      const shiftStart = removeTarget.shift_instance?.starts_at;
+      const shiftEnd = removeTarget.shift_instance?.ends_at;
+      const shiftTime = shiftStart
+        ? `${formatTimeOnly(shiftStart)}${shiftEnd ? ` — ${formatTimeOnly(shiftEnd)}` : ""}`
+        : "time TBD";
+      const shiftTitle = removeTarget.shift_instance?.template?.title ?? "Shift";
+      const volunteerPushError = await sendVolunteerPush({
+        userId: removedVolunteerId,
+        title: "Shift removed",
+        body: `${adminName} removed you from ${shiftDate}, ${shiftTime}, ${shiftTitle}.`,
+      });
+      if (volunteerPushError) {
+        setAssignmentsMessage(`Volunteer removed, but push notification failed: ${volunteerPushError}`);
+      }
     }
 
     setShowRemovePrompt(false);
