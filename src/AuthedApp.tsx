@@ -1348,6 +1348,28 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         return;
       }
 
+      if (volunteerRecurring.length === 1) {
+        const adminName =
+          displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
+        const { data: pushData, error: pushError } = await supabase.functions.invoke("send-push", {
+          body: {
+            user_id: selectedVolunteer.id,
+            title: "Recurring shifts removed",
+            body: `${adminName} deleted all your reaccuring shifts from your schedule. Please check them here`,
+            url: "/?view=notifications",
+          },
+        });
+        if (pushError) {
+          setRecurringMessage(`Recurring shift deleted, but push notification failed: ${pushError.message}`);
+        } else if (pushData?.skipped) {
+          setRecurringMessage(
+            "Recurring shift deleted, but push notification was skipped because volunteer push is not enabled.",
+          );
+        } else if (typeof pushData?.sent === "number" && pushData.sent <= 0) {
+          setRecurringMessage("Recurring shift deleted, but push notification was not delivered.");
+        }
+      }
+
       setRecurringDeleteId(null);
       fetchVolunteerRecurring(selectedVolunteer.id);
       fetchMyShifts();
