@@ -35,7 +35,7 @@ serve(async (req) => {
 
   const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   webpush.setVapidDetails(
-    "mailto:notifications@ckc-volunteer.org",
+    "mailto:notifications@cokittyvolunteers.com",
     VAPID_PUBLIC_KEY,
     VAPID_PRIVATE_KEY,
   );
