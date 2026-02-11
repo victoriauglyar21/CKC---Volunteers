@@ -1936,12 +1936,23 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    const shiftTitle =
-      instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId)?.title || "a shift";
+    const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
+    const adminName =
+      displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
+    const shiftTitle = assignedShift?.title ?? "Shift";
+    const shiftDate = assignedShift
+      ? assignedShift.start.toLocaleDateString("en-US", {
+          weekday: "long",
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })
+      : "an upcoming date";
+    const shiftTime = assignedShift ? formatTimeRangeFromInstance(assignedShift.start, assignedShift.end) : "—";
     const pushError = await sendVolunteerPush({
       userId: volunteerId,
       title: "Shift added",
-      body: `You were added to ${shiftTitle}.`,
+      body: `${adminName} added you to ${shiftDate}, ${shiftTime}, ${shiftTitle}.`,
     });
     if (pushError) {
       setAssignmentsMessage(`Volunteer added, but push notification failed: ${pushError}`);
@@ -2116,7 +2127,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     body: string;
     url?: string;
   }) => {
-    const { error } = await supabase.functions.invoke("send-push", {
+    const { data, error } = await supabase.functions.invoke("send-push", {
       body: {
         user_id: userId,
         title,
@@ -2127,6 +2138,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (error) {
       console.warn("Failed to send volunteer push:", error.message);
       return error.message;
+    }
+    if (data?.skipped) {
+      return "Volunteer has not enabled push notifications.";
+    }
+    if (typeof data?.sent === "number" && data.sent <= 0) {
+      return "Push notification was not delivered.";
     }
     return null;
   };
