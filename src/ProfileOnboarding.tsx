@@ -174,11 +174,13 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
     }
 
     if (!initialProfile) {
+      const newVolunteerName =
+        normalizeText(form.preferred_name) || normalizeText(form.full_name) || "A volunteer";
       await supabase.functions.invoke("send-admin-push", {
         body: {
-          title: "New volunteer",
-          body: "A new volunteer completed their profile.",
-          url: "/",
+          title: "New volunteer signup",
+          body: `${newVolunteerName} has signed up for CKC Volunteer shifts`,
+          url: "/?view=notifications",
         },
       });
     }

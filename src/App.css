@@ -36,6 +36,8 @@
 .month-nav {
   display: flex;
   gap: 10px;
+  flex-wrap: nowrap;
+  align-items: center;
 }
 
 .calendar-actions {
@@ -142,7 +144,9 @@
 
 .calendar-jump {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 12px;
   padding: 6px 6px 0;
   margin-bottom: 10px;
 }
@@ -150,6 +154,8 @@
 @media (max-width: 600px) {
   .calendar-jump {
     justify-content: flex-start;
+    align-items: center;
+    flex-wrap: wrap;
     padding: 6px 6px 0;
   }
 
@@ -170,10 +176,12 @@
 .nav-button {
   border-radius: 999px;
   border: 1px solid rgba(255, 135, 180, 0.5);
-  padding: 7px 12px;
+  height: 36px;
+  padding: 0 12px;
   background: rgba(255, 135, 180, 0.35);
   color: inherit;
   font-weight: 600;
+  font-size: 0.88rem;
   transition: transform 0.2s ease, border-color 0.2s ease;
 }
 
@@ -188,36 +196,96 @@
 }
 
 .month-nav-left {
-  margin-top: 8px;
-  margin-bottom: 16px;
+  margin-top: 0;
+  margin-bottom: 0;
   gap: 12px;
 }
 
+.month-jump-select {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 135, 180, 0.5);
+  height: 36px;
+  padding: 0 12px;
+  background: rgba(255, 135, 180, 0.35);
+  color: inherit;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
 @media (max-width: 720px) {
-  .calendar-actions {
-    width: 100%;
-    flex-direction: column;
-    align-items: flex-end;
-    justify-content: flex-end;
+  .calendar-shell {
+    padding: 20px 12px 30px;
+    gap: 12px;
   }
 
-  .calendar-actions .account-button {
-    width: auto;
+  .calendar-header {
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .calendar-actions {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
     justify-content: flex-start;
+    margin-left: 0;
+    gap: 8px;
+  }
+
+  .calendar-actions .account-button,
+  .calendar-actions .menu-button {
+    min-height: 42px;
+    padding: 10px 14px;
+    font-size: 0.95rem;
+  }
+
+  .calendar-actions .refresh-button {
+    font-size: 0.95rem;
+  }
+
+  .month-nav-left {
+    margin-bottom: 0;
+    gap: 8px;
+    flex-wrap: nowrap;
   }
 
   .month-nav {
     width: auto;
+    gap: 8px;
+    flex-wrap: nowrap;
   }
 
-  .month-nav .nav-button {
-    flex: 0;
+  .month-nav .nav-button,
+  .month-nav .month-jump-select {
+    flex: 0 0 auto;
+    height: 36px;
+    padding: 0 12px;
+    font-size: 0.88rem;
+    text-align: center;
+  }
+
+  .month-nav .month-jump-select {
+    min-width: 132px;
+  }
+
+  .calendar-panel {
+    padding: 10px;
+  }
+
+  .calendar-panel .calendar-header {
+    margin-top: 0;
+    margin-bottom: 6px;
   }
 }
 
 .calendar-panel .calendar-header {
   margin-top: 4px;
   margin-bottom: 10px;
+  align-items: flex-start;
+}
+
+.calendar-panel .jump-today {
+  margin-top: 2px;
 }
 
 .calendar-panel {
@@ -641,6 +709,37 @@
   appearance: none;
 }
 
+.myshift-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.myshift-detail-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.myshift-detail-value {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.94);
+  text-align: right;
+}
+
+.myshift-location-link {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.myshift-detail-date .myshift-detail-label,
+.myshift-detail-date .myshift-detail-value {
+  color: #ff87b4;
+}
+
 .myshift-header {
   display: flex;
   justify-content: space-between;
@@ -709,6 +808,11 @@
   margin: 4px 0 0;
   color: rgba(255, 255, 255, 0.7);
   font-size: 0.85rem;
+}
+
+.recurring-meta-label {
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 600;
 }
 
 .recurring-pill {

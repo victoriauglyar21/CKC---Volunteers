@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAYS_MONDAY_FIRST = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", {
   month: "long",
@@ -38,6 +46,7 @@ type ShiftInstance = {
   end: Date;
   templateId: string;
   instanceId: number;
+  isVirtual?: boolean;
 };
 
 type ShiftAssignmentDetail = {
@@ -170,10 +179,21 @@ function getDateKey(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function getMonthKey(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  return `${year}-${month}`;
+}
+
 function parseDateOnly(value: string) {
   const [year, month, day] = value.split("-").map((part) => Number(part));
   if (!year || !month || !day) return null;
   return new Date(year, month - 1, day);
+}
+
+function getWeekStart(baseDate: Date, mondayFirst: boolean) {
+  const weekdayOffset = mondayFirst ? (baseDate.getDay() + 6) % 7 : baseDate.getDay();
+  return addDays(startOfDay(baseDate), -weekdayOffset);
 }
 
 type ShiftInstanceRow = {
@@ -187,8 +207,8 @@ type ShiftInstanceRow = {
   } | null;
 };
 
-function buildWeekCells(baseDate: Date): CalendarCell[] {
-  const weekStart = addDays(startOfDay(baseDate), -baseDate.getDay());
+function buildWeekCells(baseDate: Date, mondayFirst: boolean): CalendarCell[] {
+  const weekStart = getWeekStart(baseDate, mondayFirst);
   const cells: CalendarCell[] = [];
   for (let i = 0; i < 7; i += 1) {
     const date = addDays(weekStart, i);
@@ -208,6 +228,18 @@ function formatDate(value: string | null | undefined) {
   });
 }
 
+function formatDateWithWeekday(value: string | null | undefined) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) return "—";
   const date = new Date(value);
@@ -216,6 +248,16 @@ function formatDateTime(value: string | null | undefined) {
     month: "short",
     day: "numeric",
     year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatTimeOnly(value: string | null | undefined) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
   });
@@ -282,12 +324,138 @@ function formatByDay(days: string[] | null | undefined) {
   return days.map((day) => dayMap[day] ?? day).join(", ");
 }
 
+function formatRepeatPattern(rrule: string | null | undefined) {
+  const days = parseRRuleDays(rrule);
+  const dayMap: Record<string, string> = {
+    SU: "Sunday",
+    MO: "Monday",
+    TU: "Tuesday",
+    WE: "Wednesday",
+    TH: "Thursday",
+    FR: "Friday",
+    SA: "Saturday",
+  };
+
+  const labels = days.map((day) => dayMap[day] ?? day).filter(Boolean);
+  if (labels.length === 0) return "Every day";
+  if (labels.length === 1) return `Every ${labels[0]}`;
+  if (labels.length === 2) return `Every ${labels[0]} and ${labels[1]}`;
+  return `Every ${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
+}
+
+function formatRepeatPatternFromDays(days: string[] | null | undefined) {
+  const dayMap: Record<string, string> = {
+    SU: "Sunday",
+    MO: "Monday",
+    TU: "Tuesday",
+    WE: "Wednesday",
+    TH: "Thursday",
+    FR: "Friday",
+    SA: "Saturday",
+  };
+
+  const labels = (days ?? []).map((day) => dayMap[day] ?? day).filter(Boolean);
+  if (labels.length === 0) return "Every day";
+  if (labels.length === 1) return `Every ${labels[0]}`;
+  if (labels.length === 2) return `Every ${labels[0]} and ${labels[1]}`;
+  return `Every ${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
+}
+
 function getDayCode(value: string | null | undefined) {
   if (!value) return null;
   const date = value.includes("T") ? new Date(value) : parseDateOnly(value);
   if (!date || Number.isNaN(date.getTime())) return null;
   const map = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
   return map[date.getDay()] ?? null;
+}
+
+function parseRRuleDays(rrule: string | null | undefined) {
+  if (!rrule) return [];
+  const byday = rrule
+    .split(";")
+    .find((part) => part.trim().toUpperCase().startsWith("BYDAY="))
+    ?.split("=")[1];
+  if (!byday) return [];
+  return byday
+    .split(",")
+    .map((part) => part.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function parseRRuleFreq(rrule: string | null | undefined) {
+  if (!rrule) return null;
+  const freq = rrule
+    .split(";")
+    .find((part) => part.trim().toUpperCase().startsWith("FREQ="))
+    ?.split("=")[1];
+  return freq?.trim().toUpperCase() ?? null;
+}
+
+function toIsoForDateAndTime(date: Date, hhmm: string | null | undefined) {
+  if (!hhmm) return null;
+  const timeMatch = hhmm.match(/(\d{1,2}):(\d{2})/);
+  if (!timeMatch) return null;
+  const [, hours, minutes] = timeMatch;
+  if (!hours || !minutes) return null;
+  const local = new Date(date);
+  local.setHours(Number(hours), Number(minutes), 0, 0);
+  if (Number.isNaN(local.getTime())) return null;
+  return local.toISOString();
+}
+
+function resolveTemplateStartTime(template: ShiftTemplate) {
+  const dynamic = template as ShiftTemplate & Record<string, unknown>;
+  const candidates = [
+    template.start_time,
+    typeof dynamic.time_start === "string" ? dynamic.time_start : null,
+    typeof dynamic.starts_at === "string" ? dynamic.starts_at : null,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const parsed = candidate.match(/(\d{1,2}):(\d{2})/);
+    if (parsed) return `${parsed[1].padStart(2, "0")}:${parsed[2]}`;
+  }
+  return "09:00";
+}
+
+function resolveTemplateEndTime(template: ShiftTemplate) {
+  const dynamic = template as ShiftTemplate & Record<string, unknown>;
+  const candidates = [
+    template.end_time,
+    typeof dynamic.time_end === "string" ? dynamic.time_end : null,
+    typeof dynamic.ends_at === "string" ? dynamic.ends_at : null,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const parsed = candidate.match(/(\d{1,2}):(\d{2})/);
+    if (parsed) return `${parsed[1].padStart(2, "0")}:${parsed[2]}`;
+  }
+  return "11:00";
+}
+
+function shouldIncludeDateForTemplate(date: Date, template: ShiftTemplate) {
+  if (!template.rrule) return true;
+  const byDay = parseRRuleDays(template.rrule);
+  const dayCode = getDayCode(getDateKey(date));
+  if (!dayCode) return false;
+
+  // Only enforce explicit BYDAY constraints; otherwise render active templates
+  // so future weeks do not disappear when RRULE variants differ.
+  if (byDay.length > 0) return byDay.includes(dayCode);
+
+  const freq = parseRRuleFreq(template.rrule);
+  if (freq === "DAILY" || freq === "WEEKLY" || freq === "MONTHLY") return true;
+  return true;
+}
+
+function buildVirtualInstanceId(templateId: string, dayKey: string) {
+  const input = `${templateId}-${dayKey}`;
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash << 5) - hash + input.charCodeAt(i);
+    hash |= 0;
+  }
+  return -Math.abs(hash || 1);
 }
 
 function formatPhone(value: string) {
@@ -420,10 +588,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const fetchTemplates = async () => {
       setLoading(true);
-      const { data, error } = await supabase
-        .from("shift_templates")
-        .select("*")
-        .eq("is_active", true);
+      const { data, error } = await supabase.from("shift_templates").select("*");
 
       if (!mounted) return;
 
@@ -448,11 +613,67 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const fetchShiftInstances = async () => {
       const baseDate = addDays(today, weekOffset * 7);
-      const weekStart = addDays(startOfDay(baseDate), -baseDate.getDay());
+      const weekStart = getWeekStart(baseDate, true);
       const weekEnd = addDays(weekStart, 6);
-
       const weekStartDate = getDateKey(weekStart);
       const weekEndDate = getDateKey(addDays(weekEnd, 1));
+
+      // Ensure visible week always has shift instances for active templates.
+      if (templates.length > 0) {
+        const templateIds = templates.map((template) => template.id);
+        const { data: existingRows } = await supabase
+          .from("shift_instances")
+          .select("template_id,shift_date,starts_at")
+          .in("template_id", templateIds)
+          .or(
+            `starts_at.gte.${weekStart.toISOString()},starts_at.lt.${addDays(
+              weekEnd,
+              1,
+            ).toISOString()},shift_date.gte.${weekStartDate},shift_date.lt.${weekEndDate}`,
+          );
+
+        const existingKeys = new Set(
+          (existingRows ?? []).map((row) => {
+            const day = row.shift_date ?? (row.starts_at ? getDateKey(new Date(row.starts_at)) : "");
+            return `${row.template_id}-${day}`;
+          }),
+        );
+
+        const rowsToInsert: {
+          template_id: string;
+          shift_date: string;
+          starts_at: string;
+          ends_at: string;
+        }[] = [];
+
+        for (let i = 0; i < 7; i += 1) {
+          const day = addDays(weekStart, i);
+          const dayKey = getDateKey(day);
+          templates.forEach((template) => {
+            if (template.is_active === false) return;
+            const key = `${template.id}-${dayKey}`;
+            if (existingKeys.has(key)) return;
+            const startsAt = toIsoForDateAndTime(day, resolveTemplateStartTime(template));
+            const endsAt = toIsoForDateAndTime(day, resolveTemplateEndTime(template));
+            if (!startsAt || !endsAt) return;
+            rowsToInsert.push({
+              template_id: template.id,
+              shift_date: dayKey,
+              starts_at: startsAt,
+              ends_at: endsAt,
+            });
+            existingKeys.add(key);
+          });
+        }
+
+        if (rowsToInsert.length > 0) {
+          const { error: insertError } = await supabase.from("shift_instances").insert(rowsToInsert);
+          if (insertError && import.meta.env.DEV) {
+            console.warn("Unable to generate week shift instances", insertError.message);
+          }
+        }
+      }
+
       const { data, error } = await supabase
         .from("shift_instances")
         .select(
@@ -503,7 +724,41 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         })
         .filter((item): item is ShiftInstance => Boolean(item));
 
-      setInstanceShifts(shifts);
+      const existingKeys = new Set(
+        shifts
+          .filter((shift) => Boolean(shift.templateId))
+          .map((shift) => `${shift.templateId}-${getDateKey(shift.start)}`),
+      );
+      const fallbackShifts: ShiftInstance[] = [];
+      for (let i = 0; i < 7; i += 1) {
+        const day = addDays(weekStart, i);
+        const dayKey = getDateKey(day);
+        templates.forEach((template) => {
+          if (template.is_active === false) return;
+          const key = `${template.id}-${dayKey}`;
+          if (existingKeys.has(key)) return;
+          const startIso = toIsoForDateAndTime(day, resolveTemplateStartTime(template));
+          const endIso = toIsoForDateAndTime(day, resolveTemplateEndTime(template));
+          if (!startIso || !endIso) return;
+          fallbackShifts.push({
+            id: `virtual-${template.id}-${dayKey}`,
+            instanceId: buildVirtualInstanceId(template.id, dayKey),
+            title: template.title,
+            start: new Date(startIso),
+            end: new Date(endIso),
+            templateId: template.id,
+            isVirtual: true,
+          });
+        });
+      }
+
+      setInstanceShifts(
+        [...shifts, ...fallbackShifts].sort((left, right) => {
+          const startDiff = left.start.getTime() - right.start.getTime();
+          if (startDiff !== 0) return startDiff;
+          return left.title.localeCompare(right.title);
+        }),
+      );
     };
 
     fetchShiftInstances();
@@ -511,7 +766,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     return () => {
       mounted = false;
     };
-  }, [today, weekOffset]);
+  }, [today, weekOffset, templates]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 600px)");
@@ -620,6 +875,48 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setWeekAssignments(map);
   }, [instanceShifts]);
 
+  const ensureShiftInstance = useCallback(async (shift: ShiftInstance) => {
+    if (!shift.isVirtual && shift.instanceId > 0) {
+      return shift.instanceId;
+    }
+
+    const shiftDate = getDateKey(shift.start);
+    const { data: existing, error: existingError } = await supabase
+      .from("shift_instances")
+      .select("id")
+      .eq("template_id", shift.templateId)
+      .eq("shift_date", shiftDate)
+      .order("id", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (existingError) {
+      setAssignmentsMessage(existingError.message);
+      return null;
+    }
+    if (existing?.id) {
+      return existing.id;
+    }
+
+    const { data: created, error: createError } = await supabase
+      .from("shift_instances")
+      .insert({
+        template_id: shift.templateId,
+        shift_date: shiftDate,
+        starts_at: shift.start.toISOString(),
+        ends_at: shift.end.toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (createError || !created?.id) {
+      setAssignmentsMessage(createError?.message ?? "Unable to open this shift yet.");
+      return null;
+    }
+
+    return created.id as number;
+  }, []);
+
   useEffect(() => {
     fetchWeekAssignments();
   }, [fetchWeekAssignments]);
@@ -692,7 +989,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   const handleSignOut = useCallback(async () => {
     try {
-      sessionStorage.removeItem("volunteer-access-code");
+      localStorage.removeItem("volunteer-access-code");
     } catch {
       // Ignore storage cleanup failures.
     }
@@ -804,8 +1101,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const fetchMyShifts = useCallback(async () => {
     setAssignmentsLoading(true);
     setAssignmentsMessage("");
-    const rangeStart = new Date();
-    const rangeEnd = addMonths(rangeStart, 12);
+    const rangeStart = getWeekStart(startOfDay(new Date()), true);
+    const rangeEnd = addDays(rangeStart, 7);
 
     const { data, error } = await supabase
       .from("shift_assignments")
@@ -829,15 +1126,49 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       )
       .eq("volunteer_id", session.user.id)
       .in("status", ["active", "pending"])
-      .gte("shift_instances.starts_at", rangeStart.toISOString())
-      .lt("shift_instances.starts_at", rangeEnd.toISOString())
       .order("starts_at", { ascending: true, foreignTable: "shift_instances" });
 
     if (!data || error) {
       setAssignments([]);
       setAssignmentsMessage(error?.message ?? "");
     } else {
-      setAssignments((data as unknown as ShiftAssignment[]) ?? []);
+      const sorted = ((data as unknown as ShiftAssignment[]) ?? [])
+        .filter((assignment) => {
+          const instance = assignment.shift_instance;
+          if (!instance) return false;
+          let date: Date | null = null;
+          if (instance.shift_date) {
+            date = parseDateOnly(instance.shift_date);
+          } else if (instance.starts_at) {
+            const parsed = new Date(instance.starts_at);
+            if (!Number.isNaN(parsed.getTime())) {
+              date = parsed;
+            }
+          }
+          if (!date) return false;
+          const dayStart = startOfDay(date);
+          return dayStart >= rangeStart && dayStart < rangeEnd;
+        })
+        .sort((left, right) => {
+          const leftDate = left.shift_instance?.shift_date ?? "";
+          const rightDate = right.shift_instance?.shift_date ?? "";
+          if (leftDate && rightDate && leftDate !== rightDate) {
+            return leftDate.localeCompare(rightDate);
+          }
+          const leftValue =
+            left.shift_instance?.starts_at ??
+            `${left.shift_instance?.shift_date ?? ""}T00:00:00`;
+          const rightValue =
+            right.shift_instance?.starts_at ??
+            `${right.shift_instance?.shift_date ?? ""}T00:00:00`;
+          const leftMs = Date.parse(leftValue);
+          const rightMs = Date.parse(rightValue);
+          if (Number.isNaN(leftMs) || Number.isNaN(rightMs)) {
+            return leftValue.localeCompare(rightValue);
+          }
+          return leftMs - rightMs;
+        });
+      setAssignments(sorted);
     }
 
     setAssignmentsLoading(false);
@@ -1287,16 +1618,37 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   );
 
   const baseDate = addDays(today, weekOffset * 7);
-  const displayCells = buildWeekCells(baseDate);
+  const displayCells = buildWeekCells(baseDate, true);
   const monthLabel = monthFormatter.format(baseDate);
-  const weekStart = addDays(startOfDay(baseDate), -baseDate.getDay());
+  const weekStart = getWeekStart(baseDate, true);
   const weekEnd = addDays(weekStart, 6);
   const rangeLabel = `${dayFormatter.format(weekStart)} – ${dayFormatter.format(weekEnd)}`;
+  const weekdayLabels = WEEKDAYS_MONDAY_FIRST;
+  const todayWeekdayIndex = (today.getDay() + 6) % 7;
   const maxWeekOffset = Math.max(0, Math.floor(diffInDays(today, addMonths(today, 12)) / 7));
+  const currentMonthKey = getMonthKey(baseDate);
+  const monthJumpOptions = useMemo(() => {
+    const start = new Date(today.getFullYear(), today.getMonth(), 1);
+    const options: { key: string; label: string; weekOffset: number }[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      const monthDate = addMonths(start, i);
+      const monthStartWeek = getWeekStart(monthDate, true);
+      const calendarStartWeek = getWeekStart(startOfDay(today), true);
+      const offset = Math.max(0, Math.floor(diffInDays(calendarStartWeek, monthStartWeek) / 7));
+      options.push({
+        key: getMonthKey(monthDate),
+        label: monthFormatter.format(monthDate),
+        weekOffset: Math.min(maxWeekOffset, offset),
+      });
+    }
+    return options;
+  }, [today, maxWeekOffset]);
 
   const showEmptyState = !loading && templates.length === 0;
   const assignmentsForDisplay = assignments.filter(
-    (assignment) => assignment.shift_instance && assignment.shift_instance.starts_at,
+    (assignment) =>
+      assignment.shift_instance &&
+      (assignment.shift_instance.starts_at || assignment.shift_instance.shift_date),
   );
   const recurringTemplates = useMemo(() => {
     const seen = new Set<string>();
@@ -1327,11 +1679,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     clampedPage * pageSize + pageSize,
   );
   const showNoUpcoming = !assignmentsLoading && assignmentsForDisplay.length === 0 && !assignmentsMessage;
-  const showNoRecurring = !assignmentsLoading && recurringTemplates.length === 0 && !assignmentsMessage;
+  const showNoRecurring = !assignmentsLoading && myRecurring.length === 0 && !assignmentsMessage;
 
   const handleConfirmTakeShift = async () => {
     if (!activeShiftInstanceId) {
       setTakeShiftMessage("Shift instance not found.");
+      return;
+    }
+    const existingAssignment = (weekAssignments[activeShiftInstanceId] ?? []).some(
+      (assignment) =>
+        assignment.volunteer?.id === session.user.id && assignment.status !== "dropped",
+    );
+    if (existingAssignment) {
+      setTakeShiftMessage("You are already on this shift!");
       return;
     }
     setTakeShiftLoading(true);
@@ -1364,17 +1724,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setTakeShiftLoading(false);
 
     if (takeShiftMode === "request") {
+      const volunteerName =
+        displayProfile?.preferred_name ||
+        displayProfile?.full_name ||
+        session.user.email ||
+        "A volunteer";
       await supabase.functions.invoke("send-admin-push", {
         body: {
           title: "Shift request",
-          body: "A volunteer requested to join a shift.",
-          url: "/",
+          body: `${volunteerName} requested to join a shift.`,
+          url: "/?view=notifications",
         },
       });
     }
 
     const baseDate = addDays(today, weekOffset * 7);
-    const weekStart = addDays(startOfDay(baseDate), -baseDate.getDay());
+    const weekStart = getWeekStart(baseDate, true);
     const weekEnd = addDays(weekStart, 6);
 
     const { data, error: refreshError } = await supabase
@@ -1733,11 +2098,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setDropReason("");
 
     if (profile?.role !== "Admin") {
+      const volunteerName =
+        displayProfile?.preferred_name ||
+        displayProfile?.full_name ||
+        session.user.email ||
+        "A volunteer";
+      const reasonText = dropReason.trim();
       await supabase.functions.invoke("send-admin-push", {
         body: {
           title: "Shift dropped",
-          body: "A volunteer dropped a shift.",
-          url: "/",
+          body: reasonText
+            ? `${volunteerName} dropped a shift. Reason: ${reasonText}`
+            : `${volunteerName} dropped a shift.`,
+          url: "/?view=notifications",
         },
       });
     }
@@ -1752,6 +2125,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setMyShiftsPage(0);
     }
   }, [showMyShifts, assignmentsForDisplay.length]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("view") !== "notifications") return;
+    setShowNotifications(true);
+    setShowMenu(false);
+  }, []);
 
   // Removed focus refresh to avoid reloading view on tab switch.
 
@@ -1846,6 +2226,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     });
   };
 
+  const handleMonthJump = (monthKey: string) => {
+    const option = monthJumpOptions.find((item) => item.key === monthKey);
+    if (!option) return;
+    setWeekOffset(option.weekOffset);
+  };
+
   const handleRefreshClick = async () => {
     if (refreshing) return;
     setRefreshing(true);
@@ -1863,6 +2249,41 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
   };
 
+  async function testAdminPush() {
+    const { data, error } = await supabase.functions.invoke("send-admin-push", {
+      body: {
+        title: "CKC Admin Push Test",
+        body: "This is a test notification.",
+        url: "/?view=notifications",
+      },
+    });
+    console.log("send-admin-push result:", data, error);
+    if (error) {
+      alert(`Push test failed: ${error.message}`);
+      return;
+    }
+    const sent = typeof data?.sent === "number" ? data.sent : 0;
+    const failed = typeof data?.failed === "number" ? data.failed : 0;
+    alert(`Push sent successfully (${sent} delivered${failed ? `, ${failed} failed` : ""}).`);
+  }
+
+  const handleModalBackdropClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    setShowMyShifts(false);
+    setShowTakeShiftPrompt(false);
+    setShowNotifications(false);
+    setShowAssignVolunteer(false);
+    setShowHelpfulLinks(false);
+    setShowDropConfirm(false);
+    setShowDropReason(false);
+    setShowDenyPrompt(false);
+    setShowRemovePrompt(false);
+    setShowAssignmentNotes(false);
+    setShowVolunteers(false);
+    setShowProfile(false);
+    setShowAddRecurring(false);
+  };
+
   return (
     <div className="calendar-shell">
       <header className="calendar-header">
@@ -1870,25 +2291,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           <p className="calendar-eyebrow">Team schedule</p>
           <h1 className="calendar-title">CKC Shift Calendar</h1>
           <p className="calendar-subtitle">{rangeLabel}</p>
-          <div className="month-nav month-nav-left">
-            <button
-              className="nav-button"
-              onClick={() => setWeekOffset((value) => Math.max(0, value - 1))}
-              disabled={weekOffset === 0}
-            >
-              Prev
-            </button>
-            <button className="nav-button" onClick={handleTodayClick}>
-              Today
-            </button>
-            <button
-              className="nav-button"
-              onClick={() => setWeekOffset((value) => Math.min(maxWeekOffset, value + 1))}
-              disabled={weekOffset >= maxWeekOffset}
-            >
-              Next
-            </button>
-          </div>
         </div>
         <div className="calendar-actions">
           <button
@@ -1969,6 +2371,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 >
                   My profile
                 </button>
+                {profile?.role === "Admin" ? (
+                  <button
+                    className="menu-item"
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setShowMenu(false);
+                      void testAdminPush();
+                    }}
+                  >
+                    Test Admin Push
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -1984,9 +2399,37 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       <section className="calendar-panel">
         <div className="calendar-jump">
-          <button className="account-button jump-today" type="button" onClick={handleTodayClick}>
-            Jump to Today
-          </button>
+          <div className="month-nav month-nav-left">
+            <button
+              className="nav-button"
+              onClick={() => setWeekOffset((value) => Math.max(0, value - 1))}
+              disabled={weekOffset === 0}
+            >
+              Prev
+            </button>
+            <button className="nav-button" onClick={handleTodayClick}>
+              Today
+            </button>
+            <button
+              className="nav-button"
+              onClick={() => setWeekOffset((value) => Math.min(maxWeekOffset, value + 1))}
+              disabled={weekOffset >= maxWeekOffset}
+            >
+              Next
+            </button>
+            <select
+              className="month-jump-select"
+              value={currentMonthKey}
+              onChange={(event) => handleMonthJump(event.target.value)}
+              aria-label="Jump to month"
+            >
+              {monthJumpOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         <div className="calendar-header">
           <div>
@@ -1994,13 +2437,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             <h2 className="calendar-title">{monthLabel}</h2>
             <p className="calendar-subtitle">{rangeLabel}</p>
           </div>
+          <button className="account-button jump-today" type="button" onClick={handleTodayClick}>
+            Jump to Today
+          </button>
         </div>
 
         <div className="calendar-grid">
-          {WEEKDAYS.map((day, index) => (
+          {weekdayLabels.map((day, index) => (
             <div
               key={`${monthLabel}-${day}`}
-              className={`weekday ${index === today.getDay() ? "weekday-today" : ""}`}
+              className={`weekday ${index === todayWeekdayIndex ? "weekday-today" : ""}`}
             >
               {day}
             </div>
@@ -2028,7 +2474,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 ref={dateKey === todayKey ? todayCellRef : undefined}
               >
                 <div className="day-weekday">
-                  {WEEKDAYS[cell.date.getDay()]}
+                  {weekdayLabels[(cell.date.getDay() + 6) % 7]}
                 </div>
                 <div className="day-number">{cell.label}</div>
                 <div className="shift-list">
@@ -2086,6 +2532,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                               assignment?.volunteer?.full_name ||
                               null;
                             const hasVolunteer = Boolean(assignment?.volunteer?.id);
+                            const isLeadCoverageSlot = index === 0 && !hasVolunteer;
+                            const canClaimLeadCoverage =
+                              profile?.role === "Lead" || profile?.role === "Admin";
                             const slotClass =
                               !assignment || !assignment.volunteer?.id
                                 ? index === 0
@@ -2104,19 +2553,35 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                 className={`capacity-slot ${slotClass}`}
                                 type="button"
                                 disabled={
-                                  hasVolunteer &&
-                                  profile?.role !== "Admin" &&
-                                  assignment?.volunteer?.id !== session.user.id
+                                  (hasVolunteer &&
+                                    profile?.role !== "Admin" &&
+                                    assignment?.volunteer?.id !== session.user.id) ||
+                                  (isLeadCoverageSlot && !canClaimLeadCoverage)
                                 }
-                                onClick={() => {
-                                  setActiveShiftInstanceId(shift.instanceId);
+                                onClick={async () => {
+                                  const resolvedInstanceId = await ensureShiftInstance(shift);
+                                  if (!resolvedInstanceId) return;
+                                  setActiveShiftInstanceId(resolvedInstanceId);
 
                                   if (!assignment) {
                                     if (profile?.role === "Admin") {
                                       setAssignMessage("");
-                                      setAssignShiftInstanceId(shift.instanceId);
+                                      setAssignShiftInstanceId(resolvedInstanceId);
                                       setShowAssignVolunteer(true);
                                     } else {
+                                      if (index === 0 && profile?.role !== "Lead") {
+                                        return;
+                                      }
+                                      const alreadyOnShift = assignmentList.some(
+                                        (slot) =>
+                                          slot.volunteer?.id === session.user.id &&
+                                          slot.status !== "dropped",
+                                      );
+                                      if (alreadyOnShift) {
+                                        setTakeShiftMessage("You are already on this shift!");
+                                        setShowTakeShiftPrompt(true);
+                                        return;
+                                      }
                                       setTakeShiftMessage("");
                                       setTakeShiftMode("request");
                                       setShowTakeShiftPrompt(true);
@@ -2182,7 +2647,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
 
       {showMyShifts ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel account-panel">
             <div className="modal-header">
               <div>
@@ -2202,10 +2667,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <div className="error-banner">{assignmentsMessage}</div>
               ) : null}
               <div className="myshifts-section">
-                <p className="myshifts-section-title">Upcoming shifts</p>
+                <p className="myshifts-section-title">Upcoming shifts this week</p>
                 {showNoUpcoming ? (
                   <div className="empty-banner">
-                    No upcoming shifts yet. Check the calendar to join a shift!
+                    No shifts for this week yet. Check the calendar to join a shift!
                   </div>
                 ) : null}
                 {assignmentsForDisplay.length > 0 ? (
@@ -2214,12 +2679,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       const shift = assignment.shift_instance;
                       if (!shift) return null;
                       const title = shift.template?.title ?? "Shift";
-                      const roleLabel =
-                        profile?.role === "Admin"
-                          ? "Lead Shift"
-                          : assignment.assignment_role === "lead"
-                            ? "Lead Volunteer"
-                            : "Regular Volunteer";
+                      const locationAddress = "1403 N Monroe Ave";
+                      const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                        locationAddress,
+                      )}`;
+                      const shiftType = /evening/i.test(title)
+                        ? "Evening Shift"
+                        : /morning/i.test(title)
+                          ? "Morning Shift"
+                          : title;
+                      const dateText = formatDateWithWeekday(shift.starts_at ?? shift.shift_date);
+                      const timeText = `${formatTimeOnly(shift.starts_at)} — ${formatTimeOnly(
+                        shift.ends_at,
+                      )}`;
                       return (
                         <button
                           key={assignment.id}
@@ -2230,20 +2702,32 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             setShowDropConfirm(true);
                           }}
                         >
-                          <div className="myshift-header">
-                            <div>
-                              <p className="myshift-title">{title}</p>
-                              <p className="myshift-meta">
-                                {formatDateTime(shift.starts_at)} — {formatDateTime(shift.ends_at)}
-                              </p>
-                            </div>
-                            <span className={`myshift-role ${assignment.assignment_role}`}>
-                              {roleLabel}
+                          <div className="myshift-detail-row myshift-detail-date">
+                            <span className="myshift-detail-label">Date</span>
+                            <span className="myshift-detail-value">{dateText}</span>
+                          </div>
+                          <div className="myshift-detail-row">
+                            <span className="myshift-detail-label">Time</span>
+                            <span className="myshift-detail-value">{timeText}</span>
+                          </div>
+                          <div className="myshift-detail-row">
+                            <span className="myshift-detail-label">Location</span>
+                            <span className="myshift-detail-value">
+                              <a
+                                className="myshift-location-link"
+                                href={mapsUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                {locationAddress}
+                              </a>
                             </span>
                           </div>
-                          {shift.notes ? (
-                            <div className="myshift-notes">{shift.notes}</div>
-                          ) : null}
+                          <div className="myshift-detail-row">
+                            <span className="myshift-detail-label">Shift</span>
+                            <span className="myshift-detail-value">{shiftType}</span>
+                          </div>
                         </button>
                       );
                     })}
@@ -2283,11 +2767,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     No repeating shifts yet.
                   </div>
                 ) : null}
-                {recurringTemplates.length > 0 ? (
+                {myRecurring.length > 0 ? (
                   <div className="recurring-list">
-                    {recurringTemplates.map((template) => {
+                    {myRecurring.map((recurring) => {
+                      const template = templateMap[recurring.template_id];
+                      if (!template) return null;
                       const templateInstance = instanceShifts.find(
-                        (shift) => shift.templateId === template.id,
+                        (shift) => shift.templateId === recurring.template_id,
                       );
                       const timeRange = template.start_time
                         ? `${formatTemplateTime(template.start_time)} — ${formatTemplateTime(
@@ -2296,13 +2782,28 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         : templateInstance
                           ? formatTimeRangeFromInstance(templateInstance.start, templateInstance.end)
                           : "—";
+                      const repeatPattern =
+                        recurring.byday && recurring.byday.length > 0
+                          ? formatRepeatPatternFromDays(recurring.byday)
+                          : formatRepeatPattern(template.rrule);
+                      const shiftType = /evening/i.test(template.title)
+                        ? "Evening Shift"
+                        : /morning/i.test(template.title)
+                          ? "Morning Shift"
+                          : template.title;
                       return (
-                        <div key={template.id} className="recurring-card">
+                        <div key={recurring.id} className="recurring-card">
                           <div>
-                            <p className="recurring-title">{template.title}</p>
-                            <p className="recurring-meta">{timeRange}</p>
+                            <p className="recurring-meta">
+                              <span className="recurring-meta-label">Repeats:</span> {repeatPattern}
+                            </p>
+                            <p className="recurring-meta">
+                              <span className="recurring-meta-label">Shift:</span> {shiftType}
+                            </p>
+                            <p className="recurring-meta">
+                              <span className="recurring-meta-label">Time:</span> {timeRange}
+                            </p>
                           </div>
-                          <span className="recurring-pill">{formatRRule(template.rrule)}</span>
                         </div>
                       );
                     })}
@@ -2315,7 +2816,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ) : null}
 
       {showTakeShiftPrompt ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel take-shift-panel">
             <div className="modal-header">
               <div>
@@ -2370,7 +2871,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
 
       {showNotifications ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel account-panel">
             <div className="modal-header">
               <div>
@@ -2517,7 +3018,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         </div>
       ) : null}
       {showAssignVolunteer ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel account-panel">
             <div className="modal-header">
               <div>
@@ -2579,7 +3080,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         </div>
       ) : null}
       {showHelpfulLinks ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel account-panel">
             <div className="modal-header">
               <div>
@@ -2652,7 +3153,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ) : null}
 
       {showDropConfirm ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel take-shift-panel">
             <div className="modal-header">
               <div>
@@ -2697,7 +3198,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ) : null}
 
       {showDropReason ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel take-shift-panel">
             <div className="modal-header">
               <div>
@@ -2740,7 +3241,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ) : null}
 
       {showDenyPrompt ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel take-shift-panel">
             <div className="modal-header">
               <div>
@@ -2787,7 +3288,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ) : null}
 
       {showRemovePrompt ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel take-shift-panel">
             <div className="modal-header">
               <div>
@@ -2837,7 +3338,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ) : null}
 
       {showAssignmentNotes ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel take-shift-panel">
             <div className="modal-header">
               <div>
@@ -2901,7 +3402,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ) : null}
 
       {showVolunteers ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel account-panel">
             <div className="modal-header">
               <div>
@@ -3193,7 +3694,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ) : null}
 
       {showProfile ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
           <div className="modal-panel account-panel">
             <div className="modal-header">
               <div>

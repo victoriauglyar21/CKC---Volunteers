@@ -2,6 +2,12 @@ import { serve } from "https://deno.land/std@0.204.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import webpush from "https://esm.sh/web-push@3.6.7";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY") ?? "";
@@ -18,19 +24,23 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 webpush.setVapidDetails("mailto:notifications@ckc-volunteer.org", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
 serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
   if (req.method !== "POST") {
-    return new Response("Method Not Allowed", { status: 405 });
+    return new Response("Method Not Allowed", { status: 405, headers: corsHeaders });
   }
 
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.replace("Bearer ", "");
   if (!token) {
-    return new Response("Unauthorized", { status: 401 });
+    return new Response("Unauthorized", { status: 401, headers: corsHeaders });
   }
 
   const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
   if (userError || !userData?.user) {
-    return new Response("Unauthorized", { status: 401 });
+    return new Response("Unauthorized", { status: 401, headers: corsHeaders });
   }
 
   const requesterId = userData.user.id;
@@ -41,13 +51,29 @@ serve(async (req) => {
     .maybeSingle();
 
   if (requesterProfile?.role !== "Admin" && requesterProfile?.role !== "Lead") {
-    return new Response("Forbidden", { status: 403 });
+    return new Response("Forbidden", { status: 403, headers: corsHeaders });
   }
 
   const payload = await req.json();
   const { user_id, title, body, url } = payload ?? {};
   if (!user_id || !title || !body || !url) {
-    return new Response("Invalid payload", { status: 400 });
+    return new Response("Invalid payload", { status: 400, headers: corsHeaders });
+  }
+
+  const { data: targetProfile, error: targetProfileError } = await supabaseAdmin
+    .from("profiles")
+    .select("notification_pref")
+    .eq("id", user_id)
+    .maybeSingle();
+
+  if (targetProfileError) {
+    return new Response(targetProfileError.message, { status: 500, headers: corsHeaders });
+  }
+
+  if (targetProfile?.notification_pref !== "push_and_email") {
+    return new Response(JSON.stringify({ sent: 0, failed: 0, skipped: true }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 
   const { data: subs, error: subsError } = await supabaseAdmin
@@ -56,7 +82,7 @@ serve(async (req) => {
     .eq("user_id", user_id);
 
   if (subsError) {
-    return new Response(subsError.message, { status: 500 });
+    return new Response(subsError.message, { status: 500, headers: corsHeaders });
   }
 
   const sendResults = await Promise.all(
@@ -97,6 +123,6 @@ serve(async (req) => {
   const failed = sendResults.length - sent;
 
   return new Response(JSON.stringify({ sent, failed }), {
-    headers: { "Content-Type": "application/json" },
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 });

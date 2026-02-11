@@ -2,6 +2,12 @@ import { serve } from "https://deno.land/std@0.204.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import webpush from "https://esm.sh/web-push@3.6.7";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY") ?? "";
@@ -43,7 +49,7 @@ serve(async () => {
 
   if (error || !assignments) {
     return new Response(JSON.stringify({ sent: 0, failed: 0 }), {
-      headers: { "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
@@ -57,19 +63,40 @@ serve(async () => {
 
   if (targets.length === 0) {
     return new Response(JSON.stringify({ sent: 0, failed: 0 }), {
-      headers: { "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
   const userIds = Array.from(new Set(targets.map((t) => t.user_id)));
+  const { data: eligibleProfiles, error: eligibleError } = await supabaseAdmin
+    .from("profiles")
+    .select("id")
+    .in("id", userIds)
+    .eq("notification_pref", "push_and_email");
+
+  if (eligibleError) {
+    return new Response(JSON.stringify({ sent: 0, failed: 0 }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const eligibleIds = new Set((eligibleProfiles ?? []).map((profile) => profile.id));
+  const filteredTargets = targets.filter((target) => eligibleIds.has(target.user_id));
+
+  if (filteredTargets.length === 0) {
+    return new Response(JSON.stringify({ sent: 0, failed: 0 }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
   const { data: subs, error: subsError } = await supabaseAdmin
     .from("push_subscriptions")
     .select("endpoint,p256dh,auth,user_id")
-    .in("user_id", userIds);
+    .in("user_id", Array.from(eligibleIds));
 
   if (subsError || !subs) {
     return new Response(JSON.stringify({ sent: 0, failed: 0 }), {
-      headers: { "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
@@ -83,7 +110,7 @@ serve(async () => {
   let sent = 0;
   let failed = 0;
 
-  for (const target of targets) {
+  for (const target of filteredTargets) {
     const userSubs = subsByUser.get(target.user_id) ?? [];
     if (userSubs.length === 0) continue;
     const title = "Shift reminder";
@@ -125,6 +152,6 @@ serve(async () => {
   }
 
   return new Response(JSON.stringify({ sent, failed }), {
-    headers: { "Content-Type": "application/json" },
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 });

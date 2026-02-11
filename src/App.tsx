@@ -57,7 +57,7 @@ function AccessCodeGate({ requiredCode, onVerified }: AccessCodeGateProps) {
 
     setSubmitting(true);
     try {
-      sessionStorage.setItem(ACCESS_CODE_STORAGE_KEY, requiredCode);
+      localStorage.setItem(ACCESS_CODE_STORAGE_KEY, requiredCode);
     } catch {
       // Ignore storage failures; still allow access for this session.
     }
@@ -151,7 +151,7 @@ export default function App() {
     if (!accessCodeRequired) return true;
     try {
       return (
-        sessionStorage.getItem(ACCESS_CODE_STORAGE_KEY) === requiredAccessCode
+        localStorage.getItem(ACCESS_CODE_STORAGE_KEY) === requiredAccessCode
       );
     } catch {
       return false;
@@ -216,7 +216,7 @@ export default function App() {
     }
     try {
       setAccessVerified(
-        sessionStorage.getItem(ACCESS_CODE_STORAGE_KEY) === requiredAccessCode,
+        localStorage.getItem(ACCESS_CODE_STORAGE_KEY) === requiredAccessCode,
       );
     } catch {
       setAccessVerified(false);
