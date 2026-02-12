@@ -546,6 +546,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [volunteersLoading, setVolunteersLoading] = useState(false);
   const [volunteersMessage, setVolunteersMessage] = useState("");
   const [volunteers, setVolunteers] = useState<VolunteerRow[]>([]);
+  const [volunteerSearch, setVolunteerSearch] = useState("");
   const [selectedVolunteer, setSelectedVolunteer] = useState<VolunteerRow | null>(null);
   const [volunteerRecurring, setVolunteerRecurring] = useState<RecurringAssignment[]>([]);
   const [recurringLoading, setRecurringLoading] = useState(false);
@@ -1658,6 +1659,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return nameOf(left).localeCompare(nameOf(right));
     });
   }, [volunteers]);
+  const filteredSortedVolunteers = useMemo(() => {
+    const query = volunteerSearch.trim().toLowerCase();
+    if (!query) return sortedVolunteers;
+    return sortedVolunteers.filter((volunteer) => {
+      const fullName = (volunteer.full_name ?? "").toLowerCase();
+      const preferredName = (volunteer.preferred_name ?? "").toLowerCase();
+      return fullName.includes(query) || preferredName.includes(query);
+    });
+  }, [sortedVolunteers, volunteerSearch]);
 
   const unreadNotifications = useMemo(() => {
     return notifications.filter(
@@ -3576,7 +3586,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               <button
                 className="modal-close"
                 type="button"
-                onClick={() => setShowVolunteers(false)}
+                onClick={() => {
+                  setShowVolunteers(false);
+                  setVolunteerSearch("");
+                }}
               >
                 Close
               </button>
@@ -3806,12 +3819,24 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               {volunteersMessage ? (
                 <div className="error-banner">{volunteersMessage}</div>
               ) : null}
-              {volunteers.length === 0 && !volunteersLoading && !selectedVolunteer ? (
+              {!selectedVolunteer ? (
+                <label className="form-field">
+                  <span className="form-label">Search volunteers</span>
+                  <input
+                    className="form-input"
+                    type="text"
+                    placeholder="Type a name"
+                    value={volunteerSearch}
+                    onChange={(event) => setVolunteerSearch(event.target.value)}
+                  />
+                </label>
+              ) : null}
+              {filteredSortedVolunteers.length === 0 && !volunteersLoading && !selectedVolunteer ? (
                 <div className="empty-banner">No volunteers found.</div>
               ) : null}
-              {volunteers.length > 0 && !selectedVolunteer ? (
+              {filteredSortedVolunteers.length > 0 && !selectedVolunteer ? (
                 <div className="volunteers-list">
-                  {sortedVolunteers.map((volunteer) => {
+                  {filteredSortedVolunteers.map((volunteer) => {
                     const name =
                       volunteer.preferred_name || volunteer.full_name || "Volunteer";
                     const roleLabel =
