@@ -304,6 +304,25 @@ function rankShiftForDisplay(shift: ShiftInstance) {
   return /lead/i.test(shift.title) ? 0 : 1;
 }
 
+function getNormalizedRole(role: string | null | undefined) {
+  return (role ?? "").trim().toLowerCase();
+}
+
+function isAdminRole(role: string | null | undefined) {
+  const normalizedRole = getNormalizedRole(role);
+  return normalizedRole === "admin";
+}
+
+function isLeadRole(role: string | null | undefined) {
+  const normalizedRole = getNormalizedRole(role);
+  return normalizedRole === "lead" || normalizedRole === "lead volunteer";
+}
+
+function isLeadAssignmentRole(role: string | null | undefined) {
+  const normalizedRole = getNormalizedRole(role);
+  return normalizedRole === "lead" || normalizedRole === "lead volunteer";
+}
+
 function formatTimeRangeFromInstance(start: Date, end: Date) {
   return `${timeFormatter.format(start)} — ${timeFormatter.format(end)}`;
 }
@@ -2678,9 +2697,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       .sort((left, right) => {
                         const rankFor = (assignment: ShiftAssignmentDetail) => {
                           if (assignment.status === "pending") return 3;
-                          if (assignment.volunteer?.role === "Admin") return 0;
-                          if (assignment.volunteer?.role === "Lead") return 1;
-                          if (assignment.assignment_role === "lead") return 1;
+                          if (isAdminRole(assignment.volunteer?.role)) return 0;
+                          if (isLeadRole(assignment.volunteer?.role)) return 1;
+                          if (isLeadAssignmentRole(assignment.assignment_role)) return 1;
                           return 2;
                         };
                         const rankLeft = rankFor(left);
@@ -2690,16 +2709,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         const rightCreated = right.created_at ?? "";
                         return leftCreated.localeCompare(rightCreated);
                       });
+                    const filledAssignments = sortedAssignments.filter((assignment) =>
+                      Boolean(assignment.volunteer?.id),
+                    );
                     const leadAssignment =
-                      sortedAssignments.find(
+                      filledAssignments.find(
                         (assignment) =>
-                          assignment.assignment_role === "lead" ||
-                          assignment.volunteer?.role === "Lead" ||
-                          assignment.volunteer?.role === "Admin",
+                          isLeadAssignmentRole(assignment.assignment_role) ||
+                          isLeadRole(assignment.volunteer?.role) ||
+                          isAdminRole(assignment.volunteer?.role),
                       ) ?? null;
                     const regularAssignments = leadAssignment
-                      ? sortedAssignments.filter((assignment) => assignment !== leadAssignment)
-                      : sortedAssignments;
+                      ? filledAssignments.filter((assignment) => assignment !== leadAssignment)
+                      : filledAssignments;
                     return (
                       <div
                         key={shift.id}
@@ -2757,7 +2779,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                   if (!resolvedInstanceId) return;
                                   setActiveShiftInstanceId(resolvedInstanceId);
 
-                                  if (!assignment) {
+                                  if (!assignment || !hasVolunteer) {
                                     if (profile?.role === "Admin") {
                                       setAssignMessage("");
                                       setAssignShiftInstanceId(resolvedInstanceId);
