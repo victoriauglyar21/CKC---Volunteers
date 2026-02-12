@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
@@ -54,10 +54,12 @@ export default function App() {
   const isSignupRoute = routePath === "/signup";
   const isCompleteProfileRoute = routePath === "/complete-profile";
 
-  useEffect(() => {
-    if (!isSignupRoute || !session) return;
-    void supabase.auth.signOut();
-  }, [isSignupRoute, session]);
+  const goToCompleteProfile = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (window.location.pathname !== "/complete-profile") {
+      window.history.replaceState({}, "", "/complete-profile");
+    }
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -135,27 +137,27 @@ export default function App() {
       }
 
       if (!data) {
-        const forceOnboarding = isCompleteProfileRoute;
         setProfile(null);
-        setNeedsOnboarding(forceOnboarding);
+        setNeedsOnboarding(true);
         setProfileMissing(false);
         setProfileLoading(false);
-        if (!forceOnboarding) {
-          void supabase.auth.signOut();
-        }
+        goToCompleteProfile();
         return;
       }
 
       const fetchedProfile = data as ProfileRecord;
       const profileComplete = isProfileComplete(fetchedProfile);
-      const forceOnboarding = isCompleteProfileRoute && !profileComplete;
       setProfile(fetchedProfile);
-      setNeedsOnboarding(forceOnboarding);
+      setNeedsOnboarding(!profileComplete);
       setProfileMissing(false);
 
       setProfileLoading(false);
-      if (!profileComplete && !isCompleteProfileRoute) {
-        void supabase.auth.signOut();
+      if (!profileComplete) {
+        goToCompleteProfile();
+        return;
+      }
+      if (isSignupRoute || isCompleteProfileRoute) {
+        window.history.replaceState({}, "", "/");
       }
     };
 
@@ -164,7 +166,7 @@ export default function App() {
     return () => {
       mounted = false;
     };
-  }, [session, isCompleteProfileRoute]);
+  }, [goToCompleteProfile, isCompleteProfileRoute, isSignupRoute, session]);
 
   if (loading) return <div style={{ padding: 16 }}>Loading…</div>;
 
