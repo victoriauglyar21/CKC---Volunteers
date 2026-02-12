@@ -1295,7 +1295,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const recurringPushError = await sendVolunteerPush({
         userId: selectedVolunteer.id,
         title: "Recurring shifts added",
-        body: `${adminName} added a recurring shift: ${shiftName}. Days: ${dayLabel}. ${shiftLabel}.`,
+        body: "Victoria added reaccuring shifts to your schedule",
       });
       if (recurringPushError) {
         setRecurringMessage(`Recurring shifts saved, but push notification failed: ${recurringPushError}`);
