@@ -374,6 +374,16 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+.day-cell.past::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(120, 128, 138, 0.34);
+  pointer-events: none;
 }
 
 @media (max-width: 600px) {
@@ -763,6 +773,11 @@
   appearance: none;
 }
 
+.myshift-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
 .myshift-detail-row {
   display: flex;
   justify-content: space-between;
@@ -1110,10 +1125,15 @@
   font-size: 0.9rem;
 }
 
+.helpful-links {
+  display: grid;
+  gap: 10px;
+}
+
 .helpful-link {
+  display: block;
   color: #ffb6cf;
   text-decoration: underline;
-  font-style: italic;
   font-weight: 500;
 }
 
@@ -1121,16 +1141,46 @@
   color: #ffd0e1;
 }
 
-.helpful-phone,
-.helpful-text {
+.helpful-section {
+  margin-top: 6px;
+  display: grid;
+  gap: 10px;
+}
+
+.helpful-heading {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.helpful-contacts {
+  display: grid;
+  gap: 10px;
+}
+
+.helpful-contact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 6px 0;
+}
+
+.helpful-name {
+  font-weight: 600;
+}
+
+.helpful-phone-actions {
+  display: flex;
+  align-items: center;
+}
+
+.helpful-phone {
   color: #ffb6cf;
   text-decoration: underline;
-  font-style: italic;
   font-weight: 500;
 }
 
-.helpful-phone:hover,
-.helpful-text:hover {
+.helpful-phone:hover {
   color: #ffd0e1;
 }
 

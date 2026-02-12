@@ -13,13 +13,11 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const WEEKDAYS_MONDAY_FIRST = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", {
-  month: "long",
-  year: "numeric",
+  month: "short",
 });
 
 const monthJumpFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
-  year: "2-digit",
 });
 
 const dayFormatter = new Intl.DateTimeFormat("en-US", {
@@ -145,6 +143,15 @@ type ShiftAssignment = {
   } | null;
 };
 
+type DropDayLeadAssignment = {
+  volunteer_id: string;
+  assignment_role: string | null;
+  volunteer: {
+    id: string;
+    role: string | null;
+  } | null;
+};
+
 type PersonalAssignment = {
   shift_date: string | null;
   starts_at: string | null;
@@ -200,6 +207,18 @@ function parseDateOnly(value: string) {
   const [year, month, day] = value.split("-").map((part) => Number(part));
   if (!year || !month || !day) return null;
   return new Date(year, month - 1, day);
+}
+
+function getShiftDayStart(shift: { starts_at?: string | null; shift_date?: string | null } | null | undefined) {
+  if (!shift) return null;
+  if (shift.shift_date) {
+    const parsed = parseDateOnly(shift.shift_date);
+    if (parsed) return startOfDay(parsed);
+  }
+  if (!shift.starts_at) return null;
+  const parsed = new Date(shift.starts_at);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return startOfDay(parsed);
 }
 
 function getWeekStart(baseDate: Date, mondayFirst: boolean) {
@@ -570,6 +589,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [volunteersMessage, setVolunteersMessage] = useState("");
   const [volunteers, setVolunteers] = useState<VolunteerRow[]>([]);
   const [volunteerSearch, setVolunteerSearch] = useState("");
+  const [assignVolunteerSearch, setAssignVolunteerSearch] = useState("");
   const [selectedVolunteer, setSelectedVolunteer] = useState<VolunteerRow | null>(null);
   const [volunteerRecurring, setVolunteerRecurring] = useState<RecurringAssignment[]>([]);
   const [recurringLoading, setRecurringLoading] = useState(false);
@@ -626,7 +646,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         url: "https://forms.gle/grAvV1s3xraMXAUW9",
       },
       {
-        label: "Photos/Personality Form",
+        label: "Photos and Personality Form",
         url: "https://forms.gle/nzvEKXq687bgejUE6",
       },
     ],
@@ -1691,6 +1711,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return fullName.includes(query) || preferredName.includes(query);
     });
   }, [sortedVolunteers, volunteerSearch]);
+  const filteredAssignableVolunteers = useMemo(() => {
+    const query = assignVolunteerSearch.trim().toLowerCase();
+    if (!query) return sortedVolunteers;
+    return sortedVolunteers.filter((volunteer) => {
+      const fullName = (volunteer.full_name ?? "").toLowerCase();
+      const preferredName = (volunteer.preferred_name ?? "").toLowerCase();
+      return fullName.includes(query) || preferredName.includes(query);
+    });
+  }, [sortedVolunteers, assignVolunteerSearch]);
 
   const unreadNotifications = useMemo(() => {
     return notifications.filter(
@@ -1759,6 +1788,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   );
 
   const baseDate = addDays(today, weekOffset * 7);
+  const todayStartMs = today.getTime();
   const displayCells = buildWeekCells(baseDate, true);
   const monthLabel = monthFormatter.format(baseDate);
   const weekStart = getWeekStart(baseDate, true);
@@ -1826,6 +1856,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (!activeShiftInstanceId) {
       setTakeShiftMessage("Shift instance not found.");
       return;
+    }
+    if (profile?.role !== "Admin") {
+      const activeShift = instanceShifts.find((shift) => shift.instanceId === activeShiftInstanceId);
+      if (activeShift && startOfDay(activeShift.start).getTime() < todayStartMs) {
+        setTakeShiftMessage("Past shifts are locked and can no longer be changed.");
+        return;
+      }
     }
     const existingAssignment = (weekAssignments[activeShiftInstanceId] ?? []).some(
       (assignment) =>
@@ -2052,7 +2089,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
+    setShowAssignVolunteer(false);
+    setAssignVolunteerSearch("");
+    setAssignShiftInstanceId(null);
+
     const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
+    const volunteerName = volunteer.preferred_name || volunteer.full_name || "A volunteer";
     const adminName =
       displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
     const shiftTitle = assignedShift?.title ?? "Shift";
@@ -2065,13 +2107,71 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         })
       : "an upcoming date";
     const shiftTime = assignedShift ? formatTimeRangeFromInstance(assignedShift.start, assignedShift.end) : "—";
+    const notificationErrors: string[] = [];
+
+    const { error: adminPushError } = await supabase.functions.invoke("send-admin-push", {
+      body: {
+        title: "Shift added",
+        body: `${volunteerName} is now on (${shiftDate}, ${shiftTime}), ${shiftTitle}.`,
+        url: "/?view=notifications",
+      },
+    });
+    if (adminPushError) {
+      notificationErrors.push(`admin notification failed: ${adminPushError.message}`);
+    }
+
+    const { data: leadAssignments, error: leadAssignmentsError } = await supabase
+      .from("shift_assignments")
+      .select(
+        `
+          volunteer_id,
+          assignment_role,
+          volunteer:profiles (
+            id,
+            role
+          )
+        `,
+      )
+      .eq("shift_instance_id", assignShiftInstanceId)
+      .eq("status", "active");
+
+    if (leadAssignmentsError) {
+      notificationErrors.push(`lead lookup failed: ${leadAssignmentsError.message}`);
+    } else {
+      const leadIds = Array.from(
+        new Set(
+          ((leadAssignments as DropDayLeadAssignment[] | null) ?? [])
+            .filter(
+              (assignment) =>
+                assignment.volunteer_id !== volunteerId &&
+                (isLeadAssignmentRole(assignment.assignment_role) ||
+                  isLeadRole(assignment.volunteer?.role)),
+            )
+            .map((assignment) => assignment.volunteer_id),
+        ),
+      );
+      for (const leadId of leadIds) {
+        const leadPushError = await sendVolunteerPush({
+          userId: leadId,
+          title: "Shift added",
+          body: `${volunteerName} was added to your shift`,
+        });
+        if (leadPushError) {
+          notificationErrors.push(`lead notification failed: ${leadPushError}`);
+        }
+      }
+    }
+
     const pushError = await sendVolunteerPush({
       userId: volunteerId,
       title: "Shift added",
       body: `${adminName} added you to ${shiftDate}, ${shiftTime}, ${shiftTitle}.`,
     });
     if (pushError) {
-      setAssignMessage(`Volunteer added, but push notification failed: ${pushError}`);
+      notificationErrors.push(`volunteer notification failed: ${pushError}`);
+    }
+    if (notificationErrors.length > 0) {
+      setAssignMessage(`Volunteer added, but ${notificationErrors.join(" | ")}`);
       setAssignLoading(false);
       await fetchWeekAssignments();
       return;
@@ -2079,8 +2179,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     await fetchWeekAssignments();
     setAssignLoading(false);
-    setShowAssignVolunteer(false);
-    setAssignShiftInstanceId(null);
   };
 
   const handleNotificationDecision = async (
@@ -2333,6 +2431,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   const handleDropShift = async () => {
     if (!dropTargetId) return;
+    const targetAssignment = assignments.find((assignment) => assignment.id === dropTargetId);
+    const targetDropDay = getShiftDayStart(targetAssignment?.shift_instance);
+    const targetDropDateKey = targetDropDay ? getDateKey(targetDropDay) : null;
+    if (profile?.role !== "Admin") {
+      const targetDay = getShiftDayStart(targetAssignment?.shift_instance);
+      if (targetDay && targetDay.getTime() < todayStartMs) {
+        setAssignmentsMessage("Past shifts are locked and can no longer be changed.");
+        setShowDropConfirm(false);
+        setShowDropReason(false);
+        setDropTargetId(null);
+        return;
+      }
+    }
     if (profile?.role !== "Admin" && !dropReason.trim()) {
       setAssignmentsMessage("Please add a drop reason.");
       return;
@@ -2365,6 +2476,76 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ? `${actorName} dropped a shift. Reason: ${reasonText}`
       : `${actorName} dropped a shift.`;
     const pushError = await sendAdminDropPush(pushMessage);
+    const isRegularVolunteerDrop = profile?.role === "Regular Volunteer";
+    if (isRegularVolunteerDrop && targetDropDateKey) {
+      const dayStart = parseDateOnly(targetDropDateKey);
+      if (dayStart) {
+        const dayEnd = addDays(dayStart, 1);
+        const { data: dayInstances, error: dayInstancesError } = await supabase
+          .from("shift_instances")
+          .select("id")
+          .or(
+            `shift_date.eq.${targetDropDateKey},and(starts_at.gte.${dayStart.toISOString()},starts_at.lt.${dayEnd.toISOString()})`,
+          );
+
+        if (dayInstancesError) {
+          setAssignmentsMessage(
+            `Shift dropped, but lead notification lookup failed: ${dayInstancesError.message}`,
+          );
+        } else {
+          const dayInstanceIds = ((dayInstances as { id: number }[] | null) ?? [])
+            .map((row) => row.id)
+            .filter((id): id is number => Number.isInteger(id));
+          if (dayInstanceIds.length > 0) {
+            const { data: leadAssignments, error: leadAssignmentsError } = await supabase
+              .from("shift_assignments")
+              .select(
+                `
+                  volunteer_id,
+                  assignment_role,
+                  volunteer:profiles (
+                    id,
+                    role
+                  )
+                `,
+              )
+              .in("shift_instance_id", dayInstanceIds)
+              .eq("status", "active");
+
+            if (leadAssignmentsError) {
+              setAssignmentsMessage(
+                `Shift dropped, but lead notification lookup failed: ${leadAssignmentsError.message}`,
+              );
+            } else {
+              const leadIds = Array.from(
+                new Set(
+                  ((leadAssignments as DropDayLeadAssignment[] | null) ?? [])
+                    .filter(
+                      (assignment) =>
+                        assignment.volunteer_id !== session.user.id &&
+                        (isLeadAssignmentRole(assignment.assignment_role) ||
+                          isLeadRole(assignment.volunteer?.role)),
+                    )
+                    .map((assignment) => assignment.volunteer_id),
+                ),
+              );
+              for (const leadId of leadIds) {
+                const leadPushError = await sendVolunteerPush({
+                  userId: leadId,
+                  title: "Shift dropped",
+                  body: `${actorName} dropped your shift`,
+                });
+                if (leadPushError) {
+                  setAssignmentsMessage(
+                    `Shift dropped, but lead notification failed: ${leadPushError}`,
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
+    }
     setDropReason("");
     if (pushError) {
       setAssignmentsMessage(`Shift dropped, but push notification failed: ${pushError}`);
@@ -2488,6 +2669,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowTakeShiftPrompt(false);
     setShowNotifications(false);
     setShowAssignVolunteer(false);
+    setAssignVolunteerSearch("");
     setShowHelpfulLinks(false);
     setShowDropConfirm(false);
     setShowDropReason(false);
@@ -2644,7 +2826,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         </div>
         <div className="calendar-header">
           <div>
-            <p className="calendar-eyebrow">Week View</p>
             <h2 className="calendar-title">{monthLabel}</h2>
             <p className="calendar-subtitle">{rangeLabel}</p>
           </div>
@@ -2674,12 +2855,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             }
 
             const dateKey = getDateKey(cell.date);
+            const isPastDay = startOfDay(cell.date).getTime() < todayStartMs;
             const dayShifts = orderedShiftsByDate[dateKey] ?? [];
 
             return (
               <div
                 key={`${monthLabel}-${dateKey}`}
-                className="day-cell"
+                className={`day-cell ${isPastDay ? "past" : ""}`}
                 data-date={dateKey}
                 id={`day-${dateKey}`}
                 ref={dateKey === todayKey ? todayCellRef : undefined}
@@ -2691,6 +2873,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <div className="shift-list">
                   {dayShifts.map((shift) => {
                     const hasTimes = Boolean(shift.start && shift.end);
+                    const isPastShiftDay = startOfDay(shift.start).getTime() < todayStartMs;
                     const assignmentList = weekAssignments[shift.instanceId] ?? [];
                     const sortedAssignments = assignmentList
                       .slice()
@@ -2751,6 +2934,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             const isLeadCoverageSlot = index === 0 && !hasVolunteer;
                             const canClaimLeadCoverage =
                               profile?.role === "Lead" || profile?.role === "Admin";
+                            const isVolunteerPastLocked = profile?.role !== "Admin" && isPastShiftDay;
                             const slotClass =
                               !assignment || !assignment.volunteer?.id
                                 ? index === 0
@@ -2769,6 +2953,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                 className={`capacity-slot ${slotClass}`}
                                 type="button"
                                 disabled={
+                                  isVolunteerPastLocked ||
                                   (hasVolunteer &&
                                     profile?.role !== "Admin" &&
                                     assignment?.volunteer?.id !== session.user.id) ||
@@ -2782,6 +2967,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                   if (!assignment || !hasVolunteer) {
                                     if (profile?.role === "Admin") {
                                       setAssignMessage("");
+                                      setAssignVolunteerSearch("");
                                       setAssignShiftInstanceId(resolvedInstanceId);
                                       setShowAssignVolunteer(true);
                                     } else {
@@ -2896,6 +3082,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     {pagedAssignments.map((assignment) => {
                       const shift = assignment.shift_instance;
                       if (!shift) return null;
+                      const shiftDay = getShiftDayStart(shift);
+                      const isPastShift = Boolean(
+                        shiftDay && shiftDay.getTime() < todayStartMs && profile?.role !== "Admin",
+                      );
                       const title = shift.template?.title ?? "Shift";
                       const locationAddress = "1403 N Monroe Ave";
                       const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
@@ -2915,7 +3105,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           key={assignment.id}
                           className="myshift-card"
                           type="button"
+                          disabled={isPastShift}
                           onClick={() => {
+                            if (isPastShift) return;
                             setDropTargetId(assignment.id);
                             setShowDropConfirm(true);
                           }}
@@ -3248,6 +3440,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 type="button"
                 onClick={() => {
                   setShowAssignVolunteer(false);
+                  setAssignVolunteerSearch("");
                   setAssignShiftInstanceId(null);
                   setAssignMessage("");
                 }}
@@ -3263,15 +3456,34 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               {volunteersMessage ? (
                 <div className="error-banner">{volunteersMessage}</div>
               ) : null}
+              <label className="form-field">
+                <span className="form-label">Search volunteers</span>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="Type a name"
+                  value={assignVolunteerSearch}
+                  onChange={(event) => setAssignVolunteerSearch(event.target.value)}
+                />
+              </label>
+              {filteredAssignableVolunteers.length === 0 && !volunteersLoading ? (
+                <div className="empty-banner">No volunteers found.</div>
+              ) : null}
               <div className="volunteers-list">
-                {[...volunteers]
-                  .sort((left, right) => {
-                    const leftName = left.preferred_name || left.full_name || "";
-                    const rightName = right.preferred_name || right.full_name || "";
-                    return leftName.localeCompare(rightName);
-                  })
-                  .map((volunteer) => {
+                {filteredAssignableVolunteers.map((volunteer) => {
                     const name = volunteer.preferred_name || volunteer.full_name || "Volunteer";
+                    const roleLabel =
+                      volunteer.role === "Lead"
+                        ? "Lead Volunteer"
+                        : volunteer.role === "Regular Volunteer"
+                          ? "Regular Volunteer"
+                          : "Admin";
+                    const nameClass =
+                      volunteer.role === "Admin"
+                        ? "volunteer-name volunteer-name-admin"
+                        : volunteer.role === "Lead"
+                          ? "volunteer-name volunteer-name-lead"
+                          : "volunteer-name volunteer-name-regular";
                     return (
                       <button
                         key={volunteer.id}
@@ -3280,10 +3492,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         disabled={assignLoading}
                         onClick={() => handleAssignVolunteer(volunteer.id)}
                       >
-                        <div>
-                          <p className="volunteer-name">{name}</p>
+                        <div className="volunteer-main">
+                          <p className={nameClass}>{name}</p>
                           <p className="volunteer-meta">
-                            {(volunteer.pronouns ?? "—") + " · " + volunteer.role}
+                            {volunteer.pronouns ?? "—"} · {roleLabel}
                           </p>
                         </div>
                         <span className="volunteer-joined">
@@ -3336,9 +3548,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       <a className="helpful-phone" href="tel:9704855211">
                         970-485-5211
                       </a>
-                      <a className="helpful-text" href="sms:9704855211">
-                        Text
-                      </a>
                     </div>
                   </div>
                   <div className="helpful-contact">
@@ -3347,9 +3556,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       <a className="helpful-phone" href="tel:9704028197">
                         970-402-8197
                       </a>
-                      <a className="helpful-text" href="sms:9704028197">
-                        Text
-                      </a>
                     </div>
                   </div>
                   <div className="helpful-contact">
@@ -3357,9 +3563,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     <div className="helpful-phone-actions">
                       <a className="helpful-phone" href="tel:2623530988">
                         262-353-0988
-                      </a>
-                      <a className="helpful-text" href="sms:2623530988">
-                        Text
                       </a>
                     </div>
                   </div>
