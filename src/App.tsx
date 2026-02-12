@@ -129,8 +129,10 @@ export default function App() {
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [profileMissing, setProfileMissing] = useState(false);
+  const routePath = typeof window !== "undefined" ? window.location.pathname : "/";
+  const isSignupRoute = routePath === "/signup";
   const isCompleteProfileRoute =
-    typeof window !== "undefined" && window.location.pathname === "/complete-profile";
+    routePath === "/complete-profile";
   const requiredAccessCode = (
     import.meta.env.VITE_VOLUNTEER_ACCESS_CODE as string | undefined
   )?.trim();
@@ -145,6 +147,11 @@ export default function App() {
       return false;
     }
   });
+
+  useEffect(() => {
+    if (!isSignupRoute || !session) return;
+    void supabase.auth.signOut();
+  }, [isSignupRoute, session]);
 
   useEffect(() => {
     let mounted = true;
@@ -240,19 +247,28 @@ export default function App() {
       }
 
       if (!data) {
+        const forceOnboarding = isCompleteProfileRoute;
         setProfile(null);
-        setNeedsOnboarding(true);
+        setNeedsOnboarding(forceOnboarding);
         setProfileMissing(false);
         setProfileLoading(false);
+        if (!forceOnboarding) {
+          void supabase.auth.signOut();
+        }
         return;
       }
 
       const fetchedProfile = data as ProfileRecord;
+      const profileComplete = isProfileComplete(fetchedProfile);
+      const forceOnboarding = isCompleteProfileRoute && !profileComplete;
       setProfile(fetchedProfile);
-      setNeedsOnboarding(isCompleteProfileRoute || !isProfileComplete(fetchedProfile));
+      setNeedsOnboarding(forceOnboarding);
       setProfileMissing(false);
 
       setProfileLoading(false);
+      if (!profileComplete && !isCompleteProfileRoute) {
+        void supabase.auth.signOut();
+      }
     };
 
     fetchProfile();
@@ -275,7 +291,7 @@ export default function App() {
     );
   }
 
-  if (!session) return <Auth />;
+  if (!session) return <Auth defaultMode={isSignupRoute ? "signup" : "signin"} />;
 
   if (accessCodeRequired && !accessVerified && requiredAccessCode) {
     return (

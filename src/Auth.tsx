@@ -1,13 +1,14 @@
-import { useState, type FormEvent, type ChangeEvent } from "react";
+import { useEffect, useState, type FormEvent, type ChangeEvent } from "react";
 import { supabase } from "./supabaseClient";
 
 type AuthProps = {
   resetOnly?: boolean;
   onResetDone?: () => void;
+  defaultMode?: "signin" | "signup";
 };
 
-export default function Auth({ resetOnly = false, onResetDone }: AuthProps) {
-  const [isSignup, setIsSignup] = useState(false);
+export default function Auth({ resetOnly = false, onResetDone, defaultMode = "signin" }: AuthProps) {
+  const [isSignup, setIsSignup] = useState(defaultMode === "signup");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [signupConfirmPassword, setSignupConfirmPassword] = useState("");
@@ -25,6 +26,11 @@ export default function Auth({ resetOnly = false, onResetDone }: AuthProps) {
     import.meta.env.VITE_VOLUNTEER_ACCESS_CODE as string | undefined
   )?.trim();
   const accessCodeRequired = Boolean(requiredAccessCode);
+
+  useEffect(() => {
+    setIsSignup(defaultMode === "signup");
+    setMsg("");
+  }, [defaultMode]);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
