@@ -1391,7 +1391,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         const recurringDeletePushError = await sendVolunteerPush({
           userId: selectedVolunteer.id,
           title: "Recurring shifts removed",
-          body: "Your reaccuring shifts have been deleted",
+          body: "Your reaccuring shifts were deleted",
         });
         if (recurringDeletePushError) {
           setRecurringMessage(
