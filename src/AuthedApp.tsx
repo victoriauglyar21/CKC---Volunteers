@@ -2679,6 +2679,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         const rankFor = (assignment: ShiftAssignmentDetail) => {
                           if (assignment.status === "pending") return 3;
                           if (assignment.volunteer?.role === "Admin") return 0;
+                          if (assignment.volunteer?.role === "Lead") return 1;
                           if (assignment.assignment_role === "lead") return 1;
                           return 2;
                         };
@@ -2693,6 +2694,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       sortedAssignments.find(
                         (assignment) =>
                           assignment.assignment_role === "lead" ||
+                          assignment.volunteer?.role === "Lead" ||
                           assignment.volunteer?.role === "Admin",
                       ) ?? null;
                     const regularAssignments = leadAssignment
