@@ -18,14 +18,11 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
   const [msg, setMsg] = useState("");
   const [resetting, setResetting] = useState(false);
   const [updatingPassword, setUpdatingPassword] = useState(false);
+  const [submittingSignup, setSubmittingSignup] = useState(false);
   const siteUrl =
     (import.meta.env.VITE_SITE_URL as string | undefined) ??
     (typeof window !== "undefined" ? window.location.origin : "");
   const normalizedSiteUrl = siteUrl.replace(/\/+$/, "");
-  const requiredAccessCode = (
-    import.meta.env.VITE_VOLUNTEER_ACCESS_CODE as string | undefined
-  )?.trim();
-  const accessCodeRequired = Boolean(requiredAccessCode);
 
   useEffect(() => {
     setIsSignup(defaultMode === "signup");
@@ -68,29 +65,43 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
       if (password !== signupConfirmPassword) {
         return setMsg("Passwords do not match. Try again.");
       }
-      if (accessCodeRequired && requiredAccessCode) {
-        if (!accessCode.trim()) {
-          return setMsg("Enter the access code to create an account.");
-        }
-        if (accessCode.trim() !== requiredAccessCode) {
-          return setMsg("That access code doesn’t match. Double-check with your organizer.");
-        }
+      const trimmedAccessCode = accessCode.trim();
+      if (!trimmedAccessCode) {
+        return setMsg("Enter the access code to create an account.");
       }
 
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: `${normalizedSiteUrl}/complete-profile`,
-        },
-      });
-      if (error) return setMsg(error.message);
-      if (data.session) {
-        await supabase.auth.signOut();
+      setSubmittingSignup(true);
+      try {
+        const { data: accessValid, error: accessError } = await supabase.rpc(
+          "validate_signup_access_code",
+          { p_code: trimmedAccessCode },
+        );
+        if (accessError) {
+          return setMsg(
+            `Unable to validate access code right now. ${accessError.message}`,
+          );
+        }
+        if (!accessValid) {
+          return setMsg("That access code doesn’t match. Double-check with your organizer.");
+        }
+
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: `${normalizedSiteUrl}/complete-profile`,
+          },
+        });
+        if (error) return setMsg(error.message);
+        if (data.session) {
+          await supabase.auth.signOut();
+        }
+        return setMsg(
+          "Check your email (and spam) for the confirmation link. Add us to your contacts so future messages land in inbox.",
+        );
+      } finally {
+        setSubmittingSignup(false);
       }
-      return setMsg(
-        "Check your email (and spam) for the confirmation link. Add us to your contacts so future messages land in inbox.",
-      );
     }
 
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -224,25 +235,27 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
             </label>
           ) : null}
 
-          {isSignup && accessCodeRequired ? (
+          {isSignup ? (
             <label className="auth-field">
               <span className="auth-label">Access code</span>
               <input
                 className="auth-input"
                 type="text"
-                autoCapitalize="characters"
-                placeholder="CKC2026"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="Enter access code"
                 value={accessCode}
                 onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setAccessCode(e.target.value.trim())
+                  setAccessCode(e.target.value)
                 }
                 required
               />
             </label>
           ) : null}
 
-          <button className="auth-submit" type="submit">
-            {isSignup ? "Create account" : "Sign in"}
+          <button className="auth-submit" type="submit" disabled={submittingSignup}>
+            {isSignup ? (submittingSignup ? "Checking code..." : "Create account") : "Sign in"}
           </button>
         </form>
 

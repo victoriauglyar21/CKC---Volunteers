@@ -1001,11 +1001,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [showAssignVolunteer, fetchVolunteers]);
 
   const handleSignOut = useCallback(async () => {
-    try {
-      localStorage.removeItem("volunteer-access-code");
-    } catch {
-      // Ignore storage cleanup failures.
-    }
     await supabase.auth.signOut();
   }, []);
 
