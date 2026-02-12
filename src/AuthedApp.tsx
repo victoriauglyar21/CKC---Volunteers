@@ -1290,10 +1290,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const selectedTemplate = templates.find((template) => template.id === recurringForm.templateId);
       const dayLabel = formatByDay(recurringDays);
       const shiftLabel = getShiftPeriodLabel(selectedTemplate);
+      const shiftName = selectedTemplate?.title ?? "Shift";
       const recurringPushError = await sendVolunteerPush({
         userId: selectedVolunteer.id,
         title: "Recurring shifts added",
-        body: `${adminName} added a recurring shift. Days: ${dayLabel}. ${shiftLabel}.`,
+        body: `${adminName} added a recurring shift: ${shiftName}. Days: ${dayLabel}. ${shiftLabel}.`,
       });
       if (recurringPushError) {
         setRecurringMessage(`Recurring shifts saved, but push notification failed: ${recurringPushError}`);
@@ -1389,7 +1390,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         const recurringDeletePushError = await sendVolunteerPush({
           userId: selectedVolunteer.id,
           title: "Recurring shifts removed",
-          body: "Your reaccuring shifts were deleted",
+          body: "Your reaccuring shifts have been deleted",
         });
         if (recurringDeletePushError) {
           setRecurringMessage(
@@ -2255,9 +2256,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const shiftDate = formatDateWithWeekday(shiftDateValue);
       const shiftStart = removeTarget.shift_instance?.starts_at;
       const shiftEnd = removeTarget.shift_instance?.ends_at;
+      const templateId = removeTarget.shift_instance?.template?.id;
+      const template = templateId ? templateMap[templateId] : undefined;
       const shiftTime = shiftStart
         ? `${formatTimeOnly(shiftStart)}${shiftEnd ? ` — ${formatTimeOnly(shiftEnd)}` : ""}`
-        : "time TBD";
+        : template?.start_time
+          ? `${formatTemplateTime(template.start_time)}${
+              template.end_time ? ` — ${formatTemplateTime(template.end_time)}` : ""
+            }`
+          : "scheduled shift";
       const shiftTitle = removeTarget.shift_instance?.template?.title ?? "Shift";
       const volunteerPushError = await sendVolunteerPush({
         userId: removedVolunteerId,
