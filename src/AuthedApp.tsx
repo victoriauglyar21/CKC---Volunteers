@@ -190,6 +190,12 @@ function getMonthKey(date: Date) {
   return `${year}-${month}`;
 }
 
+function getNotificationReadToken(item: ShiftAssignmentDetail) {
+  const status = item.status ?? "unknown";
+  const changeMoment = item.dropped_at ?? item.created_at ?? "";
+  return `${item.id}:${status}:${changeMoment}`;
+}
+
 function parseDateOnly(value: string) {
   const [year, month, day] = value.split("-").map((part) => Number(part));
   if (!year || !month || !day) return null;
@@ -1241,7 +1247,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           })
         : instances ?? [];
 
-    if (!instanceError && filteredInstances.length > 0) {
+    if (instanceError) {
+      setRecurringMessage(instanceError.message);
+      setRecurringSaving(false);
+      return;
+    }
+
+    if (filteredInstances.length > 0) {
       const assignmentRole = selectedVolunteer.role === "Lead" ? "lead" : "regular";
       const payload = filteredInstances.map((instance) => ({
         shift_instance_id: instance.id,
@@ -1251,22 +1263,42 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         dropped_at: null,
         dropped_reason: null,
       }));
-      await supabase
+      const { error: assignmentError } = await supabase
         .from("shift_assignments")
-        .upsert(payload, { onConflict: "shift_instance_id,volunteer_id" });
-    }
+        .upsert(payload, { onConflict: "shift_instance_id,volunteer_id" })
+        .select("id");
+      if (assignmentError) {
+        setRecurringMessage(`Recurring shifts saved, but assignment update failed: ${assignmentError.message}`);
+        setRecurringSaving(false);
+        return;
+      }
 
-    const adminName =
-      displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
-    const recurringPushError = await sendVolunteerPush({
-      userId: selectedVolunteer.id,
-      title: "Recurring shifts added",
-      body: `${adminName} added reaccuring shifts to your schedule. Please check them here`,
-    });
-    if (recurringPushError) {
-      setRecurringMessage(`Recurring shifts saved, but push notification failed: ${recurringPushError}`);
-      setRecurringSaving(false);
-      return;
+      const adminName =
+        displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
+      const selectedTemplate = templates.find((template) => template.id === recurringForm.templateId);
+      const dayLabel = formatByDay(recurringDays);
+      const shiftLabel = selectedTemplate
+        ? /evening/i.test(selectedTemplate.title)
+          ? "evening shift"
+          : /morning/i.test(selectedTemplate.title)
+            ? "morning shift"
+            : selectedTemplate.title
+        : "shift";
+      const timeLabel = selectedTemplate?.start_time
+        ? `${formatTemplateTime(selectedTemplate.start_time)} — ${formatTemplateTime(
+            selectedTemplate.end_time,
+          )}`
+        : "time TBD";
+      const recurringPushError = await sendVolunteerPush({
+        userId: selectedVolunteer.id,
+        title: "Recurring shifts added",
+        body: `${adminName} added a reaccuring shift for you, ${dayLabel}, ${shiftLabel}, ${timeLabel}.`,
+      });
+      if (recurringPushError) {
+        setRecurringMessage(`Recurring shifts saved, but push notification failed: ${recurringPushError}`);
+      }
+    } else {
+      setRecurringMessage("Recurring pattern saved. No matching shift dates were found yet.");
     }
 
     setRecurringForm({ templateId: "", startsOn: "", endsOn: "" });
@@ -1279,7 +1311,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [
     selectedVolunteer,
     recurringForm,
+    recurringDays,
+    templates,
     today,
+    displayProfile?.preferred_name,
+    displayProfile?.full_name,
+    session.user.email,
     fetchVolunteerRecurring,
     fetchMyShifts,
     fetchWeekAssignments,
@@ -1409,7 +1446,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   const computeUnreadCount = useCallback(
     (items: ShiftAssignmentDetail[]) =>
-      items.filter((item) => !readNotificationIds.has(item.id)).length,
+      items.filter((item) => !readNotificationIds.has(getNotificationReadToken(item))).length,
     [readNotificationIds],
   );
 
@@ -1621,7 +1658,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [volunteers]);
 
   const unreadNotifications = useMemo(() => {
-    return notifications.filter((item) => !readNotificationIds.has(item.id));
+    return notifications.filter(
+      (item) => !readNotificationIds.has(getNotificationReadToken(item)),
+    );
   }, [notifications, readNotificationIds]);
 
   useEffect(() => {
@@ -2388,24 +2427,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
   };
 
-  async function testAdminPush() {
-    const { data, error } = await supabase.functions.invoke("send-admin-push", {
-      body: {
-        title: "CKC Admin Push Test",
-        body: "This is a test notification.",
-        url: "/?view=notifications",
-      },
-    });
-    console.log("send-admin-push result:", data, error);
-    if (error) {
-      alert(`Push test failed: ${error.message}`);
-      return;
-    }
-    const sent = typeof data?.sent === "number" ? data.sent : 0;
-    const failed = typeof data?.failed === "number" ? data.failed : 0;
-    alert(`Push sent successfully (${sent} delivered${failed ? `, ${failed} failed` : ""}).`);
-  }
-
   const handleModalBackdropClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
     setShowMyShifts(false);
@@ -2427,8 +2448,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     <div className="calendar-shell">
       <header className="calendar-header">
         <div>
-          <p className="calendar-eyebrow">Team schedule</p>
-          <h1 className="calendar-title">CKC Shift Calendar</h1>
+          <p className="calendar-eyebrow">
+            Welcome,{" "}
+            {displayProfile?.preferred_name ||
+              displayProfile?.full_name ||
+              session.user.email ||
+              "Volunteer"}
+          </p>
+          <div className="calendar-title-row">
+            <h1 className="calendar-title">CKC Shift Calendar</h1>
+            <img className="calendar-title-logo" src="/favicon.png" alt="CKC logo" />
+          </div>
           <p className="calendar-subtitle">{rangeLabel}</p>
         </div>
         <div className="calendar-actions">
@@ -2510,19 +2540,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 >
                   My profile
                 </button>
-                {profile?.role === "Admin" ? (
-                  <button
-                    className="menu-item"
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setShowMenu(false);
-                      void testAdminPush();
-                    }}
-                  >
-                    Test Admin Push
-                  </button>
-                ) : null}
               </div>
             ) : null}
           </div>
@@ -3028,7 +3045,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   type="button"
                   onClick={() => {
                     const next = new Set(readNotificationIds);
-                    notifications.forEach((item) => next.add(item.id));
+                    notifications.forEach((item) => next.add(getNotificationReadToken(item)));
                     persistReadIds(next);
                     setNotificationCount(0);
                   }}
@@ -3071,7 +3088,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
                     const markRead = () => {
                       const next = new Set(readNotificationIds);
-                      next.add(request.id);
+                      next.add(getNotificationReadToken(request));
                       persistReadIds(next);
                     };
 

@@ -19,6 +19,10 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
   const [resetting, setResetting] = useState(false);
   const [updatingPassword, setUpdatingPassword] = useState(false);
   const [submittingSignup, setSubmittingSignup] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showSignupConfirm, setShowSignupConfirm] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const siteUrl =
     (import.meta.env.VITE_SITE_URL as string | undefined) ??
     (typeof window !== "undefined" ? window.location.origin : "");
@@ -34,8 +38,8 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
     setMsg("");
 
     if (resetOnly) {
-      const nextPassword = newPassword.trim();
-      const confirmNext = confirmPassword.trim();
+      const nextPassword = newPassword;
+      const confirmNext = confirmPassword;
       if (!nextPassword || !confirmNext) {
         return setMsg("Enter and confirm your new password.");
       }
@@ -62,6 +66,9 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
     }
 
     if (isSignup) {
+      if (!password || !signupConfirmPassword) {
+        return setMsg("Enter and confirm your password.");
+      }
       if (password !== signupConfirmPassword) {
         return setMsg("Passwords do not match. Try again.");
       }
@@ -144,30 +151,48 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
           <form className="auth-form" onSubmit={handleSubmit}>
             <label className="auth-field">
               <span className="auth-label">New password</span>
-              <input
-                className="auth-input"
-                type="password"
-                placeholder="••••••••"
-                value={newPassword}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setNewPassword(e.target.value)
-                }
-                required
-              />
+              <div className="auth-input-wrap">
+                <input
+                  className="auth-input"
+                  type={showNewPassword ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={newPassword}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setNewPassword(e.target.value)
+                  }
+                  required
+                />
+                <button
+                  className="auth-password-toggle"
+                  type="button"
+                  onClick={() => setShowNewPassword((prev) => !prev)}
+                >
+                  {showNewPassword ? "Hide" : "Show"}
+                </button>
+              </div>
             </label>
 
             <label className="auth-field">
               <span className="auth-label">Confirm password</span>
-              <input
-                className="auth-input"
-                type="password"
-                placeholder="••••••••"
-                value={confirmPassword}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setConfirmPassword(e.target.value)
-                }
-                required
-              />
+              <div className="auth-input-wrap">
+                <input
+                  className="auth-input"
+                  type={showResetConfirm ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={confirmPassword}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setConfirmPassword(e.target.value)
+                  }
+                  required
+                />
+                <button
+                  className="auth-password-toggle"
+                  type="button"
+                  onClick={() => setShowResetConfirm((prev) => !prev)}
+                >
+                  {showResetConfirm ? "Hide" : "Show"}
+                </button>
+              </div>
             </label>
 
             <button className="auth-submit" type="submit" disabled={updatingPassword}>
@@ -209,29 +234,47 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
 
           <label className="auth-field">
             <span className="auth-label">Password</span>
-            <input
-              className="auth-input"
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
-              required
-            />
+            <div className="auth-input-wrap">
+              <input
+                className="auth-input"
+                type={showPassword ? "text" : "password"}
+                placeholder="••••••••"
+                value={password}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
+                required
+              />
+              <button
+                className="auth-password-toggle"
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
           </label>
 
           {isSignup ? (
             <label className="auth-field">
               <span className="auth-label">Confirm password</span>
-              <input
-                className="auth-input"
-                type="password"
-                placeholder="••••••••"
-                value={signupConfirmPassword}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setSignupConfirmPassword(e.target.value)
-                }
-                required
-              />
+              <div className="auth-input-wrap">
+                <input
+                  className="auth-input"
+                  type={showSignupConfirm ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={signupConfirmPassword}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setSignupConfirmPassword(e.target.value)
+                  }
+                  required
+                />
+                <button
+                  className="auth-password-toggle"
+                  type="button"
+                  onClick={() => setShowSignupConfirm((prev) => !prev)}
+                >
+                  {showSignupConfirm ? "Hide" : "Show"}
+                </button>
+              </div>
             </label>
           ) : null}
 
@@ -254,7 +297,11 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
             </label>
           ) : null}
 
-          <button className="auth-submit" type="submit" disabled={submittingSignup}>
+          <button
+            className="auth-submit"
+            type="submit"
+            disabled={submittingSignup || (isSignup && password !== signupConfirmPassword)}
+          >
             {isSignup ? (submittingSignup ? "Checking code..." : "Create account") : "Sign in"}
           </button>
         </form>
