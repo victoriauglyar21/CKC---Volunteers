@@ -675,6 +675,14 @@
   opacity: 0.95;
 }
 
+.capacity-slot-extra {
+  min-height: 28px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  border-style: dashed;
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .capacity-slot-content {
   display: flex;
   flex-direction: column;

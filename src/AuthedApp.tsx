@@ -146,11 +146,24 @@ type ShiftAssignment = {
 type DropDayLeadAssignment = {
   volunteer_id: string;
   assignment_role: string | null;
-  volunteer: {
-    id: string;
-    role: string | null;
-  } | null;
+  volunteer:
+    | {
+        id: string;
+        role: string | null;
+      }
+    | {
+        id: string;
+        role: string | null;
+      }[]
+    | null;
 };
+
+function getDropAssignmentVolunteerRole(assignment: DropDayLeadAssignment) {
+  if (Array.isArray(assignment.volunteer)) {
+    return assignment.volunteer[0]?.role ?? null;
+  }
+  return assignment.volunteer?.role ?? null;
+}
 
 type PersonalAssignment = {
   shift_date: string | null;
@@ -295,6 +308,16 @@ function formatTimeOnly(value: string | null | undefined) {
 
 function normalizePhoneLink(value: string) {
   return value.replace(/[^\d+]/g, "");
+}
+
+function parseStoredSet(raw: string | null) {
+  if (!raw) return new Set<string>();
+  try {
+    const parsed = JSON.parse(raw) as string[];
+    return new Set(parsed);
+  } catch {
+    return new Set<string>();
+  }
 }
 
 function formatTemplateTime(value: string | null | undefined) {
@@ -1244,6 +1267,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setAssignmentsLoading(false);
   }, [session.user.id]);
 
+  useEffect(() => {
+    fetchMyShifts();
+  }, [fetchMyShifts]);
+
   const handleRecurringSave = useCallback(async () => {
     if (!selectedVolunteer) return;
     setRecurringMessage("");
@@ -2140,16 +2167,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     } else {
       const leadIds = Array.from(
         new Set(
-          ((leadAssignments as DropDayLeadAssignment[] | null) ?? [])
-            .filter(
-              (assignment) =>
-                assignment.volunteer_id !== volunteerId &&
-                (isLeadAssignmentRole(assignment.assignment_role) ||
-                  isLeadRole(assignment.volunteer?.role)),
-            )
-            .map((assignment) => assignment.volunteer_id),
-        ),
-      );
+                  ((leadAssignments as DropDayLeadAssignment[] | null) ?? [])
+                    .filter(
+                      (assignment) =>
+                        assignment.volunteer_id !== volunteerId &&
+                        (isLeadAssignmentRole(assignment.assignment_role) ||
+                          isLeadRole(getDropAssignmentVolunteerRole(assignment))),
+                    )
+                    .map((assignment) => assignment.volunteer_id),
+                ),
+              );
       for (const leadId of leadIds) {
         const leadPushError = await sendVolunteerPush({
           userId: leadId,
@@ -2365,6 +2392,63 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     return null;
   };
 
+  useEffect(() => {
+    if (!session.user.id) return;
+    const storageKey = `lead-reminders:${session.user.id}`;
+
+    const checkLeadReminders = async () => {
+      const sentIds = parseStoredSet(localStorage.getItem(storageKey));
+      let didChange = false;
+      const now = Date.now();
+      const activeAssignmentIds = new Set(assignments.map((assignment) => assignment.id));
+
+      // Keep reminder state scoped to currently loaded assignments.
+      Array.from(sentIds).forEach((id) => {
+        if (!activeAssignmentIds.has(id)) {
+          sentIds.delete(id);
+          didChange = true;
+        }
+      });
+
+      for (const assignment of assignments) {
+        if (assignment.status !== "active") continue;
+        if (!isLeadAssignmentRole(assignment.assignment_role)) continue;
+        if (!assignment.shift_instance?.starts_at) continue;
+        if (sentIds.has(assignment.id)) continue;
+
+        const startMs = new Date(assignment.shift_instance.starts_at).getTime();
+        if (Number.isNaN(startMs)) continue;
+
+        const minutesUntilStart = (startMs - now) / (60 * 1000);
+        if (minutesUntilStart <= 60 && minutesUntilStart > 55) {
+          sentIds.add(assignment.id);
+          didChange = true;
+          const reminderError = await sendVolunteerPush({
+            userId: session.user.id,
+            title: "Shift starts soon",
+            body: "Your shift starts soon, click to see your volunteers",
+          });
+          if (reminderError) {
+            console.warn("Failed to send lead shift reminder:", reminderError);
+          }
+        }
+      }
+
+      if (didChange) {
+        localStorage.setItem(storageKey, JSON.stringify(Array.from(sentIds)));
+      }
+    };
+
+    void checkLeadReminders();
+    const intervalId = window.setInterval(() => {
+      void checkLeadReminders();
+    }, 60 * 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [assignments, session.user.id]);
+
   const handleRemoveVolunteer = async () => {
     if (!removeTarget) return;
     setRemoveLoading(true);
@@ -2524,7 +2608,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       (assignment) =>
                         assignment.volunteer_id !== session.user.id &&
                         (isLeadAssignmentRole(assignment.assignment_role) ||
-                          isLeadRole(assignment.volunteer?.role)),
+                          isLeadRole(getDropAssignmentVolunteerRole(assignment))),
                     )
                     .map((assignment) => assignment.volunteer_id),
                 ),
@@ -2905,6 +2989,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     const regularAssignments = leadAssignment
                       ? filledAssignments.filter((assignment) => assignment !== leadAssignment)
                       : filledAssignments;
+                    const slotAssignments: Array<ShiftAssignmentDetail | null> = [
+                      leadAssignment,
+                      ...regularAssignments,
+                    ]
+                      .slice(0, 8);
+                    while (slotAssignments.length < 6) {
+                      slotAssignments.push(null);
+                    }
+                    const canAddExtraVolunteer = slotAssignments.length < 8;
                     return (
                       <div
                         key={shift.id}
@@ -2923,9 +3016,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           </div>
                         </div>
                         <div className="shift-assignment-list">
-                          {Array.from({ length: 6 }).map((_, index) => {
-                            const assignment =
-                              index === 0 ? leadAssignment : regularAssignments[index - 1];
+                          {slotAssignments.map((assignment, index) => {
                             const name =
                               assignment?.volunteer?.preferred_name ||
                               assignment?.volunteer?.full_name ||
@@ -3038,6 +3129,41 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                               </button>
                             );
                           })}
+                          {canAddExtraVolunteer ? (
+                            <button
+                              className="capacity-slot capacity-slot-extra"
+                              type="button"
+                              disabled={profile?.role !== "Admin" && isPastShiftDay}
+                              onClick={async () => {
+                                const resolvedInstanceId = await ensureShiftInstance(shift);
+                                if (!resolvedInstanceId) return;
+                                setActiveShiftInstanceId(resolvedInstanceId);
+
+                                if (profile?.role === "Admin") {
+                                  setAssignMessage("");
+                                  setAssignVolunteerSearch("");
+                                  setAssignShiftInstanceId(resolvedInstanceId);
+                                  setShowAssignVolunteer(true);
+                                  return;
+                                }
+
+                                const alreadyOnShift = assignmentList.some(
+                                  (slot) =>
+                                    slot.volunteer?.id === session.user.id && slot.status !== "dropped",
+                                );
+                                if (alreadyOnShift) {
+                                  setTakeShiftMessage("You are already on this shift!");
+                                  setShowTakeShiftPrompt(true);
+                                  return;
+                                }
+                                setTakeShiftMessage("");
+                                setTakeShiftMode("request");
+                                setShowTakeShiftPrompt(true);
+                              }}
+                            >
+                              Add Extra Volunteer
+                            </button>
+                          ) : null}
                         </div>
                       </div>
                     );
