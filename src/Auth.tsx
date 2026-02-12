@@ -1,11 +1,38 @@
 import { useEffect, useState, type FormEvent, type ChangeEvent } from "react";
 import { supabase } from "./supabaseClient";
+import type { AuthError } from "@supabase/supabase-js";
 
 type AuthProps = {
   resetOnly?: boolean;
   onResetDone?: () => void;
   defaultMode?: "signin" | "signup";
 };
+
+function mapSignupError(error: AuthError) {
+  const message = error.message.toLowerCase();
+
+  if (
+    message.includes("rate limit") ||
+    message.includes("over_email_send_rate_limit") ||
+    message.includes("too many requests")
+  ) {
+    return "Too many signup attempts right now. Please wait a few minutes and try again.";
+  }
+
+  if (message.includes("already registered") || message.includes("user already registered")) {
+    return "That email is already registered. Try signing in instead.";
+  }
+
+  if (message.includes("invalid email")) {
+    return "Please enter a valid email address.";
+  }
+
+  if (message.includes("password")) {
+    return "Password requirements were not met. Please use a stronger password and try again.";
+  }
+
+  return error.message;
+}
 
 export default function Auth({ resetOnly = false, onResetDone, defaultMode = "signin" }: AuthProps) {
   const [isSignup, setIsSignup] = useState(defaultMode === "signup");
@@ -99,7 +126,7 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
             emailRedirectTo: `${normalizedSiteUrl}/complete-profile`,
           },
         });
-        if (error) return setMsg(error.message);
+        if (error) return setMsg(mapSignupError(error));
         if (data.session) {
           await supabase.auth.signOut();
         }
