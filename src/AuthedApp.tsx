@@ -288,6 +288,18 @@ function formatTemplateTime(value: string | null | undefined) {
   return timeFormatter.format(date);
 }
 
+function getShiftPeriodLabel(template: ShiftTemplate | undefined) {
+  if (!template) return "shift";
+  if (/evening/i.test(template.title)) return "evening shift";
+  if (/morning/i.test(template.title)) return "morning shift";
+  const [hours] = (template.start_time ?? "").split(":");
+  const hour = Number(hours);
+  if (!Number.isNaN(hour)) {
+    return hour >= 12 ? "evening shift" : "morning shift";
+  }
+  return "shift";
+}
+
 function formatTimeRangeFromInstance(start: Date, end: Date) {
   return `${timeFormatter.format(start)} — ${timeFormatter.format(end)}`;
 }
@@ -1277,22 +1289,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
       const selectedTemplate = templates.find((template) => template.id === recurringForm.templateId);
       const dayLabel = formatByDay(recurringDays);
-      const shiftLabel = selectedTemplate
-        ? /evening/i.test(selectedTemplate.title)
-          ? "evening shift"
-          : /morning/i.test(selectedTemplate.title)
-            ? "morning shift"
-            : selectedTemplate.title
-        : "shift";
-      const timeLabel = selectedTemplate?.start_time
-        ? `${formatTemplateTime(selectedTemplate.start_time)} — ${formatTemplateTime(
-            selectedTemplate.end_time,
-          )}`
-        : "time TBD";
+      const shiftLabel = getShiftPeriodLabel(selectedTemplate);
       const recurringPushError = await sendVolunteerPush({
         userId: selectedVolunteer.id,
         title: "Recurring shifts added",
-        body: `${adminName} added a reaccuring shift for you, ${dayLabel}, ${shiftLabel}, ${timeLabel}.`,
+        body: `${adminName} added a recurring shift. Days: ${dayLabel}. ${shiftLabel}.`,
       });
       if (recurringPushError) {
         setRecurringMessage(`Recurring shifts saved, but push notification failed: ${recurringPushError}`);
@@ -1388,7 +1389,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         const recurringDeletePushError = await sendVolunteerPush({
           userId: selectedVolunteer.id,
           title: "Recurring shifts removed",
-          body: `${adminName} deleted all your reaccuring shifts from your schedule. Please check them here`,
+          body: "Your reaccuring shifts were deleted",
         });
         if (recurringDeletePushError) {
           setRecurringMessage(
