@@ -300,6 +300,10 @@ function getShiftPeriodLabel(template: ShiftTemplate | undefined) {
   return "shift";
 }
 
+function rankShiftForDisplay(shift: ShiftInstance) {
+  return /lead/i.test(shift.title) ? 0 : 1;
+}
+
 function formatTimeRangeFromInstance(start: Date, end: Date) {
   return `${timeFormatter.format(start)} — ${timeFormatter.format(end)}`;
 }
@@ -1711,6 +1715,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }, {}),
     [shifts],
   );
+  const orderedShiftsByDate = useMemo(
+    () =>
+      Object.entries(shiftsByDate).reduce<Record<string, ShiftInstance[]>>((acc, [dateKey, dayShifts]) => {
+        acc[dateKey] = dayShifts.slice().sort((left, right) => {
+          const rankDiff = rankShiftForDisplay(left) - rankShiftForDisplay(right);
+          if (rankDiff !== 0) return rankDiff;
+          const startDiff = left.start.getTime() - right.start.getTime();
+          if (startDiff !== 0) return startDiff;
+          return left.title.localeCompare(right.title);
+        });
+        return acc;
+      }, {}),
+    [shiftsByDate],
+  );
 
   const templateMap = useMemo(
     () =>
@@ -2637,7 +2655,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             }
 
             const dateKey = getDateKey(cell.date);
-            const dayShifts = shiftsByDate[dateKey] ?? [];
+            const dayShifts = orderedShiftsByDate[dateKey] ?? [];
 
             return (
               <div
