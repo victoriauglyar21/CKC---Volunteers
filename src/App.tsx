@@ -116,16 +116,8 @@ function isProfileComplete(profile: ProfileRecord) {
   if (!hasText(profile.full_name)) return false;
   if (!hasText(profile.preferred_name)) return false;
   if (!hasText(profile.pronouns)) return false;
-  if (profile.date_of_birth !== null && profile.date_of_birth === "") return false;
   if (!hasText(profile.phone)) return false;
-  if (!hasText(profile.emergency_contact_name)) return false;
-  if (!hasText(profile.emergency_contact_phone)) return false;
-  if (!hasText(profile.status)) return false;
   if (!profile.joined_at) return false;
-  if (!hasText(profile.internal_notes)) return false;
-  if (!profile.interests || profile.interests.length === 0) return false;
-  if (profile.training_completed !== true) return false;
-  if (!profile.training_completed_at) return false;
   return true;
 }
 
@@ -137,6 +129,8 @@ export default function App() {
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [profileMissing, setProfileMissing] = useState(false);
+  const isCompleteProfileRoute =
+    typeof window !== "undefined" && window.location.pathname === "/complete-profile";
   const requiredAccessCode = (
     import.meta.env.VITE_VOLUNTEER_ACCESS_CODE as string | undefined
   )?.trim();
@@ -253,8 +247,9 @@ export default function App() {
         return;
       }
 
-      setProfile(data as ProfileRecord);
-      setNeedsOnboarding(false);
+      const fetchedProfile = data as ProfileRecord;
+      setProfile(fetchedProfile);
+      setNeedsOnboarding(isCompleteProfileRoute || !isProfileComplete(fetchedProfile));
       setProfileMissing(false);
 
       setProfileLoading(false);
@@ -265,7 +260,7 @@ export default function App() {
     return () => {
       mounted = false;
     };
-  }, [session]);
+  }, [session, isCompleteProfileRoute]);
 
   if (loading) return <div style={{ padding: 16 }}>Loading…</div>;
 
@@ -305,6 +300,9 @@ export default function App() {
         onComplete={(updated) => {
           setProfile(updated);
           setNeedsOnboarding(false);
+          if (typeof window !== "undefined" && window.location.pathname === "/complete-profile") {
+            window.history.replaceState({}, "", "/");
+          }
         }}
       />
     );

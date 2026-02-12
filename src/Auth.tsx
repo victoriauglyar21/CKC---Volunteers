@@ -20,6 +20,7 @@ export default function Auth({ resetOnly = false, onResetDone }: AuthProps) {
   const siteUrl =
     (import.meta.env.VITE_SITE_URL as string | undefined) ??
     (typeof window !== "undefined" ? window.location.origin : "");
+  const normalizedSiteUrl = siteUrl.replace(/\/+$/, "");
   const requiredAccessCode = (
     import.meta.env.VITE_VOLUNTEER_ACCESS_CODE as string | undefined
   )?.trim();
@@ -74,16 +75,16 @@ export default function Auth({ resetOnly = false, onResetDone }: AuthProps) {
         email,
         password,
         options: {
-          emailRedirectTo: siteUrl,
+          emailRedirectTo: `${normalizedSiteUrl}/complete-profile`,
         },
       });
       if (error) return setMsg(error.message);
-
-      if (!data.session)
-        return setMsg(
-          "Check your email (and spam) for the confirmation link. Add us to your contacts so future messages land in inbox.",
-        );
-      return setMsg("Signed in!");
+      if (data.session) {
+        await supabase.auth.signOut();
+      }
+      return setMsg(
+        "Check your email (and spam) for the confirmation link. Add us to your contacts so future messages land in inbox.",
+      );
     }
 
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -102,7 +103,7 @@ export default function Auth({ resetOnly = false, onResetDone }: AuthProps) {
     setResetting(true);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
-        redirectTo: `${siteUrl}/reset-password`,
+        redirectTo: `${normalizedSiteUrl}/reset-password`,
       });
       if (error) return setMsg(error.message);
       return setMsg("Password reset email sent. Check your inbox (and spam).");

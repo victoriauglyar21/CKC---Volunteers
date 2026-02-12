@@ -139,11 +139,21 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
         ? new Date(`${form.date_of_birth}T00:00:00`).toISOString()
         : null;
 
+    const {
+      data: { user: authUser },
+      error: authUserError,
+    } = await supabase.auth.getUser();
+    if (authUserError || !authUser?.id) {
+      setMessage("Your session expired. Please sign in again from your email link.");
+      setSaving(false);
+      return;
+    }
+
     const payload: Partial<ProfileRecord> & {
       id: string;
       role: "Regular Volunteer" | "Lead" | "Admin";
     } = {
-      id: userId,
+      id: authUser.id,
       role:
         form.role === "Lead"
           ? "Lead"
@@ -161,11 +171,19 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
     }
 
     console.info("Profile onboarding upsert payload", payload);
-    const { data, error } = await supabase
-      .from("profiles")
-      .upsert(payload, { onConflict: "id" })
-      .select("*")
-      .single();
+    const upsertProfile = async () =>
+      supabase
+        .from("profiles")
+        .upsert(payload, { onConflict: "id" })
+        .select("*")
+        .single();
+
+    let { data, error } = await upsertProfile();
+
+    if ((error as { code?: string; message?: string } | null)?.code === "23503") {
+      await new Promise((resolve) => window.setTimeout(resolve, 1200));
+      ({ data, error } = await upsertProfile());
+    }
 
     if (error || !data) {
       setMessage(error?.message ?? "Unable to save profile.");
