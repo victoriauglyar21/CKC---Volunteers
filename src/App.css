@@ -672,6 +672,11 @@
   align-items: center;
 }
 
+.capacity-slot-name {
+  font-weight: 700;
+  font-size: 0.75rem;
+}
+
 .capacity-slot-phone {
   font-size: 0.65rem;
   opacity: 0.85;

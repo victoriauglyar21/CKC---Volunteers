@@ -2820,7 +2820,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                   "Pending"
                                 ) : assignment && hasVolunteer ? (
                                   <div className="capacity-slot-content">
-                                    <span>{name ?? "No Volunteer Assigned"}</span>
+                                    <span className="capacity-slot-name">
+                                      {name ?? "No Volunteer Assigned"}
+                                    </span>
                                     {assignment.notes ? (
                                       <span className="capacity-slot-phone">{assignment.notes}</span>
                                     ) : (assignment.assignment_role === "lead" ||
