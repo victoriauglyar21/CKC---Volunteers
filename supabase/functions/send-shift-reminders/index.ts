@@ -25,8 +25,8 @@ webpush.setVapidDetails("mailto:notifications@cokittyvolunteers.com", VAPID_PUBL
 
 serve(async () => {
   const now = new Date();
-  const start = new Date(now.getTime() + 2 * 60 * 60 * 1000);
-  const end = new Date(start.getTime() + 10 * 60 * 1000);
+  const start = new Date(now.getTime() + 60 * 60 * 1000);
+  const end = new Date(start.getTime() + 5 * 60 * 1000);
 
   const { data: assignments, error } = await supabaseAdmin
     .from("shift_assignments")
@@ -115,8 +115,8 @@ serve(async () => {
     if (userSubs.length === 0) continue;
     const title = "Shift reminder";
     const body = target.title
-      ? `Your ${target.title} starts in 2 hours.`
-      : "Your shift starts in 2 hours.";
+      ? `Your ${target.title} starts in 1 hour.`
+      : "Your shift starts in 1 hour.";
 
     for (const sub of userSubs) {
       try {

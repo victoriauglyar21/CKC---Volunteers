@@ -63,6 +63,14 @@
   margin-left: auto;
 }
 
+.calendar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .menu-shell {
   position: relative;
 }
@@ -70,11 +78,13 @@
 .menu-button {
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.2);
-  padding: 6px 12px;
+  height: 36px;
+  padding: 0 12px;
   background: rgba(255, 255, 255, 0.12);
   color: inherit;
   font-weight: 600;
-  font-size: 1.1rem;
+  font-size: 0.9rem;
+  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
   line-height: 1;
   display: inline-flex;
   align-items: center;
@@ -101,11 +111,17 @@
 .menu-item {
   border-radius: 10px;
   border: 1px solid transparent;
-  padding: 8px 10px;
+  height: 36px;
+  padding: 0 12px;
   background: rgba(255, 255, 255, 0.05);
   color: inherit;
   font-weight: 600;
+  font-size: 0.9rem;
+  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
   text-align: left;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 .menu-item:hover {
@@ -115,10 +131,13 @@
 .account-button {
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.2);
-  padding: 7px 12px;
+  height: 36px;
+  padding: 0 12px;
   background: rgba(255, 255, 255, 0.12);
   color: inherit;
   font-weight: 600;
+  font-size: 0.9rem;
+  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
   transition: transform 0.2s ease, border-color 0.2s ease;
 }
 
@@ -190,7 +209,8 @@
   background: rgba(255, 135, 180, 0.35);
   color: inherit;
   font-weight: 600;
-  font-size: 0.88rem;
+  font-size: 0.9rem;
+  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
   transition: transform 0.2s ease, border-color 0.2s ease;
 }
 
@@ -260,9 +280,9 @@
 
   .calendar-actions .account-button,
   .calendar-actions .menu-button {
-    min-height: 42px;
-    padding: 10px 14px;
-    font-size: 0.95rem;
+    min-height: 36px;
+    padding: 0 12px;
+    font-size: 0.9rem;
   }
 
   .menu-dropdown {
@@ -272,9 +292,9 @@
   }
 
   .menu-item {
-    min-height: 44px;
-    padding: 10px 14px;
-    font-size: 0.95rem;
+    min-height: 36px;
+    padding: 0 12px;
+    font-size: 0.9rem;
   }
 
   .month-nav-left {
@@ -304,7 +324,7 @@
     flex: 1 1 0;
     height: 36px;
     padding: 0 12px;
-    font-size: 0.88rem;
+    font-size: 0.9rem;
     text-align: center;
     width: 100%;
     min-width: 0;
@@ -324,6 +344,82 @@
   .calendar-panel .calendar-header {
     margin-top: 0;
     margin-bottom: 6px;
+  }
+
+  .account-button,
+  .nav-button,
+  .menu-button,
+  .modal-close,
+  .recurring-delete,
+  .primary-button,
+  .auth-submit,
+  .auth-switch {
+    height: 34px;
+    padding: 0 10px;
+    font-size: 0.85rem;
+  }
+
+  .recurring-card {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .recurring-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .recurring-pill {
+    width: 100%;
+    text-align: center;
+    white-space: normal;
+    line-height: 1.2;
+  }
+
+  .recurring-delete {
+    margin-left: 0;
+    width: auto;
+    min-width: 78px;
+    justify-content: center;
+  }
+
+  .volunteer-recurring-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .volunteer-recurring-header .account-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .volunteer-detail {
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .volunteer-recurring {
+    gap: 8px;
+  }
+
+  .volunteer-recurring-form {
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  .volunteer-detail .modal-row {
+    align-items: flex-start;
+  }
+
+  .volunteer-detail .modal-row span:last-child {
+    text-align: right;
+    overflow-wrap: anywhere;
   }
 }
 
@@ -376,6 +472,39 @@
   gap: 8px;
   position: relative;
   overflow: hidden;
+  align-self: start;
+}
+
+@media (min-width: 901px) {
+  .day-cell {
+    max-height: calc(100vh - 290px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+}
+
+.day-cell.collapsed {
+  min-height: 88px;
+  padding-bottom: 10px;
+}
+
+.day-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.day-header-row-clickable {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
+
+.day-header-row-clickable:focus,
+.day-header-row-clickable:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .day-cell.past::after {
@@ -408,6 +537,10 @@
   letter-spacing: 0.2em;
   font-size: 0.65rem;
   color: rgba(255, 255, 255, 0.55);
+}
+
+.day-weekday-visible {
+  display: block;
 }
 
 .shift-list {
@@ -497,6 +630,10 @@
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+.mobile-week-footer {
+  display: none;
 }
 
 .error-banner,
@@ -592,7 +729,14 @@
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;
   color: inherit;
-  padding: 6px 12px;
+  height: 36px;
+  padding: 0 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .modal-body {
@@ -874,6 +1018,7 @@
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.06);
+  min-width: 0;
 }
 
 .recurring-title {
@@ -900,13 +1045,30 @@
   background: rgba(80, 150, 255, 0.25);
   border: 1px solid rgba(80, 150, 255, 0.6);
   color: #dfefff;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: center;
 }
 
 .recurring-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.recurring-edit {
+  border-radius: 999px;
+  border: 1px solid rgba(80, 150, 255, 0.6);
+  background: rgba(80, 150, 255, 0.2);
+  color: inherit;
+  height: 36px;
+  padding: 0 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
+  cursor: pointer;
 }
 
 .recurring-delete {
@@ -914,8 +1076,11 @@
   border: 1px solid rgba(255, 130, 130, 0.6);
   background: rgba(255, 130, 130, 0.2);
   color: inherit;
-  font-size: 0.7rem;
-  padding: 6px 10px;
+  height: 36px;
+  padding: 0 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
   cursor: pointer;
 }
 
@@ -1033,13 +1198,23 @@
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .volunteer-recurring-form {
   display: grid;
   gap: 12px;
   margin-top: 8px;
+}
+
+.volunteer-phone-link {
+  color: #ffb6c9;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.volunteer-phone-link:hover {
+  text-decoration: underline;
 }
 
 .form-grid.form-grid-compact {
@@ -1125,8 +1300,8 @@
 .modal-header-actions .nav-button,
 .modal-header-actions .modal-close {
   min-width: 96px;
-  min-height: 40px;
-  padding: 0 14px;
+  min-height: 36px;
+  padding: 0 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1324,6 +1499,18 @@
     letter-spacing: 0.12em;
     color: rgba(255, 255, 255, 0.9);
   }
+
+  .mobile-week-footer {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .mobile-week-prev,
+  .mobile-week-next {
+    width: 100%;
+  }
 }
 
 .onboarding-shell {
@@ -1430,8 +1617,11 @@
   border: 1px solid rgba(125, 207, 255, 0.5);
   background: rgba(22, 85, 120, 0.5);
   color: inherit;
-  padding: 10px 22px;
+  height: 36px;
+  padding: 0 12px;
   font-weight: 600;
+  font-size: 0.9rem;
+  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
   transition: transform 0.2s ease, border-color 0.2s ease;
 }
 
@@ -1603,11 +1793,13 @@
 }
 
 .auth-submit {
-  height: 52px;
-  border-radius: 14px;
+  height: 36px;
+  border-radius: 999px;
   border: none;
   font-weight: 600;
-  font-size: 1rem;
+  font-size: 0.9rem;
+  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
+  padding: 0 12px;
   background: linear-gradient(135deg, #ff8b3d, #ffb347);
   color: #1b0c05;
   cursor: pointer;
@@ -1620,14 +1812,43 @@
 
 .auth-switch {
   margin-top: 16px;
-  background: none;
-  border: none;
-  color: rgba(255, 255, 255, 0.7);
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
   cursor: pointer;
   font-size: 0.9rem;
+  font-weight: 600;
+  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
 }
 
 .auth-message {
   margin-top: 16px;
   color: rgba(255, 255, 255, 0.85);
+}
+
+@media (max-width: 720px) {
+  .volunteer-recurring .recurring-card {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .volunteer-recurring .recurring-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    flex-wrap: nowrap;
+    justify-content: initial;
+  }
+
+  .volunteer-recurring .recurring-edit,
+  .volunteer-recurring .recurring-delete {
+    margin: 0;
+    min-width: 0;
+    width: 100%;
+  }
 }

@@ -111,6 +111,17 @@ type VolunteerRow = {
   pronouns: string | null;
   role: "Regular Volunteer" | "Lead" | "Admin";
   joined_at: string | null;
+  date_of_birth: string | null;
+  phone: string | null;
+  emergency_contact_name: string | null;
+  emergency_contact_phone: string | null;
+  status: string | null;
+  internal_notes: string | null;
+  interests: string[] | null;
+  training_completed: boolean | null;
+  training_completed_at: string | null;
+  notification_pref?: "email_only" | "push_and_email" | null;
+  created_at?: string | null;
 };
 
 type RecurringAssignment = {
@@ -343,7 +354,10 @@ function getShiftPeriodLabel(template: ShiftTemplate | undefined) {
 }
 
 function rankShiftForDisplay(shift: ShiftInstance) {
-  return /lead/i.test(shift.title) ? 0 : 1;
+  if (/lead/i.test(shift.title)) return 0;
+  if (/morning/i.test(shift.title)) return 1;
+  if (/evening/i.test(shift.title)) return 2;
+  return 3;
 }
 
 function getNormalizedRole(role: string | null | undefined) {
@@ -410,6 +424,40 @@ function formatByDay(days: string[] | null | undefined) {
     SA: "Sat",
   };
   return days.map((day) => dayMap[day] ?? day).join(", ");
+}
+
+function formatByDayLongList(days: string[] | null | undefined) {
+  if (!days || days.length === 0) return "Every day";
+  const dayMap: Record<string, string> = {
+    SU: "Sunday",
+    MO: "Monday",
+    TU: "Tuesday",
+    WE: "Wednesday",
+    TH: "Thursday",
+    FR: "Friday",
+    SA: "Saturday",
+  };
+  return days.map((day) => dayMap[day] ?? day).join(", ");
+}
+
+function formatCompactTemplateTimeRange(startTime: string | null | undefined, endTime: string | null | undefined) {
+  const parse = (value: string | null | undefined) => {
+    const match = (value ?? "").match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    const rawHour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (Number.isNaN(rawHour) || Number.isNaN(minute)) return null;
+    const meridiem = rawHour >= 12 ? "PM" : "AM";
+    const hour12 = rawHour % 12 || 12;
+    const minutePart = minute === 0 ? "" : `:${String(minute).padStart(2, "0")}`;
+    return { meridiem, label: `${hour12}${minutePart}` };
+  };
+
+  const start = parse(startTime);
+  const end = parse(endTime);
+  if (!start || !end) return "—";
+  if (start.meridiem === end.meridiem) return `${start.label}-${end.label}${end.meridiem}`;
+  return `${start.label}${start.meridiem}-${end.label}${end.meridiem}`;
 }
 
 function formatRepeatPattern(rrule: string | null | undefined) {
@@ -625,6 +673,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   });
   const [recurringSaving, setRecurringSaving] = useState(false);
   const [recurringDeleteId, setRecurringDeleteId] = useState<string | null>(null);
+  const [recurringEditId, setRecurringEditId] = useState<string | null>(null);
   const [recurringDays, setRecurringDays] = useState<string[]>([]);
   const [showMyShifts, setShowMyShifts] = useState(false);
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
@@ -634,6 +683,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [myShiftsPage, setMyShiftsPage] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
   const [weekOffset, setWeekOffset] = useState(0);
+  const [collapsedDayKeys, setCollapsedDayKeys] = useState<Set<string>>(new Set());
+  const [manuallyToggledDayKeys, setManuallyToggledDayKeys] = useState<Set<string>>(new Set());
   const [personalShiftKeys, setPersonalShiftKeys] = useState<Set<string>>(new Set());
   const [profileOverride, setProfileOverride] = useState<Partial<ProfileRecord> | null>(null);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
@@ -646,6 +697,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [profileSaveLoading, setProfileSaveLoading] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationLoading, setNotificationLoading] = useState(false);
+  const [testNotificationMessage, setTestNotificationMessage] = useState("");
+  const [testNotificationLoading, setTestNotificationLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const scrollYRef = useRef(0);
@@ -1066,7 +1119,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setVolunteersMessage("");
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, full_name, preferred_name, pronouns, role, joined_at")
+      .select(
+        "id, full_name, preferred_name, pronouns, role, joined_at, date_of_birth, phone, emergency_contact_name, emergency_contact_phone, status, internal_notes, interests, training_completed, training_completed_at, notification_pref, created_at",
+      )
       .order("joined_at", { ascending: false, nullsFirst: false });
 
     if (error || !data) {
@@ -1289,24 +1344,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     setRecurringSaving(true);
 
-    const { data, error } = await supabase
-      .from("recurring_assignments")
-      .insert({
-        volunteer_id: selectedVolunteer.id,
-        template_id: recurringForm.templateId,
-        starts_on: recurringForm.startsOn,
-        ends_on: recurringForm.endsOn || null,
-        byday: recurringDays,
-      })
-      .select("*")
-      .single();
-
-    if (error || !data) {
-      setRecurringMessage(error?.message ?? "Unable to save recurring shifts.");
-      setRecurringSaving(false);
-      return;
-    }
-
     const rangeStart = recurringForm.startsOn;
     const rangeEnd = recurringForm.endsOn || getDateKey(addMonths(today, 12));
     const startIso = new Date(`${rangeStart}T00:00:00`).toISOString();
@@ -1336,6 +1373,84 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
+    if (recurringEditId) {
+      const targetRecurring = volunteerRecurring.find((item) => item.id === recurringEditId);
+      if (!targetRecurring) {
+        setRecurringMessage("Recurring shift not found.");
+        setRecurringSaving(false);
+        return;
+      }
+
+      const oldRangeStart = targetRecurring.starts_on;
+      const oldRangeEnd = targetRecurring.ends_on || getDateKey(addMonths(today, 12));
+      const oldStartIso = new Date(`${oldRangeStart}T00:00:00`).toISOString();
+      const oldEndDate = parseDateOnly(oldRangeEnd) ?? new Date();
+      const oldEndExclusive = addDays(oldEndDate, 1).toISOString();
+
+      const { data: oldInstances, error: oldInstancesError } = await supabase
+        .from("shift_instances")
+        .select("id")
+        .eq("template_id", targetRecurring.template_id)
+        .or(
+          `starts_at.gte.${oldStartIso},starts_at.lt.${oldEndExclusive},shift_date.gte.${oldRangeStart},shift_date.lte.${oldRangeEnd}`,
+        );
+
+      if (oldInstancesError) {
+        setRecurringMessage(oldInstancesError.message);
+        setRecurringSaving(false);
+        return;
+      }
+
+      const oldInstanceIds = (oldInstances ?? []).map((item) => item.id);
+      if (oldInstanceIds.length > 0) {
+        const { error: oldAssignmentDeleteError } = await supabase
+          .from("shift_assignments")
+          .delete()
+          .eq("volunteer_id", selectedVolunteer.id)
+          .in("shift_instance_id", oldInstanceIds);
+        if (oldAssignmentDeleteError) {
+          setRecurringMessage(oldAssignmentDeleteError.message);
+          setRecurringSaving(false);
+          return;
+        }
+      }
+
+      const { error: updateRecurringError } = await supabase
+        .from("recurring_assignments")
+        .update({
+          template_id: recurringForm.templateId,
+          starts_on: recurringForm.startsOn,
+          ends_on: recurringForm.endsOn || null,
+          byday: recurringDays,
+        })
+        .eq("id", recurringEditId)
+        .eq("volunteer_id", selectedVolunteer.id);
+
+      if (updateRecurringError) {
+        setRecurringMessage(updateRecurringError.message);
+        setRecurringSaving(false);
+        return;
+      }
+    } else {
+      const { data, error } = await supabase
+        .from("recurring_assignments")
+        .insert({
+          volunteer_id: selectedVolunteer.id,
+          template_id: recurringForm.templateId,
+          starts_on: recurringForm.startsOn,
+          ends_on: recurringForm.endsOn || null,
+          byday: recurringDays,
+        })
+        .select("*")
+        .single();
+
+      if (error || !data) {
+        setRecurringMessage(error?.message ?? "Unable to save recurring shifts.");
+        setRecurringSaving(false);
+        return;
+      }
+    }
+
     if (filteredInstances.length > 0) {
       const assignmentRole = selectedVolunteer.role === "Lead" ? "lead" : "regular";
       const payload = filteredInstances.map((instance) => ({
@@ -1355,20 +1470,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         setRecurringSaving(false);
         return;
       }
-
-      const adminName =
-        displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
-      const selectedTemplate = templates.find((template) => template.id === recurringForm.templateId);
-      const dayLabel = formatByDay(recurringDays);
-      const shiftLabel = getShiftPeriodLabel(selectedTemplate);
-      const shiftName = selectedTemplate?.title ?? "Shift";
-      const recurringPushError = await sendVolunteerPush({
-        userId: selectedVolunteer.id,
-        title: "Recurring shifts added",
-        body: "Victoria added reaccuring shifts to your schedule",
-      });
-      if (recurringPushError) {
-        setRecurringMessage(`Recurring shifts saved, but push notification failed: ${recurringPushError}`);
+      if (!recurringEditId) {
+        const recurringPushError = await sendVolunteerPush({
+          userId: selectedVolunteer.id,
+          title: "Recurring shifts added",
+          body: "Victoria added reaccuring shifts to your schedule",
+        });
+        if (recurringPushError) {
+          setRecurringMessage(`Recurring shifts saved, but push notification failed: ${recurringPushError}`);
+        }
       }
     } else {
       setRecurringMessage("Recurring pattern saved. No matching shift dates were found yet.");
@@ -1376,6 +1486,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     setRecurringForm({ templateId: "", startsOn: "", endsOn: "" });
     setRecurringDays([]);
+    setRecurringEditId(null);
     setShowAddRecurring(false);
     setRecurringSaving(false);
     fetchVolunteerRecurring(selectedVolunteer.id);
@@ -1383,13 +1494,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     fetchWeekAssignments();
   }, [
     selectedVolunteer,
+    recurringEditId,
+    volunteerRecurring,
     recurringForm,
     recurringDays,
-    templates,
     today,
-    displayProfile?.preferred_name,
-    displayProfile?.full_name,
-    session.user.email,
     fetchVolunteerRecurring,
     fetchMyShifts,
     fetchWeekAssignments,
@@ -1471,12 +1580,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
 
       setRecurringDeleteId(null);
+      if (recurringEditId === recurringId) {
+        setRecurringEditId(null);
+        setRecurringForm({ templateId: "", startsOn: "", endsOn: "" });
+        setRecurringDays([]);
+        setShowAddRecurring(false);
+      }
       fetchVolunteerRecurring(selectedVolunteer.id);
       fetchMyShifts();
       fetchWeekAssignments();
     },
     [
       selectedVolunteer,
+      recurringEditId,
       volunteerRecurring,
       today,
       fetchVolunteerRecurring,
@@ -1484,6 +1600,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       fetchWeekAssignments,
     ],
   );
+
+  const handleRecurringEdit = useCallback((recurring: RecurringAssignment) => {
+    setRecurringEditId(recurring.id);
+    setRecurringForm({
+      templateId: recurring.template_id,
+      startsOn: recurring.starts_on,
+      endsOn: recurring.ends_on ?? "",
+    });
+    setRecurringDays(recurring.byday ?? []);
+    setRecurringMessage("");
+    setShowAddRecurring(true);
+  }, []);
 
   useEffect(() => {
     if (!showMyShifts) return;
@@ -1574,7 +1702,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    const items = (data as unknown as ShiftAssignmentDetail[]) ?? [];
+    const rawItems = (data as unknown as ShiftAssignmentDetail[]) ?? [];
+    const items =
+      profile?.role === "Admin"
+        ? rawItems
+        : rawItems.filter((item) => {
+            if (item.status === "dropped") return true;
+            if (item.status !== "active") return false;
+            const createdAt = item.created_at ? Date.parse(item.created_at) : NaN;
+            if (Number.isNaN(createdAt)) return false;
+            // Keep one-off active notifications fresh, but prevent recurring bulk assignments
+            // from flooding the in-app notification list.
+            return Date.now() - createdAt <= 5 * 60 * 1000;
+          });
     setNotifications(items);
     setNotificationCount(computeUnreadCount(items));
     setNotificationsLoading(false);
@@ -1625,7 +1765,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    const items = (data as unknown as ShiftAssignmentDetail[]) ?? [];
+    const rawItems = (data as unknown as ShiftAssignmentDetail[]) ?? [];
+    const items =
+      profile?.role === "Admin"
+        ? rawItems
+        : rawItems.filter((item) => {
+            if (item.status === "dropped") return true;
+            if (item.status !== "active") return false;
+            const createdAt = item.created_at ? Date.parse(item.created_at) : NaN;
+            if (Number.isNaN(createdAt)) return false;
+            return Date.now() - createdAt <= 5 * 60 * 1000;
+          });
     setNotificationCount(computeUnreadCount(items));
   }, [profile?.role, session.user.id, computeUnreadCount]);
 
@@ -1817,6 +1967,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const baseDate = addDays(today, weekOffset * 7);
   const todayStartMs = today.getTime();
   const displayCells = buildWeekCells(baseDate, true);
+  const displayDayKeys = useMemo(
+    () =>
+      displayCells
+        .map((cell) => (cell.date ? getDateKey(cell.date) : null))
+        .filter((value): value is string => Boolean(value)),
+    [displayCells],
+  );
+  const allVisibleDaysCollapsed =
+    displayDayKeys.length > 0 && displayDayKeys.every((key) => collapsedDayKeys.has(key));
   const monthLabel = monthFormatter.format(baseDate);
   const weekStart = getWeekStart(baseDate, true);
   const weekEnd = addDays(weekStart, 6);
@@ -2081,6 +2240,28 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     } finally {
       setNotificationLoading(false);
     }
+  };
+
+  const handleSendTestNotification = async () => {
+    setTestNotificationMessage("");
+    setTestNotificationLoading(true);
+    const accountName =
+      displayProfile?.preferred_name?.trim() ||
+      displayProfile?.full_name?.trim() ||
+      "there";
+
+    const errorMessage = await sendVolunteerPush({
+      userId: session.user.id,
+      title: "Shift starts soon",
+      body: `Hello ${accountName}, your shift starts in one hour.`,
+    });
+
+    if (errorMessage) {
+      setTestNotificationMessage(errorMessage);
+    } else {
+      setTestNotificationMessage("Test notification sent.");
+    }
+    setTestNotificationLoading(false);
   };
 
   const handleAssignVolunteer = async (volunteerId: string) => {
@@ -2392,63 +2573,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     return null;
   };
 
-  useEffect(() => {
-    if (!session.user.id) return;
-    const storageKey = `lead-reminders:${session.user.id}`;
-
-    const checkLeadReminders = async () => {
-      const sentIds = parseStoredSet(localStorage.getItem(storageKey));
-      let didChange = false;
-      const now = Date.now();
-      const activeAssignmentIds = new Set(assignments.map((assignment) => assignment.id));
-
-      // Keep reminder state scoped to currently loaded assignments.
-      Array.from(sentIds).forEach((id) => {
-        if (!activeAssignmentIds.has(id)) {
-          sentIds.delete(id);
-          didChange = true;
-        }
-      });
-
-      for (const assignment of assignments) {
-        if (assignment.status !== "active") continue;
-        if (!isLeadAssignmentRole(assignment.assignment_role)) continue;
-        if (!assignment.shift_instance?.starts_at) continue;
-        if (sentIds.has(assignment.id)) continue;
-
-        const startMs = new Date(assignment.shift_instance.starts_at).getTime();
-        if (Number.isNaN(startMs)) continue;
-
-        const minutesUntilStart = (startMs - now) / (60 * 1000);
-        if (minutesUntilStart <= 60 && minutesUntilStart > 55) {
-          sentIds.add(assignment.id);
-          didChange = true;
-          const reminderError = await sendVolunteerPush({
-            userId: session.user.id,
-            title: "Shift starts soon",
-            body: "Your shift starts soon, click to see your volunteers",
-          });
-          if (reminderError) {
-            console.warn("Failed to send lead shift reminder:", reminderError);
-          }
-        }
-      }
-
-      if (didChange) {
-        localStorage.setItem(storageKey, JSON.stringify(Array.from(sentIds)));
-      }
-    };
-
-    void checkLeadReminders();
-    const intervalId = window.setInterval(() => {
-      void checkLeadReminders();
-    }, 60 * 1000);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [assignments, session.user.id]);
-
   const handleRemoveVolunteer = async () => {
     if (!removeTarget) return;
     setRemoveLoading(true);
@@ -2560,8 +2684,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ? `${actorName} dropped a shift. Reason: ${reasonText}`
       : `${actorName} dropped a shift.`;
     const pushError = await sendAdminDropPush(pushMessage);
-    const isRegularVolunteerDrop = profile?.role === "Regular Volunteer";
-    if (isRegularVolunteerDrop && targetDropDateKey) {
+    const isVolunteerDrop = profile?.role !== "Admin";
+    if (isVolunteerDrop && targetDropDateKey) {
       const dayStart = parseDateOnly(targetDropDateKey);
       if (dayStart) {
         const dayEnd = addDays(dayStart, 1);
@@ -2617,7 +2741,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 const leadPushError = await sendVolunteerPush({
                   userId: leadId,
                   title: "Shift dropped",
-                  body: `${actorName} dropped your shift`,
+                  body: `${actorName} dropped a shift`,
                 });
                 if (leadPushError) {
                   setAssignmentsMessage(
@@ -2729,6 +2853,75 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (!option) return;
     setWeekOffset(option.weekOffset);
   };
+
+  const handleToggleAllDays = () => {
+    if (displayDayKeys.length === 0) return;
+    setCollapsedDayKeys((prev) => {
+      const next = new Set(prev);
+      if (allVisibleDaysCollapsed) {
+        displayDayKeys.forEach((key) => next.delete(key));
+      } else {
+        displayDayKeys.forEach((key) => next.add(key));
+      }
+      return next;
+    });
+    setManuallyToggledDayKeys((prev) => {
+      const next = new Set(prev);
+      displayDayKeys.forEach((key) => next.add(key));
+      return next;
+    });
+  };
+
+  const toggleDayCollapsed = (dateKey: string) => {
+    setCollapsedDayKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(dateKey)) {
+        next.delete(dateKey);
+      } else {
+        next.add(dateKey);
+      }
+      return next;
+    });
+    setManuallyToggledDayKeys((prev) => {
+      const next = new Set(prev);
+      next.add(dateKey);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (displayDayKeys.length === 0) return;
+    setCollapsedDayKeys((prev) => {
+      let didChange = false;
+      const next = new Set(prev);
+      displayDayKeys.forEach((dateKey) => {
+        if (manuallyToggledDayKeys.has(dateKey)) return;
+        if (!isMobile) {
+          if (next.has(dateKey)) {
+            next.delete(dateKey);
+            didChange = true;
+          }
+          return;
+        }
+
+        const parsedDate = parseDateOnly(dateKey);
+        if (!parsedDate) return;
+        const isToday = startOfDay(parsedDate).getTime() === todayStartMs;
+        if (isToday) {
+          if (next.has(dateKey)) {
+            next.delete(dateKey);
+            didChange = true;
+          }
+          return;
+        }
+        if (!next.has(dateKey)) {
+          next.add(dateKey);
+          didChange = true;
+        }
+      });
+      return didChange ? next : prev;
+    });
+  }, [displayDayKeys, manuallyToggledDayKeys, todayStartMs, isMobile]);
 
   const handleRefreshClick = async () => {
     if (refreshing) return;
@@ -2913,9 +3106,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             <h2 className="calendar-title">{monthLabel}</h2>
             <p className="calendar-subtitle">{rangeLabel}</p>
           </div>
-          <button className="account-button jump-today" type="button" onClick={handleTodayClick}>
-            Jump to Today
-          </button>
+          <div className="calendar-header-actions">
+            <button className="account-button jump-today" type="button" onClick={handleTodayClick}>
+              Jump to Today
+            </button>
+            {isMobile ? (
+              <button className="account-button jump-today" type="button" onClick={handleToggleAllDays}>
+                {allVisibleDaysCollapsed ? "Expand All" : "Collapse All"}
+              </button>
+            ) : null}
+          </div>
         </div>
 
         <div className="calendar-grid">
@@ -2940,22 +3140,44 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
             const dateKey = getDateKey(cell.date);
             const isPastDay = startOfDay(cell.date).getTime() < todayStartMs;
+            const isCollapsed = isMobile && collapsedDayKeys.has(dateKey);
+            const weekdayLabel = weekdayLabels[(cell.date.getDay() + 6) % 7];
             const dayShifts = orderedShiftsByDate[dateKey] ?? [];
 
             return (
               <div
                 key={`${monthLabel}-${dateKey}`}
-                className={`day-cell ${isPastDay ? "past" : ""}`}
+                className={`day-cell ${isPastDay ? "past" : ""} ${isCollapsed ? "collapsed" : ""}`}
                 data-date={dateKey}
                 id={`day-${dateKey}`}
                 ref={dateKey === todayKey ? todayCellRef : undefined}
               >
-                <div className="day-weekday">
-                  {weekdayLabels[(cell.date.getDay() + 6) % 7]}
+                <div
+                  className={`day-header-row ${isMobile ? "day-header-row-clickable" : ""}`}
+                  role={isMobile ? "button" : undefined}
+                  tabIndex={isMobile ? 0 : undefined}
+                  onClick={isMobile ? () => toggleDayCollapsed(dateKey) : undefined}
+                  onKeyDown={
+                    isMobile
+                      ? (event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            toggleDayCollapsed(dateKey);
+                          }
+                        }
+                      : undefined
+                  }
+                >
+                  <div>
+                    <div className={`day-weekday ${isCollapsed ? "day-weekday-visible" : ""}`}>
+                      {weekdayLabel}
+                    </div>
+                    <div className="day-number">{cell.label}</div>
+                  </div>
                 </div>
-                <div className="day-number">{cell.label}</div>
-                <div className="shift-list">
-                  {dayShifts.map((shift) => {
+                {!isCollapsed ? (
+                  <div className="shift-list">
+                    {dayShifts.map((shift) => {
                     const hasTimes = Boolean(shift.start && shift.end);
                     const isPastShiftDay = startOfDay(shift.start).getTime() < todayStartMs;
                     const assignmentList = weekAssignments[shift.instanceId] ?? [];
@@ -3168,11 +3390,32 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       </div>
                     );
                   })}
-                </div>
+                  </div>
+                ) : null}
               </div>
             );
           })}
         </div>
+        {isMobile ? (
+          <div className="mobile-week-footer">
+            <button
+              className="account-button mobile-week-prev"
+              type="button"
+              onClick={() => setWeekOffset((value) => Math.max(0, value - 1))}
+              disabled={weekOffset === 0}
+            >
+              Previous week
+            </button>
+            <button
+              className="account-button mobile-week-next"
+              type="button"
+              onClick={() => setWeekOffset((value) => Math.min(maxWeekOffset, value + 1))}
+              disabled={weekOffset >= maxWeekOffset}
+            >
+              Next week
+            </button>
+          </div>
+        ) : null}
       </section>
 
 
@@ -3956,16 +4199,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <p className="modal-eyebrow">Directory</p>
                 <h3 className="modal-title">All Volunteers</h3>
               </div>
-              <button
-                className="modal-close"
-                type="button"
-                onClick={() => {
-                  setShowVolunteers(false);
-                  setVolunteerSearch("");
-                }}
-              >
-                Close
-              </button>
+              {selectedVolunteer ? (
+                <button
+                  className="account-button"
+                  type="button"
+                  onClick={() => {
+                    setSelectedVolunteer(null);
+                    setShowAddRecurring(false);
+                  }}
+                >
+                  Back
+                </button>
+              ) : null}
             </div>
             <div className="modal-body">
               {selectedVolunteer ? (
@@ -3989,33 +4234,67 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         Joined {formatDate(selectedVolunteer.joined_at)}
                       </p>
                     </div>
-                    <div className="volunteer-detail-actions">
-                      {profile?.role === "Admin" ? (
-                        <button
-                          className="account-button"
-                          type="button"
-                          onClick={() => setShowAddRecurring(true)}
+                  </div>
+
+                  <div className="volunteer-recurring">
+                    <p className="account-section-title">Volunteer profile</p>
+                    <div className="modal-row">
+                      <span className="modal-label">Full name</span>
+                      <span>{selectedVolunteer.full_name ?? "—"}</span>
+                    </div>
+                    <div className="modal-row">
+                      <span className="modal-label">Preferred name</span>
+                      <span>{selectedVolunteer.preferred_name ?? "—"}</span>
+                    </div>
+                    <div className="modal-row">
+                      <span className="modal-label">Pronouns</span>
+                      <span>{selectedVolunteer.pronouns ?? "—"}</span>
+                    </div>
+                    <div className="modal-row">
+                      <span className="modal-label">Date of birth</span>
+                      <span>{formatDate(selectedVolunteer.date_of_birth)}</span>
+                    </div>
+                    <div className="modal-row">
+                      <span className="modal-label">Phone</span>
+                      {selectedVolunteer.phone ? (
+                        <a
+                          className="volunteer-phone-link"
+                          href={`tel:${selectedVolunteer.phone}`}
                         >
-                          + Add recurring
-                        </button>
-                      ) : null}
-                      <button
-                        className="account-button volunteer-back"
-                        type="button"
-                        onClick={() => {
-                          setSelectedVolunteer(null);
-                          setShowAddRecurring(false);
-                        }}
-                      >
-                        ← Back to list
-                      </button>
+                          {selectedVolunteer.phone}
+                        </a>
+                      ) : (
+                        <span>—</span>
+                      )}
                     </div>
                   </div>
 
-                  {volunteerRecurring.length > 0 || showAddRecurring ? (
+                  {volunteerRecurring.length > 0 || showAddRecurring || profile?.role === "Admin" ? (
                     <div className="volunteer-recurring">
                       <div className="volunteer-recurring-header">
                         <p className="account-section-title">Recurring shifts</p>
+                        {profile?.role === "Admin" ? (
+                          <button
+                            className="account-button"
+                            type="button"
+                            onClick={() => {
+                              if (showAddRecurring) {
+                                setShowAddRecurring(false);
+                                setRecurringEditId(null);
+                                setRecurringForm({ templateId: "", startsOn: "", endsOn: "" });
+                                setRecurringDays([]);
+                                return;
+                              }
+                              setShowAddRecurring(true);
+                            }}
+                          >
+                            {showAddRecurring
+                              ? recurringEditId
+                                ? "Cancel edit"
+                                : "Cancel recurring shift"
+                              : "Add recurring shifts"}
+                          </button>
+                        ) : null}
                       </div>
                       {recurringLoading ? (
                         <div className="loading-banner">Loading recurring shifts...</div>
@@ -4031,46 +4310,47 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                               (shift) => shift.templateId === recurring.template_id,
                             );
                             const timeRange = templateMeta?.start_time
-                              ? `${formatTemplateTime(
+                              ? formatCompactTemplateTimeRange(
                                   templateMeta.start_time,
-                                )} — ${formatTemplateTime(templateMeta.end_time)}`
+                                  templateMeta.end_time,
+                                )
                               : templateInstance
                                 ? formatTimeRangeFromInstance(
                                     templateInstance.start,
                                     templateInstance.end,
                                   )
                                 : "—";
-                            const dateRange = recurring.ends_on
-                              ? `${formatDate(recurring.starts_on)} — ${formatDate(
-                                  recurring.ends_on,
-                                )}`
-                              : `${formatDate(recurring.starts_on)} — Calendar end`;
+                            const dayList = formatByDayLongList(recurring.byday);
                             return (
                               <div key={recurring.id} className="recurring-card">
                                 <div>
                                   <p className="recurring-title">
-                                    {recurring.template?.title ?? "Shift"}
+                                    {(recurring.template?.title ?? "Shift") + ": " + timeRange}
                                   </p>
-                                  <p className="recurring-meta">{timeRange}</p>
-                                  {recurring.byday && recurring.byday.length > 0 ? (
-                                    <p className="recurring-meta">
-                                      {formatByDay(recurring.byday)}
-                                    </p>
-                                  ) : null}
+                                  <p className="recurring-meta">{dayList}</p>
                                 </div>
                                 <div className="recurring-actions">
-                                  <span className="recurring-pill">{dateRange}</span>
                                   {profile?.role === "Admin" ? (
-                                    <button
-                                      className="recurring-delete"
-                                      type="button"
-                                      onClick={() => handleRecurringDelete(recurring.id)}
-                                      disabled={recurringDeleteId === recurring.id}
-                                    >
-                                      {recurringDeleteId === recurring.id
-                                        ? "Deleting..."
-                                        : "Delete"}
-                                    </button>
+                                    <>
+                                      <button
+                                        className="recurring-edit"
+                                        type="button"
+                                        onClick={() => handleRecurringEdit(recurring)}
+                                        disabled={recurringDeleteId === recurring.id}
+                                      >
+                                        Edit
+                                      </button>
+                                      <button
+                                        className="recurring-delete"
+                                        type="button"
+                                        onClick={() => handleRecurringDelete(recurring.id)}
+                                        disabled={recurringDeleteId === recurring.id}
+                                      >
+                                        {recurringDeleteId === recurring.id
+                                          ? "Deleting..."
+                                          : "Delete"}
+                                      </button>
+                                    </>
                                   ) : null}
                                 </div>
                               </div>
@@ -4083,7 +4363,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
                   {showAddRecurring && profile?.role === "Admin" ? (
                     <div className="volunteer-recurring-form">
-                      <p className="account-section-title">Add recurring shift</p>
+                      <p className="account-section-title">
+                        {recurringEditId ? "Edit recurring shift" : "Add recurring shift"}
+                      </p>
                       <label className="form-field">
                         <span className="form-label">Shift template</span>
                         <select
@@ -4167,7 +4449,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         <button
                           className="nav-button"
                           type="button"
-                          onClick={() => setShowAddRecurring(false)}
+                          onClick={() => {
+                            setShowAddRecurring(false);
+                            setRecurringEditId(null);
+                            setRecurringForm({ templateId: "", startsOn: "", endsOn: "" });
+                            setRecurringDays([]);
+                          }}
                           disabled={recurringSaving}
                         >
                           Cancel
@@ -4178,7 +4465,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           onClick={handleRecurringSave}
                           disabled={recurringSaving}
                         >
-                          {recurringSaving ? "Saving..." : "Save recurring"}
+                          {recurringSaving
+                            ? "Saving..."
+                            : recurringEditId
+                              ? "Save changes"
+                              : "Save recurring"}
                         </button>
                       </div>
                     </div>
@@ -4303,9 +4594,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   >
                     {notificationLoading ? "Enabling..." : "Enable notifications"}
                   </button>
+                  <button
+                    className="account-button"
+                    type="button"
+                    onClick={handleSendTestNotification}
+                    disabled={testNotificationLoading}
+                  >
+                    {testNotificationLoading ? "Sending..." : "Send test notification"}
+                  </button>
                 </div>
                 {notificationMessage ? (
                   <div className="error-banner">{notificationMessage}</div>
+                ) : null}
+                {testNotificationMessage ? (
+                  <div className="error-banner">{testNotificationMessage}</div>
                 ) : null}
               </div>
 
