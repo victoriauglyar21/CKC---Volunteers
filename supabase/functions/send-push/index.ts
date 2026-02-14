@@ -68,61 +68,112 @@ serve(async (req) => {
   const isPrivilegedRequester = requesterRole === "Admin" || requesterRole === "Lead";
   if (!isPrivilegedRequester) {
     const isAllowedRegularEvent =
-      (notification_type === "shift_dropped" || notification_type === "shift_added") &&
-      Number.isInteger(shift_instance_id);
+      notification_type === "shift_dropped" || notification_type === "shift_added";
     if (!isAllowedRegularEvent) {
       return new Response("Forbidden", { status: 403, headers: corsHeaders });
     }
 
-    const { data: requesterAssignment, error: requesterAssignmentError } = await supabaseAdmin
-      .from("shift_assignments")
-      .select("status")
-      .eq("shift_instance_id", shift_instance_id)
-      .eq("volunteer_id", requesterId)
-      .maybeSingle();
-    if (requesterAssignmentError || !requesterAssignment) {
-      return new Response("Forbidden", { status: 403, headers: corsHeaders });
-    }
+    const expectedRequesterStatus = notification_type === "shift_dropped" ? "dropped" : "active";
 
-    if (
-      (notification_type === "shift_dropped" && requesterAssignment.status !== "dropped") ||
-      (notification_type === "shift_added" && requesterAssignment.status !== "active")
-    ) {
-      return new Response("Forbidden", { status: 403, headers: corsHeaders });
-    }
+    if (Number.isInteger(shift_instance_id)) {
+      const { data: requesterAssignment, error: requesterAssignmentError } = await supabaseAdmin
+        .from("shift_assignments")
+        .select("status")
+        .eq("shift_instance_id", shift_instance_id)
+        .eq("volunteer_id", requesterId)
+        .maybeSingle();
+      if (requesterAssignmentError || !requesterAssignment) {
+        return new Response("Forbidden", { status: 403, headers: corsHeaders });
+      }
+      if (requesterAssignment.status !== expectedRequesterStatus) {
+        return new Response("Forbidden", { status: 403, headers: corsHeaders });
+      }
 
-    const { data: targetAssignment, error: targetAssignmentError } = await supabaseAdmin
-      .from("shift_assignments")
-      .select(
-        `
-          status,
-          assignment_role,
-          volunteer:profiles (
-            role
-          )
-        `,
-      )
-      .eq("shift_instance_id", shift_instance_id)
-      .eq("volunteer_id", user_id)
-      .maybeSingle();
-    if (targetAssignmentError || !targetAssignment) {
-      return new Response("Forbidden", { status: 403, headers: corsHeaders });
-    }
+      const { data: targetAssignment, error: targetAssignmentError } = await supabaseAdmin
+        .from("shift_assignments")
+        .select(
+          `
+            status,
+            assignment_role,
+            volunteer:profiles (
+              role
+            )
+          `,
+        )
+        .eq("shift_instance_id", shift_instance_id)
+        .eq("volunteer_id", user_id)
+        .maybeSingle();
+      if (targetAssignmentError || !targetAssignment) {
+        return new Response("Forbidden", { status: 403, headers: corsHeaders });
+      }
 
-    const targetVolunteer = Array.isArray(targetAssignment.volunteer)
-      ? targetAssignment.volunteer[0]
-      : targetAssignment.volunteer;
-    const targetRole = targetVolunteer?.role ?? null;
-    const isLeadTarget =
-      targetAssignment.assignment_role === "lead" || targetRole === "Lead" || targetRole === "Admin";
-    if (targetAssignment.status !== "active" || !isLeadTarget) {
-      return new Response("Forbidden", { status: 403, headers: corsHeaders });
+      const targetVolunteer = Array.isArray(targetAssignment.volunteer)
+        ? targetAssignment.volunteer[0]
+        : targetAssignment.volunteer;
+      const targetRole = targetVolunteer?.role ?? null;
+      const isLeadTarget =
+        targetAssignment.assignment_role === "lead" || targetRole === "Lead" || targetRole === "Admin";
+      if (targetAssignment.status !== "active") {
+        return new Response("Forbidden", { status: 403, headers: corsHeaders });
+      }
+      if (notification_type === "shift_added" && !isLeadTarget) {
+        return new Response("Forbidden", { status: 403, headers: corsHeaders });
+      }
+    } else {
+      const { data: targetAssignments, error: targetAssignmentsError } = await supabaseAdmin
+        .from("shift_assignments")
+        .select(
+          `
+            shift_instance_id,
+            status,
+            assignment_role,
+            volunteer:profiles (
+              role
+            )
+          `,
+        )
+        .eq("volunteer_id", user_id)
+        .eq("status", "active");
+      if (targetAssignmentsError) {
+        return new Response("Forbidden", { status: 403, headers: corsHeaders });
+      }
+
+      const allowedShiftIds = ((targetAssignments ?? []) as {
+        shift_instance_id: number | null;
+        assignment_role: string | null;
+        volunteer: { role: string | null } | { role: string | null }[] | null;
+      }[])
+        .filter((row) => {
+          if (notification_type === "shift_dropped") {
+            return true;
+          }
+          const volunteer = Array.isArray(row.volunteer) ? row.volunteer[0] : row.volunteer;
+          const role = volunteer?.role ?? null;
+          return row.assignment_role === "lead" || role === "Lead" || role === "Admin";
+        })
+        .map((row) => row.shift_instance_id)
+        .filter((id): id is number => Number.isInteger(id));
+
+      if (allowedShiftIds.length === 0) {
+        return new Response("Forbidden", { status: 403, headers: corsHeaders });
+      }
+
+      const { data: requesterMatches, error: requesterMatchesError } = await supabaseAdmin
+        .from("shift_assignments")
+        .select("id")
+        .eq("volunteer_id", requesterId)
+        .eq("status", expectedRequesterStatus)
+        .in("shift_instance_id", allowedShiftIds)
+        .limit(1);
+      if (requesterMatchesError || !requesterMatches || requesterMatches.length === 0) {
+        return new Response("Forbidden", { status: 403, headers: corsHeaders });
+      }
     }
   }
 
   const { data: targetProfile, error: targetProfileError } = await supabaseAdmin
     .from("profiles")
-    .select("notification_pref,notification_settings")
+    .select("notification_pref")
     .eq("id", user_id)
     .maybeSingle();
 
@@ -131,15 +182,6 @@ serve(async (req) => {
   }
 
   if (targetProfile?.notification_pref !== "push_and_email") {
-    return new Response(JSON.stringify({ sent: 0, failed: 0, skipped: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
-  const key = typeof notification_type === "string" ? notification_type : null;
-  const settings =
-    (targetProfile?.notification_settings as Record<string, boolean> | null | undefined) ?? null;
-  if (key && settings && settings[key] === false) {
     return new Response(JSON.stringify({ sent: 0, failed: 0, skipped: true }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
