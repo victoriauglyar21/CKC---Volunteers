@@ -739,8 +739,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     DEFAULT_NOTIFICATION_SETTINGS,
   );
   const [notificationSettingsLoading, setNotificationSettingsLoading] = useState(false);
-  const [testNotificationMessage, setTestNotificationMessage] = useState("");
-  const [testNotificationLoading, setTestNotificationLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const scrollYRef = useRef(0);
@@ -2459,29 +2457,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setNotificationSettingsLoading(false);
   };
 
-  const handleSendTestNotification = async () => {
-    setTestNotificationMessage("");
-    setTestNotificationLoading(true);
-    const accountName =
-      displayProfile?.preferred_name?.trim() ||
-      displayProfile?.full_name?.trim() ||
-      "there";
-
-    const errorMessage = await sendVolunteerPush({
-      userId: session.user.id,
-      title: "Shift starts soon",
-      body: `Hello ${accountName}, your shift starts in one hour.`,
-      notificationType: "shift_reminder",
-    });
-
-    if (errorMessage) {
-      setTestNotificationMessage(errorMessage);
-    } else {
-      setTestNotificationMessage("Test notification sent.");
-    }
-    setTestNotificationLoading(false);
-  };
-
   const handleAssignVolunteer = async (volunteerId: string) => {
     if (!assignShiftInstanceId) {
       setAssignMessage("Shift instance not found.");
@@ -2604,7 +2579,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const approvedRequest = notifications.find((item) => item.id === assignmentId);
     const approvedVolunteerId = approvedRequest?.volunteer?.id;
+    const approvedVolunteerName =
+      approvedRequest?.volunteer?.preferred_name ||
+      approvedRequest?.volunteer?.full_name ||
+      "A volunteer";
+    const approvedShiftInstanceId = approvedRequest?.shift_instance?.id;
     const approvedShiftTitle = approvedRequest?.shift_instance?.template?.title ?? "your shift";
+    const approvalNotificationErrors: string[] = [];
     if (approvedVolunteerId) {
       const pushError = await sendVolunteerPush({
         userId: approvedVolunteerId,
@@ -2613,8 +2594,26 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         notificationType: "shift_approved",
       });
       if (pushError) {
-        setNotificationsMessage(`Approved, but push notification failed: ${pushError}`);
+        approvalNotificationErrors.push(`push notification failed: ${pushError}`);
       }
+    }
+
+    if (approvedShiftInstanceId) {
+      const leadNotifyError = await notifyLeadsOnShiftInstance({
+        shiftInstanceId: approvedShiftInstanceId,
+        excludeVolunteerIds: [approvedVolunteerId, session.user.id].filter(
+          (value): value is string => Boolean(value),
+        ),
+        title: "Shift added",
+        body: `${approvedVolunteerName} has been added to your shift`,
+        notificationType: "shift_added",
+      });
+      if (leadNotifyError) {
+        approvalNotificationErrors.push(leadNotifyError);
+      }
+    }
+    if (approvalNotificationErrors.length > 0) {
+      setNotificationsMessage(`Approved, but ${approvalNotificationErrors.join(" | ")}`);
     }
 
     const { data } = await supabase
@@ -2736,12 +2735,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     body,
     url = "/?view=notifications",
     notificationType,
+    shiftInstanceId,
   }: {
     userId: string;
     title: string;
     body: string;
     url?: string;
     notificationType?: NotificationSettingKey;
+    shiftInstanceId?: number;
   }) => {
     const { data, error } = await supabase.functions.invoke("send-push", {
       body: {
@@ -2750,6 +2751,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         body,
         url,
         notification_type: notificationType,
+        shift_instance_id: shiftInstanceId,
       },
     });
     if (error) {
@@ -2822,6 +2824,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         title,
         body,
         notificationType,
+        shiftInstanceId,
       });
       if (leadPushError) {
         failures.push(leadPushError);
@@ -2948,7 +2951,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         shiftInstanceId: targetShiftInstanceId,
         excludeVolunteerIds: [session.user.id],
         title: "Shift dropped",
-        body: `${actorName} dropped a shift`,
+        body: `${actorName} dropped your shift`,
         notificationType: "shift_dropped",
       });
       if (leadNotifyError) {
@@ -4795,14 +4798,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   >
                     {notificationLoading ? "Enabling..." : "Enable notifications"}
                   </button>
-                  <button
-                    className="account-button"
-                    type="button"
-                    onClick={handleSendTestNotification}
-                    disabled={testNotificationLoading}
-                  >
-                    {testNotificationLoading ? "Sending..." : "Send test notification"}
-                  </button>
                 </div>
                 <div className="modal-row modal-row-stack">
                   <span className="modal-label">Notification preferences</span>
@@ -4845,9 +4840,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 </div>
                 {notificationMessage ? (
                   <div className="error-banner">{notificationMessage}</div>
-                ) : null}
-                {testNotificationMessage ? (
-                  <div className="error-banner">{testNotificationMessage}</div>
                 ) : null}
               </div>
 
