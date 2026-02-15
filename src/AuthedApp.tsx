@@ -31,6 +31,8 @@ const timeFormatter = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
 });
 
+const PRIMARY_ADMIN_EMAIL = "victoriauglyar21@gmail.com";
+
 type ShiftTemplate = {
   id: string;
   title: string;
@@ -346,6 +348,18 @@ function formatDate(value: string | null | undefined) {
     day: "numeric",
     year: "numeric",
   });
+}
+
+function toDateInputValue(value: string | null | undefined) {
+  if (!value) return "";
+  const directMatch = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (directMatch) return directMatch[1];
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function formatDateWithWeekday(value: string | null | undefined) {
@@ -820,6 +834,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     full_name: "",
     pronouns: "",
     phone: "",
+    joined_at: "",
   });
   const [profileSaveMessage, setProfileSaveMessage] = useState("");
   const [profileSaveLoading, setProfileSaveLoading] = useState(false);
@@ -845,6 +860,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const notificationsEnabled = displayProfile?.notification_pref === "push_and_email";
   const canManageAppointments = profile?.role === "Admin" || profile?.role === "Lead";
   const canModifyAppointments = profile?.role === "Admin";
+  const isPrimaryAdminAccount =
+    profile?.role === "Admin" &&
+    (session.user.email ?? "").trim().toLowerCase() === PRIMARY_ADMIN_EMAIL;
   const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
   if (import.meta.env.DEV && !vapidPublicKey) {
     console.warn("Missing VITE_VAPID_PUBLIC_KEY");
@@ -1116,9 +1134,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       full_name: displayProfile?.full_name ?? "",
       pronouns: displayProfile?.pronouns ?? "",
       phone: displayProfile?.phone ?? "",
+      joined_at: toDateInputValue(displayProfile?.joined_at),
     });
     setProfileSaveMessage("");
-  }, [isEditingProfile, displayProfile?.full_name, displayProfile?.pronouns, displayProfile?.phone]);
+  }, [
+    isEditingProfile,
+    displayProfile?.full_name,
+    displayProfile?.pronouns,
+    displayProfile?.phone,
+    displayProfile?.joined_at,
+  ]);
 
   useEffect(() => {
     if (showProfile) return;
@@ -1309,6 +1334,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setProfileSaveMessage("Phone number is required.");
       return;
     }
+    if (!profileForm.joined_at.trim()) {
+      setProfileSaveMessage("Joined date is required.");
+      return;
+    }
 
     setProfileSaveLoading(true);
 
@@ -1318,6 +1347,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         full_name: profileForm.full_name.trim(),
         pronouns: profileForm.pronouns.trim(),
         phone: profileForm.phone.trim(),
+        joined_at: profileForm.joined_at.trim(),
       })
       .eq("id", session.user.id)
       .select("*")
@@ -1897,7 +1927,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     let rawItems: ShiftAssignmentDetail[] = [];
 
-    if (profile?.role === "Admin") {
+    if (isPrimaryAdminAccount) {
       const { data, error } = await supabase
         .from("shift_assignments")
         .select(baseSelect)
@@ -1911,20 +1941,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
       rawItems = (data as unknown as ShiftAssignmentDetail[]) ?? [];
     } else if (profile?.role === "Lead") {
-      const [{ data: ownData, error: ownError }, { data: leadShiftData, error: leadShiftError }] =
-        await Promise.all([
-          supabase
-            .from("shift_assignments")
-            .select(baseSelect)
-            .eq("volunteer_id", session.user.id)
-            .in("status", ["active", "dropped"]),
-          supabase
-            .from("shift_assignments")
-            .select("shift_instance_id")
-            .eq("volunteer_id", session.user.id)
-            .eq("status", "active")
-            .eq("assignment_role", "lead"),
-        ]);
+      const { data: ownData, error: ownError } = await supabase
+        .from("shift_assignments")
+        .select(baseSelect)
+        .eq("volunteer_id", session.user.id)
+        .in("status", ["active", "dropped"]);
 
       if (ownError) {
         setNotifications([]);
@@ -1932,45 +1953,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         setNotificationsLoading(false);
         return;
       }
-      if (leadShiftError) {
-        setNotifications([]);
-        setNotificationsMessage(leadShiftError.message);
-        setNotificationsLoading(false);
-        return;
-      }
-
-      const leadShiftIds = Array.from(
-        new Set(
-          ((leadShiftData as { shift_instance_id: number | null }[] | null) ?? [])
-            .map((row) => row.shift_instance_id)
-            .filter((id): id is number => Number.isInteger(id)),
-        ),
-      );
-
-      const ownItems = (ownData as unknown as ShiftAssignmentDetail[]) ?? [];
-      let droppedForLeadShifts: ShiftAssignmentDetail[] = [];
-      if (leadShiftIds.length > 0) {
-        const { data: leadDropsData, error: leadDropsError } = await supabase
-          .from("shift_assignments")
-          .select(baseSelect)
-          .eq("status", "dropped")
-          .neq("volunteer_id", session.user.id)
-          .in("shift_instance_id", leadShiftIds);
-
-        if (leadDropsError) {
-          setNotifications([]);
-          setNotificationsMessage(leadDropsError.message);
-          setNotificationsLoading(false);
-          return;
-        }
-        droppedForLeadShifts = (leadDropsData as unknown as ShiftAssignmentDetail[]) ?? [];
-      }
-
-      const mergedById = new Map<string, ShiftAssignmentDetail>();
-      [...ownItems, ...droppedForLeadShifts].forEach((item) => {
-        mergedById.set(item.id, item);
-      });
-      rawItems = Array.from(mergedById.values());
+      rawItems = (ownData as unknown as ShiftAssignmentDetail[]) ?? [];
     } else {
       const { data, error } = await supabase
         .from("shift_assignments")
@@ -1989,7 +1972,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const items = rawItems
       .filter((item) => {
-        if (profile?.role === "Admin") {
+        if (isPrimaryAdminAccount) {
           if (item.status === "pending") return true;
           if (item.status !== "dropped") return false;
           const droppedAt = item.dropped_at ?? item.created_at ?? "";
@@ -2011,7 +1994,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setNotificationCount(items.length);
     setNotificationsLoading(false);
     setHasLoadedNotifications(true);
-  }, [profile?.role, session.user.id, hasLoadedNotifications, dismissedNotificationTokens]);
+  }, [profile?.role, session.user.id, hasLoadedNotifications, dismissedNotificationTokens, isPrimaryAdminAccount]);
 
   useEffect(() => {
     if (!showNotifications) return;
@@ -2039,10 +2022,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           schema: "public",
           table: "shift_assignments",
           filter:
-            profile?.role === "Admin"
+            isPrimaryAdminAccount
               ? "status=in.(pending,dropped)"
-              : profile?.role === "Lead"
-                ? "status=eq.dropped"
               : `volunteer_id=eq.${session.user.id}`,
         },
         () => {
@@ -2054,7 +2035,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [profile?.role, session.user.id, showNotifications, fetchNotifications]);
+  }, [profile?.role, session.user.id, showNotifications, fetchNotifications, isPrimaryAdminAccount]);
 
   useEffect(() => {
     const stored = localStorage.getItem(dismissedStorageKey);
@@ -2652,7 +2633,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     } else if (assignment.volunteer?.id === session.user.id && profile?.role !== "Admin") {
                       setDropTargetId(assignment.id);
                       setShowDropConfirm(true);
-                    } else if (profile?.role === "Admin") {
+                    } else if (isPrimaryAdminAccount) {
                       if (assignment.status === "pending") {
                         const pendingName =
                           assignment.volunteer?.preferred_name ||
@@ -3322,6 +3303,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     assignmentId: string,
     decision: "approve" | "deny",
   ) => {
+    if (!isPrimaryAdminAccount) {
+      setNotificationsMessage("Only admins can approve or deny requests.");
+      return;
+    }
     if (decision === "deny") {
       setDenyTargetId(assignmentId);
       setDenyReason("");
@@ -3450,6 +3435,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   };
 
   const handleConfirmDeny = async () => {
+    if (!isPrimaryAdminAccount) {
+      setNotificationsMessage("Only admins can deny requests.");
+      return;
+    }
     if (!denyTargetId) return;
     if (!denyReason.trim()) {
       setNotificationsMessage("Please add a denial reason.");
@@ -4550,6 +4539,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     <div className="month-event-list">
                       {dayShifts.slice(0, 2).map((shift) => {
                         const maxItemsPerShift = isMobile ? 1 : 4;
+                        const shiftAppointments = appointmentsByShift[shift.instanceId] ?? [];
+                        const appointmentCount = shiftAppointments.length;
                         const monthShiftLabel = /morning/i.test(shift.title)
                           ? isMobile && calendarRangeMode === "month"
                             ? "AM"
@@ -4588,6 +4579,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         return (
                           <div key={`month-shift-${shift.id}`} className="month-shift-group">
                             <p className="month-shift-title">{monthShiftLabel}</p>
+                            {calendarViewMode !== "appointments" && appointmentCount > 0 ? (
+                              <div className="month-appointment-count">
+                                <span className="month-event-dot" style={{ background: "#f59e0b" }} />
+                                <span className="month-event-label">
+                                  Appointments ({appointmentCount})
+                                </span>
+                              </div>
+                            ) : null}
                             {items.slice(0, maxItemsPerShift).map((item) => (
                               <div
                                 key={item.key}
@@ -5356,7 +5355,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     const readableDropReason = normalizeDropReason(request.dropped_reason);
                     const isLatest = index === 0;
 
-                    if (profile?.role === "Admin") {
+                    if (isPrimaryAdminAccount) {
                       if (request.status === "dropped") {
                         return (
                           <div
@@ -5540,9 +5539,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       >
                         <div className="volunteer-main">
                           <p className={nameClass}>{name}</p>
-                          <p className="volunteer-meta">
-                            {volunteer.pronouns ?? "—"} · {roleLabel}
-                          </p>
+                          <p className="volunteer-meta">{roleLabel}</p>
                         </div>
                         <span className="volunteer-joined">
                           Joined {formatDate(volunteer.joined_at)}
@@ -6264,9 +6261,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       >
                         <div className="volunteer-main">
                           <p className={nameClass}>{name}</p>
-                          <p className="volunteer-meta">
-                            {volunteer.pronouns ?? "—"} · {roleLabel}
-                          </p>
+                          <p className="volunteer-meta">{roleLabel}</p>
                         </div>
                         <span className="volunteer-joined">
                           Joined {formatDate(volunteer.joined_at)}
@@ -6451,7 +6446,21 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 </div>
                 <div className="modal-row">
                   <span className="modal-label">Joined</span>
-                  <span>{formatDate(profile?.joined_at)}</span>
+                  {isEditingProfile ? (
+                    <input
+                      className="form-input"
+                      type="date"
+                      value={profileForm.joined_at}
+                      onChange={(event) =>
+                        setProfileForm((prev) => ({
+                          ...prev,
+                          joined_at: event.target.value,
+                        }))
+                      }
+                    />
+                  ) : (
+                    <span>{formatDate(displayProfile?.joined_at)}</span>
+                  )}
                 </div>
               </div>
             </div>
