@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type TouchEvent as ReactTouchEvent,
 } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
@@ -829,6 +830,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const scrollYRef = useRef(0);
   const liveRefreshInFlightRef = useRef(false);
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const swipeTriggeredRef = useRef(false);
   const todayCellRef = useRef<HTMLDivElement | null>(null);
   const todayKey = getDateKey(today);
   const [showMenu, setShowMenu] = useState(false);
@@ -3997,6 +4000,34 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     });
   };
 
+  const handleCalendarTouchStart = (event: ReactTouchEvent<HTMLElement>) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    swipeStartRef.current = { x: touch.clientX, y: touch.clientY };
+    swipeTriggeredRef.current = false;
+  };
+
+  const handleCalendarTouchMove = (event: ReactTouchEvent<HTMLElement>) => {
+    if (!swipeStartRef.current || swipeTriggeredRef.current) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+    const deltaX = touch.clientX - swipeStartRef.current.x;
+    const deltaY = touch.clientY - swipeStartRef.current.y;
+    const horizontalDominant = Math.abs(deltaX) > Math.abs(deltaY) * 1.2;
+    if (!horizontalDominant || Math.abs(deltaX) < 48) return;
+    swipeTriggeredRef.current = true;
+    if (deltaX < 0) {
+      handleNextRange();
+    } else {
+      handlePrevRange();
+    }
+  };
+
+  const handleCalendarTouchEnd = () => {
+    swipeStartRef.current = null;
+    swipeTriggeredRef.current = false;
+  };
+
   const toggleDayCollapsed = (dateKey: string) => {
     setCollapsedDayKeys((prev) => {
       const next = new Set(prev);
@@ -4306,7 +4337,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         <div className="error-banner">No active shift templates</div>
       ) : null}
 
-      <section className={`calendar-panel ${isMobile && calendarRangeMode === "month" ? "month-mode" : ""}`}>
+      <section
+        className={`calendar-panel ${isMobile && calendarRangeMode === "month" ? "month-mode" : ""}`}
+        onTouchStart={isMobile ? handleCalendarTouchStart : undefined}
+        onTouchMove={isMobile ? handleCalendarTouchMove : undefined}
+        onTouchEnd={isMobile ? handleCalendarTouchEnd : undefined}
+        onTouchCancel={isMobile ? handleCalendarTouchEnd : undefined}
+      >
         <div className="calendar-jump">
           <div className="month-nav month-nav-left">
             {!isMobile ? (
@@ -4589,6 +4626,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               {calendarRangeMode === "month"
                   ? "Previous month"
                   : "Previous week"}
+            </button>
+            <button
+              className="account-button mobile-week-top"
+              type="button"
+              aria-label="Back to top"
+              title="Back to top"
+              onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+            >
+              ↑
             </button>
             <button
               className="account-button mobile-week-next"

@@ -2107,14 +2107,31 @@
 
   .mobile-week-footer {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     gap: 8px;
     margin-top: 12px;
+    position: sticky;
+    bottom: 8px;
+    z-index: 22;
+    padding: 6px;
+    border-radius: 14px;
+    background: rgba(5, 11, 17, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.08);
   }
 
   .mobile-week-prev,
   .mobile-week-next {
     width: 100%;
+  }
+
+  .mobile-week-top {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0;
+    font-size: 0.95rem;
+    line-height: 1;
+    justify-content: center;
   }
 
   .week-glance-panel {
