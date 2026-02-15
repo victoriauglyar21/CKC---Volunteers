@@ -71,6 +71,86 @@
   justify-content: flex-end;
 }
 
+.calendar-view-toggle {
+  display: inline-flex;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.calendar-view-toggle-button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 999px;
+}
+
+.calendar-view-toggle-button.active {
+  background: rgba(125, 207, 255, 0.25);
+  border: 1px solid rgba(125, 207, 255, 0.45);
+}
+
+.floating-view-toggle {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 40;
+  background: rgba(8, 16, 24, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  padding: 4px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+@media (max-width: 600px) {
+  .calendar-jump .nav-button {
+    height: 32px;
+    padding: 0 9px;
+    font-size: 0.82rem;
+  }
+
+  .calendar-jump .nav-button[aria-label="Previous"],
+  .calendar-jump .nav-button[aria-label="Next"] {
+    width: 34px;
+    padding: 0;
+  }
+
+  .month-jump-inline {
+    height: 32px;
+    min-width: 74px;
+    padding: 0 10px;
+    font-size: 0.8rem;
+  }
+
+  .month-jump-inline-mobile {
+    min-width: 70px;
+    padding-right: 24px;
+  }
+
+  .calendar-header .calendar-actions {
+    margin-left: auto !important;
+    justify-content: flex-end !important;
+    align-self: flex-end;
+    width: 100%;
+    padding-right: 0;
+    gap: 8px;
+  }
+
+  .calendar-header .calendar-actions .account-button,
+  .calendar-header .calendar-actions .menu-button {
+    margin-left: 0;
+  }
+
+}
+
+.week-glance-mode-toggle {
+  margin-left: auto;
+}
+
 .menu-shell {
   position: relative;
 }
@@ -99,29 +179,30 @@
   top: calc(100% + 8px);
   background: rgba(8, 16, 24, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 14px;
-  padding: 8px;
+  border-radius: 16px;
+  padding: 10px;
   display: grid;
-  gap: 6px;
+  gap: 8px;
   min-width: 180px;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
   z-index: 5;
 }
 
 .menu-item {
-  border-radius: 10px;
+  border-radius: 14px;
   border: 1px solid transparent;
-  height: 36px;
-  padding: 0 12px;
+  min-height: 50px;
+  padding: 0 14px;
   background: rgba(255, 255, 255, 0.05);
   color: inherit;
   font-weight: 600;
-  font-size: 0.9rem;
-  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
+  font-size: 0.95rem;
+  font-family: "Avenir Next", "Helvetica Neue", "Segoe UI", sans-serif;
   text-align: left;
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
+  letter-spacing: 0.01em;
 }
 
 .menu-item:hover {
@@ -168,6 +249,30 @@
 
 .jump-today {
   align-self: flex-start;
+}
+
+.jump-today-icon {
+  width: 36px;
+  padding: 0;
+  font-size: 1rem;
+}
+
+.refresh-spinning {
+  animation: refresh-spin 0.8s linear infinite;
+}
+
+@keyframes refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.jump-today-cat {
+  font-size: 1.05rem;
+  transform: rotate(-14deg) translateY(-1px);
 }
 
 .calendar-jump {
@@ -235,10 +340,48 @@
   border: 1px solid rgba(255, 135, 180, 0.5);
   height: 36px;
   padding: 0 12px;
+  min-width: 104px;
+  padding-right: 30px;
   background: rgba(255, 135, 180, 0.35);
   color: inherit;
   font-weight: 600;
   font-size: 0.88rem;
+}
+
+.month-jump-inline {
+  min-width: 84px;
+}
+
+.calendar-title-with-month {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.range-select-mobile {
+  height: 32px;
+  min-width: 74px;
+  padding: 0 22px 0 9px;
+  font-size: 0.8rem;
+}
+
+.mobile-inline-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.calendar-jump .nav-button,
+.calendar-jump .month-jump-select {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.calendar-jump .nav-button:not(:disabled):hover,
+.calendar-jump .month-jump-select:hover {
+  border-color: rgba(125, 207, 255, 0.55);
+  transform: none;
 }
 
 @media (max-width: 720px) {
@@ -273,9 +416,10 @@
     width: 100%;
     flex-direction: row;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: flex-end;
     margin-left: 0;
-    gap: 8px;
+    gap: 6px;
+    flex-wrap: nowrap;
   }
 
   .calendar-actions .account-button,
@@ -332,6 +476,18 @@
 
   .month-nav .month-jump-select {
     min-width: 0;
+  }
+
+  .mobile-inline-nav .nav-button {
+    height: 32px;
+    padding: 0 9px;
+    font-size: 0.82rem;
+  }
+
+  .mobile-inline-nav .nav-button[aria-label="Previous"],
+  .mobile-inline-nav .nav-button[aria-label="Next"] {
+    width: 32px;
+    padding: 0;
   }
 
   .calendar-panel {
@@ -447,6 +603,10 @@
   gap: 8px;
 }
 
+.calendar-grid.day-mode {
+  grid-template-columns: 1fr;
+}
+
 .weekday {
   text-transform: uppercase;
   letter-spacing: 0.18em;
@@ -473,6 +633,18 @@
   position: relative;
   overflow: visible;
   align-self: start;
+}
+
+.day-cell.day-mode {
+  min-height: calc(100vh - 320px);
+}
+
+.day-cell.month-cell-clickable {
+  cursor: pointer;
+}
+
+.day-cell.month-cell-clickable:hover {
+  border-color: rgba(125, 207, 255, 0.45);
 }
 
 .day-cell.collapsed {
@@ -512,6 +684,14 @@
   .day-cell {
     scroll-margin-top: 120px;
   }
+
+  .day-cell.day-mode {
+    min-height: 120px;
+  }
+
+  .day-cell.day-mode .shift-list {
+    grid-auto-rows: initial;
+  }
 }
 
 .day-cell.outside {
@@ -541,6 +721,73 @@
   gap: 6px;
 }
 
+.day-cell.day-mode .shift-list {
+  gap: 12px;
+  grid-auto-rows: minmax(220px, auto);
+}
+
+.day-cell.day-mode .shift-block {
+  height: 100%;
+}
+
+.month-event-list {
+  display: grid;
+  gap: 3px;
+}
+
+.month-shift-group {
+  display: grid;
+  gap: 2px;
+}
+
+.month-shift-title {
+  margin: 1px 0;
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.month-event-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 2px 0;
+  text-align: left;
+  min-height: 18px;
+}
+
+.month-event-item:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.month-event-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: 0 0 7px;
+}
+
+.month-event-label {
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.month-more-label {
+  margin: 0;
+  font-size: 0.68rem;
+  color: rgba(255, 255, 255, 0.8);
+  padding-left: 2px;
+}
+
 .shift-block {
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -556,6 +803,30 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: 8px;
+}
+
+.shift-block-header-clickable {
+  cursor: pointer;
+}
+
+.shift-block-header-clickable:hover .shift-block-title {
+  text-decoration: underline;
+}
+
+.shift-appointments-button {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.shift-appointments-button:hover {
+  border-color: rgba(125, 207, 255, 0.55);
 }
 
 
@@ -575,6 +846,102 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 8px;
+}
+
+.shift-appointments-list {
+  display: grid;
+  gap: 8px;
+}
+
+.shift-appointment-item {
+  position: relative;
+}
+
+.shift-appointment-button {
+  width: 100%;
+  text-align: left;
+  border-radius: 10px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-left-width: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  display: grid;
+  gap: 2px;
+  min-height: 42px;
+}
+
+.shift-appointment-button:hover {
+  border-color: rgba(125, 207, 255, 0.45);
+}
+
+.shift-appointment-title {
+  margin: 0;
+  font-weight: 700;
+  font-size: 0.76rem;
+  line-height: 1.2;
+}
+
+.shift-appointment-meta {
+  margin: 0;
+  display: block;
+  font-size: 0.68rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.shift-appointment-description {
+  margin: 5px 0 0;
+  font-size: 0.74rem;
+  line-height: 1.3;
+}
+
+.shift-appointment-popover {
+  position: absolute;
+  left: 8px;
+  top: calc(100% + 6px);
+  width: min(280px, calc(100vw - 96px));
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(6, 12, 18, 0.88);
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+  z-index: 8;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+.appointment-popover-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.shift-appointment-popover-title {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.shift-appointment-popover-meta {
+  margin: 0;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.appointment-expand-button {
+  width: fit-content;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 3px 9px;
+}
+
+.shift-appointments-open {
+  width: auto;
+  justify-self: start;
 }
 
 .shift-chip {
@@ -735,6 +1102,135 @@
 .modal-body {
   display: grid;
   gap: 12px;
+}
+
+.week-glance-panel {
+  width: min(1100px, 100%);
+}
+
+.week-glance-table-wrap {
+  overflow: auto;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.week-glance-table {
+  width: 100%;
+  min-width: 920px;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+  background: rgba(8, 16, 24, 0.45);
+}
+
+.week-glance-table th,
+.week-glance-table td {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  vertical-align: top;
+  padding: 8px;
+}
+
+.week-glance-table th {
+  background: rgba(255, 255, 255, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+}
+
+.week-glance-table th span {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.week-glance-shift-title {
+  font-weight: 700;
+  margin: 0;
+}
+
+.week-glance-shift-time {
+  margin-top: 2px;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.week-glance-line {
+  margin: 0;
+  line-height: 1.35;
+}
+
+.week-glance-line + .week-glance-line {
+  margin-top: 4px;
+}
+
+.week-glance-pending {
+  color: #ffd680;
+}
+
+.appointments-panel {
+  width: min(760px, 100%);
+}
+
+.appointment-form {
+  gap: 10px;
+}
+
+.appointment-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.form-color {
+  padding: 4px;
+  min-height: 38px;
+}
+
+.appointment-time-input {
+  max-width: 160px;
+}
+
+.appointments-list {
+  display: grid;
+  gap: 10px;
+}
+
+.appointment-card {
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.appointment-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.appointment-title {
+  margin: 0;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.appointment-time {
+  margin: 0;
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.8);
+  white-space: nowrap;
+}
+
+.appointment-description {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.appointment-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .modal-row {
@@ -1480,6 +1976,11 @@
     align-items: flex-start;
   }
 
+  .calendar-header-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
   .calendar-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1491,12 +1992,81 @@
 }
 
 @media (max-width: 600px) {
+  .calendar-panel.month-mode {
+    overflow-x: visible;
+  }
+
   .calendar-grid {
     grid-template-columns: 1fr;
   }
 
   .weekday {
     display: none;
+  }
+
+  .calendar-grid.month-mode {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .calendar-grid.month-mode .weekday {
+    display: none;
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-align: center;
+    padding: 6px 2px;
+  }
+
+  .calendar-grid.month-mode .day-cell {
+    min-height: 206px;
+    padding: 5px 4px;
+    border-radius: 8px;
+    gap: 4px;
+    overflow: hidden;
+  }
+
+  .calendar-grid.month-mode .day-header-row {
+    margin-bottom: 2px;
+  }
+
+  .calendar-grid.month-mode .day-number {
+    font-size: 0.82rem;
+  }
+
+  .calendar-grid.month-mode .day-weekday {
+    display: none;
+  }
+
+  .calendar-grid.month-mode .month-shift-title {
+    font-size: 0.58rem;
+    margin: 0;
+    opacity: 0.9;
+    letter-spacing: 0.02em;
+  }
+
+  .calendar-grid.month-mode .month-event-list {
+    overflow: hidden;
+  }
+
+  .calendar-grid.month-mode .month-event-item {
+    border-radius: 0;
+    padding: 0;
+    min-height: 12px;
+    line-height: 1.15;
+    background: transparent !important;
+  }
+
+  .calendar-grid.month-mode .month-event-dot {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    flex: 0 0 5px;
+  }
+
+  .calendar-grid.month-mode .month-event-label {
+    font-size: 0.62rem;
+    color: rgba(255, 255, 255, 0.95);
   }
 
   .day-weekday {
@@ -1517,6 +2087,46 @@
   .mobile-week-prev,
   .mobile-week-next {
     width: 100%;
+  }
+
+  .week-glance-panel {
+    max-height: min(88vh, 800px);
+    padding: 14px;
+  }
+
+  .week-glance-table {
+    min-width: 860px;
+    font-size: 0.8rem;
+  }
+
+  .appointment-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .appointment-card-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .appointments-panel {
+    width: calc(100% - 12px);
+    padding: 14px;
+    gap: 12px;
+  }
+
+  .appointment-form {
+    padding: 12px;
+  }
+
+  .appointment-form .modal-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .appointment-form .modal-row .account-button {
+    width: 100%;
+    justify-content: center;
   }
 }
 

@@ -17,7 +17,7 @@ const monthFormatter = new Intl.DateTimeFormat("en-US", {
 });
 
 const monthJumpFormatter = new Intl.DateTimeFormat("en-US", {
-  month: "short",
+  month: "long",
 });
 
 const dayFormatter = new Intl.DateTimeFormat("en-US", {
@@ -155,6 +155,25 @@ type ShiftAssignment = {
     } | null;
   } | null;
 };
+
+type ShiftAppointment = {
+  id: string;
+  shift_instance_id: number;
+  title: string;
+  description: string | null;
+  color: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  created_by: string | null;
+};
+
+type AppointmentKind = "foster" | "adoption" | "other";
+
+const APPOINTMENT_COLOR_FOSTER = "#22c55e";
+const APPOINTMENT_COLOR_ADOPTION = "#a855f7";
+const APPOINTMENT_COLOR_OTHER_DEFAULT = "#f97316";
 
 type DropDayLeadAssignment = {
   volunteer_id: string;
@@ -303,6 +322,20 @@ function buildWeekCells(baseDate: Date, mondayFirst: boolean): CalendarCell[] {
   return cells;
 }
 
+function buildMonthCells(baseDate: Date, mondayFirst: boolean): CalendarCell[] {
+  const firstOfMonth = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
+  const start = getWeekStart(firstOfMonth, mondayFirst);
+  const cells: CalendarCell[] = [];
+  for (let i = 0; i < 42; i += 1) {
+    const date = addDays(start, i);
+    cells.push({
+      date,
+      label: String(date.getDate()),
+    });
+  }
+  return cells;
+}
+
 function formatDate(value: string | null | undefined) {
   if (!value) return "—";
   const date = new Date(value);
@@ -347,6 +380,35 @@ function formatTimeOnly(value: string | null | undefined) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function format24HourTime(value: string | null | undefined) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function toTimeInputValue(value: string | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function normalizeHexColor(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function getAppointmentKindFromColor(color: string | null | undefined): AppointmentKind {
+  const normalized = normalizeHexColor(color);
+  if (normalized === APPOINTMENT_COLOR_FOSTER) return "foster";
+  if (normalized === APPOINTMENT_COLOR_ADOPTION) return "adoption";
+  return "other";
 }
 
 function normalizePhoneLink(value: string) {
@@ -714,13 +776,39 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [recurringEditId, setRecurringEditId] = useState<string | null>(null);
   const [recurringDays, setRecurringDays] = useState<string[]>([]);
   const [showMyShifts, setShowMyShifts] = useState(false);
+  const [showWeekGlance, setShowWeekGlance] = useState(false);
+  const [weekGlanceMode, setWeekGlanceMode] = useState<"volunteers" | "appointments">("volunteers");
+  const [calendarViewMode, setCalendarViewMode] = useState<"volunteers" | "appointments">(
+    "volunteers",
+  );
+  const [showMonthDayDetails, setShowMonthDayDetails] = useState(false);
+  const [monthDayDetailsDate, setMonthDayDetailsDate] = useState<Date | null>(null);
+  const [showAppointments, setShowAppointments] = useState(false);
+  const [appointmentsShift, setAppointmentsShift] = useState<ShiftInstance | null>(null);
+  const [appointmentsShiftInstanceId, setAppointmentsShiftInstanceId] = useState<number | null>(null);
+  const [appointmentsByShift, setAppointmentsByShift] = useState<Record<number, ShiftAppointment[]>>({});
+  const [appointmentsLoading, setAppointmentsLoading] = useState(false);
+  const [appointmentsMessage, setAppointmentsMessage] = useState("");
+  const [appointmentForm, setAppointmentForm] = useState({
+    id: null as string | null,
+    kind: "other" as AppointmentKind,
+    title: "",
+    description: "",
+    color: APPOINTMENT_COLOR_OTHER_DEFAULT,
+    starts_at: "",
+  });
+  const [appointmentSaving, setAppointmentSaving] = useState(false);
+  const [appointmentDeleteId, setAppointmentDeleteId] = useState<string | null>(null);
+  const [expandedAppointmentIds, setExpandedAppointmentIds] = useState<Set<string>>(new Set());
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
   const [assignments, setAssignments] = useState<ShiftAssignment[]>([]);
   const [assignmentsMessage, setAssignmentsMessage] = useState("");
   const [myRecurring, setMyRecurring] = useState<RecurringAssignment[]>([]);
   const [myShiftsPage, setMyShiftsPage] = useState(0);
+  const [calendarRangeMode, setCalendarRangeMode] = useState<"week" | "month">("week");
   const [isMobile, setIsMobile] = useState(false);
   const [weekOffset, setWeekOffset] = useState(0);
+  const [monthOffset, setMonthOffset] = useState(0);
   const [collapsedDayKeys, setCollapsedDayKeys] = useState<Set<string>>(new Set());
   const [manuallyToggledDayKeys, setManuallyToggledDayKeys] = useState<Set<string>>(new Set());
   const [personalShiftKeys, setPersonalShiftKeys] = useState<Set<string>>(new Set());
@@ -744,12 +832,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const todayKey = getDateKey(today);
   const [showMenu, setShowMenu] = useState(false);
   const [showHelpfulLinks, setShowHelpfulLinks] = useState(false);
+  const [showFloatingViewToggle, setShowFloatingViewToggle] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const baseDocumentTitleRef = useRef<string>(
     typeof document !== "undefined" ? document.title : "CKC Shift Calendar",
   );
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
   const notificationsEnabled = displayProfile?.notification_pref === "push_and_email";
+  const canManageAppointments = profile?.role === "Admin" || profile?.role === "Lead";
   const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
   if (import.meta.env.DEV && !vapidPublicKey) {
     console.warn("Missing VITE_VAPID_PUBLIC_KEY");
@@ -768,6 +858,24 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     [],
   );
   const dismissedStorageKey = `notificationsDismissed:${session.user.id}`;
+  const isAnyModalOpen =
+    showMyShifts ||
+    showWeekGlance ||
+    showMonthDayDetails ||
+    showAppointments ||
+    showTakeShiftPrompt ||
+    showNotifications ||
+    showAssignVolunteer ||
+    showHelpfulLinks ||
+    showDropConfirm ||
+    showDropReason ||
+    showDenyPrompt ||
+    showPendingDecisionPrompt ||
+    showRemovePrompt ||
+    showAssignmentNotes ||
+    showVolunteers ||
+    showProfile ||
+    showAddRecurring;
 
   useEffect(() => {
     let mounted = true;
@@ -798,13 +906,39 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     let mounted = true;
 
     const fetchShiftInstances = async () => {
-      const baseDate = addDays(today, weekOffset * 7);
-      const weekStart = getWeekStart(baseDate, true);
-      const weekEnd = addDays(weekStart, 6);
-      const weekStartDate = getDateKey(weekStart);
-      const weekEndDate = getDateKey(addDays(weekEnd, 1));
+      const rangeAnchorDate =
+        calendarRangeMode === "month"
+          ? addMonths(today, monthOffset)
+          : addDays(today, weekOffset * 7);
+      const normalizedAnchor = startOfDay(rangeAnchorDate);
+      let visibleDates: Date[] = [];
+      if (calendarRangeMode === "month") {
+        const firstOfMonth = new Date(
+          normalizedAnchor.getFullYear(),
+          normalizedAnchor.getMonth(),
+          1,
+        );
+        const gridStart = getWeekStart(firstOfMonth, true);
+        for (let i = 0; i < 42; i += 1) {
+          visibleDates.push(addDays(gridStart, i));
+        }
+      } else {
+        const weekStart = getWeekStart(normalizedAnchor, true);
+        for (let i = 0; i < 7; i += 1) {
+          visibleDates.push(addDays(weekStart, i));
+        }
+      }
+      if (visibleDates.length === 0) {
+        setInstanceShifts([]);
+        return;
+      }
+      const rangeStart = visibleDates[0];
+      const lastVisibleDate = visibleDates[visibleDates.length - 1];
+      const rangeEndExclusive = addDays(lastVisibleDate, 1);
+      const rangeStartDate = getDateKey(rangeStart);
+      const rangeEndDate = getDateKey(rangeEndExclusive);
 
-      // Ensure visible week always has shift instances for active templates.
+      // Ensure visible range always has shift instances for active templates.
       if (templates.length > 0) {
         const templateIds = templates.map((template) => template.id);
         const { data: existingRows } = await supabase
@@ -812,10 +946,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           .select("template_id,shift_date,starts_at")
           .in("template_id", templateIds)
           .or(
-            `starts_at.gte.${weekStart.toISOString()},starts_at.lt.${addDays(
-              weekEnd,
-              1,
-            ).toISOString()},shift_date.gte.${weekStartDate},shift_date.lt.${weekEndDate}`,
+            `starts_at.gte.${rangeStart.toISOString()},starts_at.lt.${rangeEndExclusive.toISOString()},shift_date.gte.${rangeStartDate},shift_date.lt.${rangeEndDate}`,
           );
 
         const existingKeys = new Set(
@@ -832,8 +963,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           ends_at: string;
         }[] = [];
 
-        for (let i = 0; i < 7; i += 1) {
-          const day = addDays(weekStart, i);
+        visibleDates.forEach((day) => {
           const dayKey = getDateKey(day);
           templates.forEach((template) => {
             if (template.is_active === false) return;
@@ -850,12 +980,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             });
             existingKeys.add(key);
           });
-        }
+        });
 
         if (rowsToInsert.length > 0) {
           const { error: insertError } = await supabase.from("shift_instances").insert(rowsToInsert);
           if (insertError && import.meta.env.DEV) {
-            console.warn("Unable to generate week shift instances", insertError.message);
+            console.warn("Unable to generate visible shift instances", insertError.message);
           }
         }
       }
@@ -875,10 +1005,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         `,
         )
         .or(
-          `starts_at.gte.${weekStart.toISOString()},starts_at.lt.${addDays(
-            weekEnd,
-            1,
-          ).toISOString()},shift_date.gte.${weekStartDate},shift_date.lt.${weekEndDate}`,
+          `starts_at.gte.${rangeStart.toISOString()},starts_at.lt.${rangeEndExclusive.toISOString()},shift_date.gte.${rangeStartDate},shift_date.lt.${rangeEndDate}`,
         )
         .order("starts_at", { ascending: true });
 
@@ -916,8 +1043,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           .map((shift) => `${shift.templateId}-${getDateKey(shift.start)}`),
       );
       const fallbackShifts: ShiftInstance[] = [];
-      for (let i = 0; i < 7; i += 1) {
-        const day = addDays(weekStart, i);
+      visibleDates.forEach((day) => {
         const dayKey = getDateKey(day);
         templates.forEach((template) => {
           if (template.is_active === false) return;
@@ -936,7 +1062,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             isVirtual: true,
           });
         });
-      }
+      });
 
       setInstanceShifts(
         [...shifts, ...fallbackShifts].sort((left, right) => {
@@ -952,7 +1078,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     return () => {
       mounted = false;
     };
-  }, [today, weekOffset, templates]);
+  }, [today, weekOffset, monthOffset, calendarRangeMode, templates]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 600px)");
@@ -961,6 +1087,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     media.addEventListener("change", handleChange);
     return () => {
       media.removeEventListener("change", handleChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onScroll = () => {
+      setShowFloatingViewToggle(window.scrollY > 220);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
     };
   }, []);
 
@@ -1066,6 +1203,40 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setWeekAssignments(map);
   }, [instanceShifts]);
 
+  const fetchWeekAppointments = useCallback(async () => {
+    if (instanceShifts.length === 0) {
+      setAppointmentsByShift({});
+      setAppointmentsLoading(false);
+      return;
+    }
+    setAppointmentsLoading(true);
+    const instanceIds = instanceShifts.map((shift) => shift.instanceId);
+    const { data, error } = await supabase
+      .from("shift_appointments")
+      .select(
+        "id,shift_instance_id,title,description,color,starts_at,ends_at,created_at,updated_at,created_by",
+      )
+      .in("shift_instance_id", instanceIds)
+      .order("starts_at", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true });
+
+    if (error || !data) {
+      setAppointmentsByShift({});
+      setAppointmentsLoading(false);
+      return;
+    }
+
+    const map: Record<number, ShiftAppointment[]> = {};
+    (data as ShiftAppointment[]).forEach((appointment) => {
+      const instanceId = appointment.shift_instance_id;
+      if (!instanceId) return;
+      if (!map[instanceId]) map[instanceId] = [];
+      map[instanceId].push(appointment);
+    });
+    setAppointmentsByShift(map);
+    setAppointmentsLoading(false);
+  }, [instanceShifts]);
+
   const ensureShiftInstance = useCallback(async (shift: ShiftInstance) => {
     if (!shift.isVirtual && shift.instanceId > 0) {
       return shift.instanceId;
@@ -1111,6 +1282,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   useEffect(() => {
     fetchWeekAssignments();
   }, [fetchWeekAssignments]);
+
+  useEffect(() => {
+    fetchWeekAppointments();
+  }, [fetchWeekAppointments]);
 
 
   const handleProfileSave = useCallback(async () => {
@@ -2029,9 +2204,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     [templates],
   );
 
-  const baseDate = addDays(today, weekOffset * 7);
+  const weekBaseDate = addDays(today, weekOffset * 7);
+  const monthBaseDate = addMonths(today, monthOffset);
+  const baseDate = calendarRangeMode === "month" ? monthBaseDate : weekBaseDate;
   const todayStartMs = today.getTime();
-  const displayCells = buildWeekCells(baseDate, true);
+  const displayCells =
+    calendarRangeMode === "month" ? buildMonthCells(baseDate, true) : buildWeekCells(baseDate, true);
   const displayDayKeys = useMemo(
     () =>
       displayCells
@@ -2042,16 +2220,23 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const allVisibleDaysCollapsed =
     displayDayKeys.length > 0 && displayDayKeys.every((key) => collapsedDayKeys.has(key));
   const monthLabel = monthFormatter.format(baseDate);
+  const calendarTitleLabel =
+    calendarRangeMode === "month"
+      ? baseDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })
+      : monthLabel;
   const weekStart = getWeekStart(baseDate, true);
   const weekEnd = addDays(weekStart, 6);
-  const rangeLabel = `${dayFormatter.format(weekStart)} – ${dayFormatter.format(weekEnd)}`;
+  const rangeLabel =
+    calendarRangeMode === "month"
+      ? baseDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })
+      : `${dayFormatter.format(weekStart)} – ${dayFormatter.format(weekEnd)}`;
   const weekdayLabels = WEEKDAYS_MONDAY_FIRST;
   const todayWeekdayIndex = (today.getDay() + 6) % 7;
   const maxWeekOffset = Math.max(0, Math.floor(diffInDays(today, addMonths(today, 12)) / 7));
-  const currentMonthKey = getMonthKey(baseDate);
+  const currentMonthKey = getMonthKey(monthBaseDate);
   const monthJumpOptions = useMemo(() => {
     const start = new Date(today.getFullYear(), today.getMonth(), 1);
-    const options: { key: string; label: string; weekOffset: number }[] = [];
+    const options: { key: string; label: string; weekOffset: number; monthOffset: number }[] = [];
     for (let i = 0; i < 12; i += 1) {
       const monthDate = addMonths(start, i);
       const monthStartWeek = getWeekStart(monthDate, true);
@@ -2061,6 +2246,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         key: getMonthKey(monthDate),
         label: monthJumpFormatter.format(monthDate),
         weekOffset: Math.min(maxWeekOffset, offset),
+        monthOffset: i,
       });
     }
     return options;
@@ -2102,6 +2288,437 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   );
   const showNoUpcoming = !assignmentsLoading && assignmentsForDisplay.length === 0 && !assignmentsMessage;
   const showNoRecurring = !assignmentsLoading && myRecurring.length === 0 && !assignmentsMessage;
+  const selectedShiftAppointments = useMemo(() => {
+    if (!appointmentsShiftInstanceId) return [];
+    return (appointmentsByShift[appointmentsShiftInstanceId] ?? []).slice().sort((left, right) => {
+      const leftTime = left.starts_at ? new Date(left.starts_at).getTime() : 0;
+      const rightTime = right.starts_at ? new Date(right.starts_at).getTime() : 0;
+      if (leftTime !== rightTime) return leftTime - rightTime;
+      return (left.created_at ?? "").localeCompare(right.created_at ?? "");
+    });
+  }, [appointmentsByShift, appointmentsShiftInstanceId]);
+  const monthDayDetailsDateKey = monthDayDetailsDate ? getDateKey(monthDayDetailsDate) : null;
+  const monthDayDetailsShifts = useMemo(() => {
+    if (!monthDayDetailsDateKey) return [];
+    const dayShifts = orderedShiftsByDate[monthDayDetailsDateKey] ?? [];
+    return dayShifts.slice().sort((left, right) => {
+      const rank = (shift: ShiftInstance) => {
+        if (/morning/i.test(shift.title)) return 0;
+        if (/evening/i.test(shift.title)) return 1;
+        return 2;
+      };
+      const rankDiff = rank(left) - rank(right);
+      if (rankDiff !== 0) return rankDiff;
+      return left.start.getTime() - right.start.getTime();
+    });
+  }, [monthDayDetailsDateKey, orderedShiftsByDate]);
+  const weekGlanceRows = useMemo(() => {
+    const rowMap = new Map<
+      string,
+      {
+        key: string;
+        title: string;
+        timeLabel: string;
+        rank: number;
+        startMs: number;
+        byDay: Record<
+          string,
+          {
+            leads: string[];
+            volunteers: string[];
+            pending: string[];
+          }
+        >;
+      }
+    >();
+
+    const getDisplayName = (assignment: ShiftAssignmentDetail) =>
+      assignment.volunteer?.preferred_name || assignment.volunteer?.full_name || "Volunteer";
+
+    displayDayKeys.forEach((dayKey) => {
+      const dayShifts = orderedShiftsByDate[dayKey] ?? [];
+      dayShifts.forEach((shift) => {
+        const rowKey = shift.templateId || `${shift.title}-${timeFormatter.format(shift.start)}`;
+        const existing = rowMap.get(rowKey);
+        const timeLabel = `${timeFormatter.format(shift.start)}-${timeFormatter.format(shift.end)}`;
+        const row =
+          existing ??
+          {
+            key: rowKey,
+            title: shift.title,
+            timeLabel,
+            rank: rankShiftForDisplay(shift),
+            startMs: shift.start.getTime(),
+            byDay: {},
+          };
+
+        const assignmentsForShift = (weekAssignments[shift.instanceId] ?? []).filter(
+          (assignment) => Boolean(assignment.volunteer?.id),
+        );
+
+        const leads: string[] = [];
+        const volunteers: string[] = [];
+        const pending: string[] = [];
+
+        assignmentsForShift.forEach((assignment) => {
+          const name = getDisplayName(assignment);
+          if (assignment.status === "pending") {
+            pending.push(name);
+            return;
+          }
+          if (
+            isLeadAssignmentRole(assignment.assignment_role) ||
+            isLeadRole(assignment.volunteer?.role) ||
+            isAdminRole(assignment.volunteer?.role)
+          ) {
+            leads.push(name);
+            return;
+          }
+          volunteers.push(name);
+        });
+
+        row.byDay[dayKey] = { leads, volunteers, pending };
+        rowMap.set(rowKey, row);
+      });
+    });
+
+    return Array.from(rowMap.values()).sort((left, right) => {
+      const rankDiff = left.rank - right.rank;
+      if (rankDiff !== 0) return rankDiff;
+      const startDiff = left.startMs - right.startMs;
+      if (startDiff !== 0) return startDiff;
+      return left.title.localeCompare(right.title);
+    });
+  }, [displayDayKeys, orderedShiftsByDate, weekAssignments]);
+  const weekGlanceAppointmentRows = useMemo(() => {
+    const rowMap = new Map<
+      string,
+      {
+        key: string;
+        title: string;
+        timeLabel: string;
+        rank: number;
+        startMs: number;
+        byDay: Record<
+          string,
+          Array<{
+            id: string;
+            title: string;
+            timeLabel: string | null;
+          }>
+        >;
+      }
+    >();
+
+    displayDayKeys.forEach((dayKey) => {
+      const dayShifts = orderedShiftsByDate[dayKey] ?? [];
+      dayShifts.forEach((shift) => {
+        const rowKey = shift.templateId || `${shift.title}-${timeFormatter.format(shift.start)}`;
+        const existing = rowMap.get(rowKey);
+        const timeLabel = `${timeFormatter.format(shift.start)}-${timeFormatter.format(shift.end)}`;
+        const row =
+          existing ??
+          {
+            key: rowKey,
+            title: shift.title,
+            timeLabel,
+            rank: rankShiftForDisplay(shift),
+            startMs: shift.start.getTime(),
+            byDay: {},
+          };
+
+        const items = (appointmentsByShift[shift.instanceId] ?? [])
+          .slice()
+          .sort((left, right) => {
+            const leftTime = left.starts_at ? new Date(left.starts_at).getTime() : 0;
+            const rightTime = right.starts_at ? new Date(right.starts_at).getTime() : 0;
+            if (leftTime !== rightTime) return leftTime - rightTime;
+            return (left.created_at ?? "").localeCompare(right.created_at ?? "");
+          })
+          .map((appointment) => ({
+            id: appointment.id,
+            title: appointment.title,
+            timeLabel: appointment.starts_at ? format24HourTime(appointment.starts_at) : null,
+          }));
+
+        row.byDay[dayKey] = items;
+        rowMap.set(rowKey, row);
+      });
+    });
+
+    return Array.from(rowMap.values()).sort((left, right) => {
+      const rankDiff = left.rank - right.rank;
+      if (rankDiff !== 0) return rankDiff;
+      const startDiff = left.startMs - right.startMs;
+      if (startDiff !== 0) return startDiff;
+      return left.title.localeCompare(right.title);
+    });
+  }, [appointmentsByShift, displayDayKeys, orderedShiftsByDate]);
+
+  const renderInteractiveShiftBlock = (shift: ShiftInstance, keyPrefix = "") => {
+    const hasTimes = Boolean(shift.start && shift.end);
+    const isPastShiftDay = startOfDay(shift.start).getTime() < todayStartMs;
+    const assignmentList = weekAssignments[shift.instanceId] ?? [];
+    const sortedAssignments = assignmentList.slice().sort((left, right) => {
+      const rankFor = (assignment: ShiftAssignmentDetail) => {
+        if (assignment.status === "pending") return 3;
+        if (isAdminRole(assignment.volunteer?.role)) return 0;
+        if (isLeadRole(assignment.volunteer?.role)) return 1;
+        if (isLeadAssignmentRole(assignment.assignment_role)) return 1;
+        return 2;
+      };
+      const rankLeft = rankFor(left);
+      const rankRight = rankFor(right);
+      if (rankLeft !== rankRight) return rankLeft - rankRight;
+      const leftCreated = left.created_at ?? "";
+      const rightCreated = right.created_at ?? "";
+      return leftCreated.localeCompare(rightCreated);
+    });
+    const filledAssignments = sortedAssignments.filter((assignment) => Boolean(assignment.volunteer?.id));
+    const leadAssignment =
+      filledAssignments.find(
+        (assignment) =>
+          isLeadAssignmentRole(assignment.assignment_role) ||
+          isLeadRole(assignment.volunteer?.role) ||
+          isAdminRole(assignment.volunteer?.role),
+      ) ?? null;
+    const regularAssignments = leadAssignment
+      ? filledAssignments.filter((assignment) => assignment !== leadAssignment)
+      : filledAssignments;
+    const slotAssignments: Array<ShiftAssignmentDetail | null> = [leadAssignment, ...regularAssignments].slice(0, 8);
+    while (slotAssignments.length < 6) {
+      slotAssignments.push(null);
+    }
+    const canAddExtraVolunteer = slotAssignments.length < 8;
+    const appointmentsForShift = appointmentsByShift[shift.instanceId] ?? [];
+
+    return (
+      <div key={`${keyPrefix}${shift.id}`} className="shift-block">
+        <div
+          className={`shift-block-header ${calendarViewMode === "appointments" ? "shift-block-header-clickable" : ""}`}
+          role={calendarViewMode === "appointments" ? "button" : undefined}
+          tabIndex={calendarViewMode === "appointments" ? 0 : undefined}
+          onClick={
+            calendarViewMode === "appointments"
+              ? () => {
+                  if (!canManageAppointments) return;
+                  void handleOpenAppointments(shift);
+                }
+              : undefined
+          }
+          onKeyDown={
+            calendarViewMode === "appointments"
+              ? (event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  if (!canManageAppointments) return;
+                  void handleOpenAppointments(shift);
+                }
+              : undefined
+          }
+        >
+          <div>
+            <p className="shift-block-title">{shift.title}</p>
+            <p className="shift-block-meta">
+              {hasTimes ? `${timeFormatter.format(shift.start)}–${timeFormatter.format(shift.end)}` : "—"}
+            </p>
+            {calendarViewMode === "appointments" ? (
+              <p className="shift-block-meta">Appointments: {appointmentsForShift.length}</p>
+            ) : null}
+          </div>
+        </div>
+        {calendarViewMode === "volunteers" ? (
+          <div className="shift-assignment-list">
+            {slotAssignments.map((assignment, index) => {
+              const name = assignment?.volunteer?.preferred_name || assignment?.volunteer?.full_name || null;
+              const hasVolunteer = Boolean(assignment?.volunteer?.id);
+              const isLeadCoverageSlot = index === 0 && !hasVolunteer;
+              const canClaimLeadCoverage = profile?.role === "Lead" || profile?.role === "Admin";
+              const isVolunteerPastLocked = profile?.role !== "Admin" && isPastShiftDay;
+              const slotClass =
+                !assignment || !assignment.volunteer?.id
+                  ? index === 0
+                    ? "needs-lead"
+                    : "none"
+                  : assignment.status === "pending"
+                    ? "pending"
+                    : assignment.volunteer?.role === "Admin"
+                      ? "admin"
+                      : assignment.assignment_role === "lead"
+                        ? "lead"
+                        : "assigned";
+              return (
+                <button
+                  key={`${shift.id}-slot-${index}`}
+                  className={`capacity-slot ${slotClass}`}
+                  type="button"
+                  disabled={
+                    isVolunteerPastLocked ||
+                    (hasVolunteer &&
+                      profile?.role !== "Admin" &&
+                      assignment?.volunteer?.id !== session.user.id) ||
+                    (isLeadCoverageSlot && !canClaimLeadCoverage)
+                  }
+                  onClick={async () => {
+                    const resolvedInstanceId = await ensureShiftInstance(shift);
+                    if (!resolvedInstanceId) return;
+                    setActiveShiftInstanceId(resolvedInstanceId);
+
+                    if (!assignment || !hasVolunteer) {
+                      if (profile?.role === "Admin") {
+                        setAssignMessage("");
+                        setAssignVolunteerSearch("");
+                        setAssignShiftInstanceId(resolvedInstanceId);
+                        setShowAssignVolunteer(true);
+                      } else {
+                        if (index === 0 && profile?.role !== "Lead") {
+                          return;
+                        }
+                        const alreadyOnShift = assignmentList.some(
+                          (slot) => slot.volunteer?.id === session.user.id && slot.status !== "dropped",
+                        );
+                        if (alreadyOnShift) {
+                          setTakeShiftMessage("You are already on this shift!");
+                          setShowTakeShiftPrompt(true);
+                          return;
+                        }
+                        setTakeShiftMessage("");
+                        setTakeShiftMode("request");
+                        setShowTakeShiftPrompt(true);
+                      }
+                    } else if (assignment.volunteer?.id === session.user.id && profile?.role !== "Admin") {
+                      setDropTargetId(assignment.id);
+                      setShowDropConfirm(true);
+                    } else if (profile?.role === "Admin") {
+                      if (assignment.status === "pending") {
+                        const pendingName =
+                          assignment.volunteer?.preferred_name ||
+                          assignment.volunteer?.full_name ||
+                          "Volunteer";
+                        setPendingDecisionTarget({
+                          id: assignment.id,
+                          name: pendingName,
+                        });
+                        setShowPendingDecisionPrompt(true);
+                      } else {
+                        setNotesTarget(assignment);
+                        setNotesDraft(assignment.notes ?? "");
+                        setNotesMessage("");
+                        setShowAssignmentNotes(true);
+                      }
+                    }
+                  }}
+                >
+                  {assignment?.status === "pending" ? (
+                    "Pending"
+                  ) : assignment && hasVolunteer ? (
+                    <div className="capacity-slot-content">
+                      <span className="capacity-slot-name">{name ?? "No Volunteer Assigned"}</span>
+                      {assignment.notes ? (
+                        <span className="capacity-slot-phone">{assignment.notes}</span>
+                      ) : (assignment.assignment_role === "lead" || assignment.volunteer?.role === "Admin") &&
+                        assignment.volunteer?.phone ? (
+                        isMobile ? (
+                          <span className="capacity-slot-phone">
+                            <a
+                              className="capacity-slot-phone-link"
+                              href={`tel:${normalizePhoneLink(assignment.volunteer.phone)}`}
+                            >
+                              {assignment.volunteer.phone}
+                            </a>
+                          </span>
+                        ) : (
+                          <span className="capacity-slot-phone">{assignment.volunteer.phone}</span>
+                        )
+                      ) : null}
+                    </div>
+                  ) : (
+                    (index === 0 ? "Needs Lead Coverage" : "No Volunteer Assigned")
+                  )}
+                </button>
+              );
+            })}
+            {canAddExtraVolunteer ? (
+              <button
+                className="capacity-slot capacity-slot-extra"
+                type="button"
+                disabled={profile?.role !== "Admin" && isPastShiftDay}
+                onClick={async () => {
+                  const resolvedInstanceId = await ensureShiftInstance(shift);
+                  if (!resolvedInstanceId) return;
+                  setActiveShiftInstanceId(resolvedInstanceId);
+
+                  if (profile?.role === "Admin") {
+                    setAssignMessage("");
+                    setAssignVolunteerSearch("");
+                    setAssignShiftInstanceId(resolvedInstanceId);
+                    setShowAssignVolunteer(true);
+                    return;
+                  }
+
+                  const alreadyOnShift = assignmentList.some(
+                    (slot) => slot.volunteer?.id === session.user.id && slot.status !== "dropped",
+                  );
+                  if (alreadyOnShift) {
+                    setTakeShiftMessage("You are already on this shift!");
+                    setShowTakeShiftPrompt(true);
+                    return;
+                  }
+                  setTakeShiftMessage("");
+                  setTakeShiftMode("request");
+                  setShowTakeShiftPrompt(true);
+                }}
+              >
+                Add Extra Volunteer
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <div className="shift-appointments-list">
+            {appointmentsForShift.length > 0
+              ? appointmentsForShift.map((appointment) => (
+                  <div key={appointment.id} className="shift-appointment-item">
+                    <button
+                      className="shift-appointment-button"
+                      type="button"
+                      onClick={async () => {
+                        if (canManageAppointments) {
+                          await handleOpenAppointments(shift);
+                          handleEditAppointment(appointment);
+                          return;
+                        }
+                        toggleAppointmentExpanded(appointment.id);
+                      }}
+                      style={{
+                        borderLeftColor: appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT,
+                      }}
+                    >
+                      <span className="shift-appointment-title">{appointment.title}</span>
+                      {appointment.starts_at ? (
+                        <span className="shift-appointment-meta">{format24HourTime(appointment.starts_at)}</span>
+                      ) : null}
+                    </button>
+                    {!canManageAppointments && expandedAppointmentIds.has(appointment.id) ? (
+                      <div className="shift-appointment-popover">
+                        <p className="shift-appointment-popover-title">{appointment.title}</p>
+                        {appointment.starts_at ? (
+                          <p className="shift-appointment-popover-meta">{format24HourTime(appointment.starts_at)}</p>
+                        ) : null}
+                        {appointment.description ? (
+                          <p className="shift-appointment-description">{appointment.description}</p>
+                        ) : (
+                          <p className="shift-appointment-description">No details added.</p>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                ))
+              : null}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const handleConfirmTakeShift = async () => {
     if (!activeShiftInstanceId) {
@@ -2380,6 +2997,157 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setNotificationAction(null);
     }
   };
+
+  const toShiftDateTimeIso = useCallback(
+    (shift: ShiftInstance, timeValue: string) => {
+      if (!timeValue) return null;
+      const match = timeValue.match(/^(\d{2}):(\d{2})$/);
+      if (!match) return null;
+      const base = new Date(shift.start);
+      base.setHours(Number(match[1]), Number(match[2]), 0, 0);
+      if (Number.isNaN(base.getTime())) return null;
+      return base.toISOString();
+    },
+    [],
+  );
+
+  const handleOpenAppointments = useCallback(
+    async (shift: ShiftInstance) => {
+      const resolvedInstanceId = await ensureShiftInstance(shift);
+      if (!resolvedInstanceId) return;
+      setAppointmentsShift(shift);
+      setAppointmentsShiftInstanceId(resolvedInstanceId);
+      setAppointmentsMessage("");
+      setAppointmentForm({
+        id: null,
+        kind: "other",
+        title: "",
+        description: "",
+        color: APPOINTMENT_COLOR_OTHER_DEFAULT,
+        starts_at: "",
+      });
+      setExpandedAppointmentIds(new Set());
+      setShowAppointments(true);
+    },
+    [ensureShiftInstance],
+  );
+
+  const handleEditAppointment = useCallback((appointment: ShiftAppointment) => {
+    setAppointmentsMessage("");
+    setAppointmentForm({
+      id: appointment.id,
+      kind: getAppointmentKindFromColor(appointment.color),
+      title: appointment.title ?? "",
+      description: appointment.description ?? "",
+      color: appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT,
+      starts_at: toTimeInputValue(appointment.starts_at),
+    });
+  }, []);
+
+  const handleSaveAppointment = useCallback(async () => {
+    if (!appointmentsShift || !appointmentsShiftInstanceId) return;
+    if (!appointmentForm.title.trim()) {
+      setAppointmentsMessage("Title is required.");
+      return;
+    }
+    const startIso = toShiftDateTimeIso(appointmentsShift, appointmentForm.starts_at);
+
+    setAppointmentSaving(true);
+    setAppointmentsMessage("");
+    const resolvedColor =
+      appointmentForm.kind === "foster"
+        ? APPOINTMENT_COLOR_FOSTER
+        : appointmentForm.kind === "adoption"
+          ? APPOINTMENT_COLOR_ADOPTION
+          : appointmentForm.color || APPOINTMENT_COLOR_OTHER_DEFAULT;
+    const payload = {
+      shift_instance_id: appointmentsShiftInstanceId,
+      title: appointmentForm.title.trim(),
+      description: appointmentForm.description.trim() || null,
+      color: resolvedColor,
+      starts_at: startIso,
+      ends_at: null,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (appointmentForm.id) {
+      const { error } = await supabase
+        .from("shift_appointments")
+        .update(payload)
+        .eq("id", appointmentForm.id);
+      if (error) {
+        setAppointmentsMessage(error.message);
+        setAppointmentSaving(false);
+        return;
+      }
+    } else {
+      const { error } = await supabase.from("shift_appointments").insert({
+        ...payload,
+        created_by: session.user.id,
+      });
+      if (error) {
+        setAppointmentsMessage(error.message);
+        setAppointmentSaving(false);
+        return;
+      }
+    }
+
+    setAppointmentForm({
+      id: null,
+      kind: "other",
+      title: "",
+      description: "",
+      color: APPOINTMENT_COLOR_OTHER_DEFAULT,
+      starts_at: "",
+    });
+    setAppointmentSaving(false);
+    await fetchWeekAppointments();
+  }, [
+    appointmentForm,
+    appointmentsShift,
+    appointmentsShiftInstanceId,
+    fetchWeekAppointments,
+    session.user.id,
+    toShiftDateTimeIso,
+  ]);
+
+  const handleDeleteAppointment = useCallback(
+    async (appointmentId: string) => {
+      setAppointmentDeleteId(appointmentId);
+      setAppointmentsMessage("");
+      const { error } = await supabase.from("shift_appointments").delete().eq("id", appointmentId);
+      if (error) {
+        setAppointmentsMessage(error.message);
+        setAppointmentDeleteId(null);
+        return;
+      }
+      if (appointmentForm.id === appointmentId) {
+        setAppointmentForm({
+          id: null,
+          kind: "other",
+          title: "",
+          description: "",
+          color: APPOINTMENT_COLOR_OTHER_DEFAULT,
+          starts_at: "",
+        });
+      }
+      setAppointmentDeleteId(null);
+      await fetchWeekAppointments();
+    },
+    [appointmentForm.id, fetchWeekAppointments],
+  );
+
+  const toggleAppointmentExpanded = useCallback((appointmentId: string) => {
+    setExpandedAppointmentIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(appointmentId)) {
+        next.delete(appointmentId);
+      } else {
+        next.add(appointmentId);
+      }
+      return next;
+    });
+  }, []);
 
   const handleAssignVolunteer = async (volunteerId: string) => {
     if (!assignShiftInstanceId) {
@@ -3085,7 +3853,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   };
 
   useEffect(() => {
-    if (todayJumpToken === 0 || weekOffset !== 0) return;
+    if (todayJumpToken === 0) return;
+    if (calendarRangeMode === "week" && weekOffset !== 0) return;
+    if (calendarRangeMode === "month" && monthOffset !== 0) return;
     const targetKey = getDateKey(startOfDay(new Date()));
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -3093,7 +3863,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         window.setTimeout(() => scrollToDateKey(targetKey), 200);
       });
     });
-  }, [todayJumpToken, weekOffset, todayKey]);
+  }, [todayJumpToken, weekOffset, monthOffset, calendarRangeMode, todayKey]);
 
   const handleTodayClick = () => {
     const now = startOfDay(new Date());
@@ -3101,6 +3871,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     setToday(now);
     setWeekOffset(0);
+    setMonthOffset(0);
     setTodayJumpToken((value) => value + 1);
 
     requestAnimationFrame(() => {
@@ -3114,7 +3885,27 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const handleMonthJump = (monthKey: string) => {
     const option = monthJumpOptions.find((item) => item.key === monthKey);
     if (!option) return;
-    setWeekOffset(option.weekOffset);
+    if (calendarRangeMode === "month") {
+      setMonthOffset(option.monthOffset);
+    } else {
+      setWeekOffset(option.weekOffset);
+    }
+  };
+
+  const handlePrevRange = () => {
+    if (calendarRangeMode === "month") {
+      setMonthOffset((value) => value - 1);
+      return;
+    }
+    setWeekOffset((value) => Math.max(0, value - 1));
+  };
+
+  const handleNextRange = () => {
+    if (calendarRangeMode === "month") {
+      setMonthOffset((value) => value + 1);
+      return;
+    }
+    setWeekOffset((value) => Math.min(maxWeekOffset, value + 1));
   };
 
   const handleToggleAllDays = () => {
@@ -3154,6 +3945,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   useEffect(() => {
     if (displayDayKeys.length === 0) return;
+    if (calendarRangeMode === "month") {
+      setCollapsedDayKeys((prev) => {
+        let didChange = false;
+        const next = new Set(prev);
+        displayDayKeys.forEach((dateKey) => {
+          if (next.delete(dateKey)) didChange = true;
+        });
+        return didChange ? next : prev;
+      });
+      return;
+    }
     setCollapsedDayKeys((prev) => {
       let didChange = false;
       const next = new Set(prev);
@@ -3184,7 +3986,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       });
       return didChange ? next : prev;
     });
-  }, [displayDayKeys, manuallyToggledDayKeys, todayStartMs, isMobile]);
+  }, [displayDayKeys, manuallyToggledDayKeys, todayStartMs, isMobile, calendarRangeMode]);
 
   const handleRefreshClick = async () => {
     if (refreshing) return;
@@ -3192,6 +3994,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     try {
       await Promise.all([
         fetchWeekAssignments(),
+        fetchWeekAppointments(),
         fetchPersonalAssignments(),
         fetchMyShifts(),
         fetchMyRecurring(),
@@ -3208,6 +4011,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     try {
       await Promise.all([
         fetchWeekAssignments(),
+        fetchWeekAppointments(),
         fetchPersonalAssignments(),
         fetchMyShifts(),
         fetchNotifications(),
@@ -3215,7 +4019,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     } finally {
       liveRefreshInFlightRef.current = false;
     }
-  }, [fetchWeekAssignments, fetchPersonalAssignments, fetchMyShifts, fetchNotifications]);
+  }, [fetchWeekAssignments, fetchWeekAppointments, fetchPersonalAssignments, fetchMyShifts, fetchNotifications]);
 
   useEffect(() => {
     const handleVisibleRefresh = () => {
@@ -3247,6 +4051,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const handleModalBackdropClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
     setShowMyShifts(false);
+    setShowWeekGlance(false);
+    setShowMonthDayDetails(false);
+    setShowAppointments(false);
     setShowTakeShiftPrompt(false);
     setShowNotifications(false);
     setShowAssignVolunteer(false);
@@ -3278,25 +4085,59 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             <h1 className="calendar-title">CKC Shift Calendar</h1>
             <img className="calendar-title-logo" src="/favicon.png" alt="CKC logo" />
           </div>
-          <p className="calendar-subtitle">{rangeLabel}</p>
+          {calendarRangeMode === "month" ? null : <p className="calendar-subtitle">{rangeLabel}</p>}
         </div>
         <div className="calendar-actions">
           <button
-            className="account-button refresh-button"
+            className={`account-button refresh-button jump-today-icon ${
+              refreshing ? "refresh-spinning" : ""
+            }`}
             type="button"
             onClick={handleRefreshClick}
             disabled={refreshing}
             title="Refresh shifts and notifications"
+            aria-label="Refresh shifts and notifications"
           >
-            {refreshing ? "Refreshing..." : "Refresh"}
+            {refreshing ? "↻" : "↻"}
           </button>
-          <button
-            className="account-button"
-            type="button"
-            onClick={() => setShowHelpfulLinks(true)}
-          >
-            Resources
-          </button>
+          {isMobile ? (
+            <select
+              className="month-jump-select range-select-mobile"
+              value={calendarRangeMode}
+              onChange={(event) =>
+                setCalendarRangeMode(event.target.value as "week" | "month")
+              }
+              aria-label="Select calendar range"
+            >
+              <option value="week">Week</option>
+              <option value="month">Month</option>
+            </select>
+          ) : null}
+          {isMobile ? (
+            <div className="mobile-inline-nav">
+              <button
+                className="nav-button"
+                onClick={handlePrevRange}
+                disabled={calendarRangeMode === "week" && weekOffset === 0}
+                aria-label="Previous"
+                title="Previous"
+              >
+                ←
+              </button>
+              <button className="nav-button" onClick={handleTodayClick}>
+                Today
+              </button>
+              <button
+                className="nav-button"
+                onClick={handleNextRange}
+                disabled={calendarRangeMode === "week" && weekOffset >= maxWeekOffset}
+                aria-label="Next"
+                title="Next"
+              >
+                →
+              </button>
+            </div>
+          ) : null}
           <div className="menu-shell" ref={menuRef}>
             <button
               className="menu-button"
@@ -3315,6 +4156,28 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             </button>
             {showMenu ? (
               <div className="menu-dropdown" role="menu">
+                <button
+                  className="menu-item"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setShowWeekGlance(true);
+                  }}
+                >
+                  This week at a glance
+                </button>
+                <button
+                  className="menu-item"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setShowHelpfulLinks(true);
+                  }}
+                >
+                  Resources
+                </button>
                 <button
                   className="menu-item"
                   type="button"
@@ -3372,50 +4235,117 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         <div className="error-banner">No active shift templates</div>
       ) : null}
 
-      <section className="calendar-panel">
+      <section className={`calendar-panel ${isMobile && calendarRangeMode === "month" ? "month-mode" : ""}`}>
         <div className="calendar-jump">
           <div className="month-nav month-nav-left">
-            <button
-              className="nav-button"
-              onClick={() => setWeekOffset((value) => Math.max(0, value - 1))}
-              disabled={weekOffset === 0}
-            >
-              Prev
-            </button>
-            <button className="nav-button" onClick={handleTodayClick}>
-              Today
-            </button>
-            <button
-              className="nav-button"
-              onClick={() => setWeekOffset((value) => Math.min(maxWeekOffset, value + 1))}
-              disabled={weekOffset >= maxWeekOffset}
-            >
-              Next
-            </button>
-            <select
-              className="month-jump-select"
-              value={currentMonthKey}
-              onChange={(event) => handleMonthJump(event.target.value)}
-              aria-label="Jump to month"
-            >
-              {monthJumpOptions.map((option) => (
-                <option key={option.key} value={option.key}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            {!isMobile ? (
+              <>
+                <select
+                  className="month-jump-select"
+                  value={calendarRangeMode}
+                  onChange={(event) =>
+                    setCalendarRangeMode(event.target.value as "week" | "month")
+                  }
+                  aria-label="Select calendar range"
+                >
+                  <option value="week">Week</option>
+                  <option value="month">Month</option>
+                </select>
+                <button
+                  className="nav-button"
+                  onClick={handlePrevRange}
+                  disabled={calendarRangeMode === "week" && weekOffset === 0}
+                  aria-label="Previous"
+                  title="Previous"
+                >
+                  ←
+                </button>
+                <button className="nav-button" onClick={handleTodayClick}>
+                  Today
+                </button>
+                <button
+                  className="nav-button"
+                  onClick={handleNextRange}
+                  disabled={calendarRangeMode === "week" && weekOffset >= maxWeekOffset}
+                  aria-label="Next"
+                  title="Next"
+                >
+                  →
+                </button>
+              </>
+            ) : null}
           </div>
         </div>
         <div className="calendar-header">
           <div>
-            <h2 className="calendar-title">{monthLabel}</h2>
-            <p className="calendar-subtitle">{rangeLabel}</p>
+            <div className="calendar-title-with-month">
+              <h2 className="calendar-title">{calendarTitleLabel}</h2>
+              {calendarRangeMode === "month" && isMobile ? (
+                <select
+                  className="month-jump-select month-jump-inline month-jump-inline-mobile"
+                  value={currentMonthKey}
+                  onChange={(event) => handleMonthJump(event.target.value)}
+                  aria-label="Jump to month"
+                >
+                  {monthJumpOptions.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
+            {calendarRangeMode === "month" ? null : <p className="calendar-subtitle">{rangeLabel}</p>}
           </div>
           <div className="calendar-header-actions">
-            <button className="account-button jump-today" type="button" onClick={handleTodayClick}>
-              Jump to Today
+            {calendarRangeMode === "month" && !isMobile ? (
+              <select
+                className="month-jump-select month-jump-inline"
+                value={currentMonthKey}
+                onChange={(event) => handleMonthJump(event.target.value)}
+                aria-label="Jump to month"
+              >
+                {monthJumpOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            <button
+              className="account-button jump-today jump-today-icon jump-today-cat"
+              type="button"
+              onClick={handleTodayClick}
+              aria-label="Jump to today"
+              title="Jump to today"
+            >
+              🐈
             </button>
-            {isMobile ? (
+            <div className="calendar-view-toggle" role="tablist" aria-label="Calendar view mode">
+              <button
+                className={`calendar-view-toggle-button ${
+                  calendarViewMode === "volunteers" ? "active" : ""
+                }`}
+                type="button"
+                role="tab"
+                aria-selected={calendarViewMode === "volunteers"}
+                onClick={() => setCalendarViewMode("volunteers")}
+              >
+                Volunteers
+              </button>
+              <button
+                className={`calendar-view-toggle-button ${
+                  calendarViewMode === "appointments" ? "active" : ""
+                }`}
+                type="button"
+                role="tab"
+                aria-selected={calendarViewMode === "appointments"}
+                onClick={() => setCalendarViewMode("appointments")}
+              >
+                Appointments
+              </button>
+            </div>
+            {isMobile && calendarRangeMode !== "month" ? (
               <button className="account-button jump-today" type="button" onClick={handleToggleAllDays}>
                 {allVisibleDaysCollapsed ? "Expand All" : "Collapse All"}
               </button>
@@ -3423,7 +4353,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           </div>
         </div>
 
-        <div className="calendar-grid">
+        <div className={`calendar-grid ${calendarRangeMode === "month" ? "month-mode" : ""}`}>
           {weekdayLabels.map((day, index) => (
             <div
               key={`${monthLabel}-${day}`}
@@ -3444,26 +4374,53 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             }
 
             const dateKey = getDateKey(cell.date);
+            const cellDate = cell.date;
+            const isOutsideMonth =
+              calendarRangeMode === "month" && cell.date.getMonth() !== baseDate.getMonth();
+            if (calendarRangeMode === "month" && isMobile && isOutsideMonth) {
+              return null;
+            }
             const isPastDay = startOfDay(cell.date).getTime() < todayStartMs;
-            const isCollapsed = isMobile && collapsedDayKeys.has(dateKey);
+            const isCollapsed =
+              isMobile && calendarRangeMode !== "month" && collapsedDayKeys.has(dateKey);
             const weekdayLabel = weekdayLabels[(cell.date.getDay() + 6) % 7];
             const dayShifts = orderedShiftsByDate[dateKey] ?? [];
+
+            const sortedDayShifts = dayShifts;
 
             return (
               <div
                 key={`${monthLabel}-${dateKey}`}
-                className={`day-cell ${isPastDay ? "past" : ""} ${isCollapsed ? "collapsed" : ""}`}
+                className={`day-cell ${isPastDay ? "past" : ""} ${isCollapsed ? "collapsed" : ""} ${
+                  calendarRangeMode === "month" ? "month-cell-clickable" : ""
+                } ${
+                  isOutsideMonth ? "outside" : ""
+                }`}
                 data-date={dateKey}
                 id={`day-${dateKey}`}
                 ref={dateKey === todayKey ? todayCellRef : undefined}
+                onClick={
+                  calendarRangeMode === "month"
+                    ? () => {
+                        setMonthDayDetailsDate(startOfDay(cellDate));
+                        setShowMonthDayDetails(true);
+                      }
+                    : undefined
+                }
               >
                 <div
-                  className={`day-header-row ${isMobile ? "day-header-row-clickable" : ""}`}
-                  role={isMobile ? "button" : undefined}
-                  tabIndex={isMobile ? 0 : undefined}
-                  onClick={isMobile ? () => toggleDayCollapsed(dateKey) : undefined}
+                  className={`day-header-row ${
+                    isMobile && calendarRangeMode !== "month" ? "day-header-row-clickable" : ""
+                  }`}
+                  role={isMobile && calendarRangeMode !== "month" ? "button" : undefined}
+                  tabIndex={isMobile && calendarRangeMode !== "month" ? 0 : undefined}
+                  onClick={
+                    isMobile && calendarRangeMode !== "month"
+                      ? () => toggleDayCollapsed(dateKey)
+                      : undefined
+                  }
                   onKeyDown={
-                    isMobile
+                    isMobile && calendarRangeMode !== "month"
                       ? (event) => {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
@@ -3481,233 +4438,70 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   </div>
                 </div>
                 {!isCollapsed ? (
-                  <div className="shift-list">
-                    {dayShifts.map((shift) => {
-                    const hasTimes = Boolean(shift.start && shift.end);
-                    const isPastShiftDay = startOfDay(shift.start).getTime() < todayStartMs;
-                    const assignmentList = weekAssignments[shift.instanceId] ?? [];
-                    const sortedAssignments = assignmentList
-                      .slice()
-                      .sort((left, right) => {
-                        const rankFor = (assignment: ShiftAssignmentDetail) => {
-                          if (assignment.status === "pending") return 3;
-                          if (isAdminRole(assignment.volunteer?.role)) return 0;
-                          if (isLeadRole(assignment.volunteer?.role)) return 1;
-                          if (isLeadAssignmentRole(assignment.assignment_role)) return 1;
-                          return 2;
-                        };
-                        const rankLeft = rankFor(left);
-                        const rankRight = rankFor(right);
-                        if (rankLeft !== rankRight) return rankLeft - rankRight;
-                        const leftCreated = left.created_at ?? "";
-                        const rightCreated = right.created_at ?? "";
-                        return leftCreated.localeCompare(rightCreated);
-                      });
-                    const filledAssignments = sortedAssignments.filter((assignment) =>
-                      Boolean(assignment.volunteer?.id),
-                    );
-                    const leadAssignment =
-                      filledAssignments.find(
-                        (assignment) =>
-                          isLeadAssignmentRole(assignment.assignment_role) ||
-                          isLeadRole(assignment.volunteer?.role) ||
-                          isAdminRole(assignment.volunteer?.role),
-                      ) ?? null;
-                    const regularAssignments = leadAssignment
-                      ? filledAssignments.filter((assignment) => assignment !== leadAssignment)
-                      : filledAssignments;
-                    const slotAssignments: Array<ShiftAssignmentDetail | null> = [
-                      leadAssignment,
-                      ...regularAssignments,
-                    ]
-                      .slice(0, 8);
-                    while (slotAssignments.length < 6) {
-                      slotAssignments.push(null);
-                    }
-                    const canAddExtraVolunteer = slotAssignments.length < 8;
-                    return (
-                      <div
-                        key={shift.id}
-                        className="shift-block"
-                      >
-                        <div className="shift-block-header">
-                          <div>
-                            <p className="shift-block-title">{shift.title}</p>
-                            <p className="shift-block-meta">
-                              {hasTimes
-                                ? `${timeFormatter.format(shift.start)}–${timeFormatter.format(
-                                    shift.end,
-                                  )}`
-                                : "—"}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="shift-assignment-list">
-                          {slotAssignments.map((assignment, index) => {
-                            const name =
-                              assignment?.volunteer?.preferred_name ||
-                              assignment?.volunteer?.full_name ||
-                              null;
-                            const hasVolunteer = Boolean(assignment?.volunteer?.id);
-                            const isLeadCoverageSlot = index === 0 && !hasVolunteer;
-                            const canClaimLeadCoverage =
-                              profile?.role === "Lead" || profile?.role === "Admin";
-                            const isVolunteerPastLocked = profile?.role !== "Admin" && isPastShiftDay;
-                            const slotClass =
-                              !assignment || !assignment.volunteer?.id
-                                ? index === 0
-                                  ? "needs-lead"
-                                  : "none"
-                                : assignment.status === "pending"
-                                  ? "pending"
-                                  : assignment.volunteer?.role === "Admin"
-                                    ? "admin"
-                                    : assignment.assignment_role === "lead"
-                                      ? "lead"
-                                      : "assigned";
-                            return (
-                              <button
-                                key={`${shift.id}-slot-${index}`}
-                                className={`capacity-slot ${slotClass}`}
-                                type="button"
-                                disabled={
-                                  isVolunteerPastLocked ||
-                                  (hasVolunteer &&
-                                    profile?.role !== "Admin" &&
-                                    assignment?.volunteer?.id !== session.user.id) ||
-                                  (isLeadCoverageSlot && !canClaimLeadCoverage)
-                                }
-                                onClick={async () => {
-                                  const resolvedInstanceId = await ensureShiftInstance(shift);
-                                  if (!resolvedInstanceId) return;
-                                  setActiveShiftInstanceId(resolvedInstanceId);
+                  calendarRangeMode === "month" ? (
+                    <div className="month-event-list">
+                      {dayShifts.slice(0, 2).map((shift) => {
+                        const maxItemsPerShift = isMobile ? 1 : 4;
+                        const monthShiftLabel = /morning/i.test(shift.title)
+                          ? isMobile && calendarRangeMode === "month"
+                            ? "AM"
+                            : "Morning"
+                          : /evening/i.test(shift.title)
+                            ? isMobile && calendarRangeMode === "month"
+                              ? "PM"
+                              : "Evening"
+                            : shift.title;
+                        const items =
+                          calendarViewMode === "appointments"
+                            ? (appointmentsByShift[shift.instanceId] ?? []).map((appointment) => ({
+                                key: `appt-${appointment.id}`,
+                                label: appointment.title,
+                                color: appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT,
+                              }))
+                            : (weekAssignments[shift.instanceId] ?? [])
+                                .filter(
+                                  (assignment) =>
+                                    assignment.status !== "pending" && Boolean(assignment.volunteer?.id),
+                                )
+                                .map((assignment) => ({
+                                  key: `asg-${assignment.id}`,
+                                  label:
+                                    assignment.volunteer?.preferred_name ||
+                                    assignment.volunteer?.full_name ||
+                                    "Volunteer",
+                                  color:
+                                    isLeadAssignmentRole(assignment.assignment_role) ||
+                                    isLeadRole(assignment.volunteer?.role) ||
+                                    isAdminRole(assignment.volunteer?.role)
+                                      ? "#60a5fa"
+                                      : "#34d399",
+                                }));
 
-                                  if (!assignment || !hasVolunteer) {
-                                    if (profile?.role === "Admin") {
-                                      setAssignMessage("");
-                                      setAssignVolunteerSearch("");
-                                      setAssignShiftInstanceId(resolvedInstanceId);
-                                      setShowAssignVolunteer(true);
-                                    } else {
-                                      if (index === 0 && profile?.role !== "Lead") {
-                                        return;
-                                      }
-                                      const alreadyOnShift = assignmentList.some(
-                                        (slot) =>
-                                          slot.volunteer?.id === session.user.id &&
-                                          slot.status !== "dropped",
-                                      );
-                                      if (alreadyOnShift) {
-                                        setTakeShiftMessage("You are already on this shift!");
-                                        setShowTakeShiftPrompt(true);
-                                        return;
-                                      }
-                                      setTakeShiftMessage("");
-                                      setTakeShiftMode("request");
-                                      setShowTakeShiftPrompt(true);
-                                    }
-                                  } else if (
-                                    assignment.volunteer?.id === session.user.id &&
-                                    profile?.role !== "Admin"
-                                  ) {
-                                    setDropTargetId(assignment.id);
-                                    setShowDropConfirm(true);
-                                  } else if (profile?.role === "Admin") {
-                                    if (assignment.status === "pending") {
-                                      const pendingName =
-                                        assignment.volunteer?.preferred_name ||
-                                        assignment.volunteer?.full_name ||
-                                        "Volunteer";
-                                      setPendingDecisionTarget({
-                                        id: assignment.id,
-                                        name: pendingName,
-                                      });
-                                      setShowPendingDecisionPrompt(true);
-                                    } else {
-                                      setNotesTarget(assignment);
-                                      setNotesDraft(assignment.notes ?? "");
-                                      setNotesMessage("");
-                                      setShowAssignmentNotes(true);
-                                    }
-                                  }
-                                }}
+                        return (
+                          <div key={`month-shift-${shift.id}`} className="month-shift-group">
+                            <p className="month-shift-title">{monthShiftLabel}</p>
+                            {items.slice(0, maxItemsPerShift).map((item) => (
+                              <div
+                                key={item.key}
+                                className="month-event-item"
+                                style={{ background: `${item.color}cc` }}
                               >
-                                {assignment?.status === "pending" ? (
-                                  "Pending"
-                                ) : assignment && hasVolunteer ? (
-                                  <div className="capacity-slot-content">
-                                    <span className="capacity-slot-name">
-                                      {name ?? "No Volunteer Assigned"}
-                                    </span>
-                                    {assignment.notes ? (
-                                      <span className="capacity-slot-phone">{assignment.notes}</span>
-                                    ) : (assignment.assignment_role === "lead" ||
-                                        assignment.volunteer?.role === "Admin") &&
-                                      assignment.volunteer?.phone ? (
-                                      isMobile ? (
-                                        <span className="capacity-slot-phone">
-                                          <a
-                                            className="capacity-slot-phone-link"
-                                            href={`tel:${normalizePhoneLink(
-                                              assignment.volunteer.phone,
-                                            )}`}
-                                          >
-                                            {assignment.volunteer.phone}
-                                          </a>
-                                        </span>
-                                      ) : (
-                                        <span className="capacity-slot-phone">
-                                          {assignment.volunteer.phone}
-                                        </span>
-                                      )
-                                    ) : null}
-                                  </div>
-                                ) : (
-                                  index === 0 ? "Needs Lead Coverage" : "No Volunteer Assigned"
-                                )}
-                              </button>
-                            );
-                          })}
-                          {canAddExtraVolunteer ? (
-                            <button
-                              className="capacity-slot capacity-slot-extra"
-                              type="button"
-                              disabled={profile?.role !== "Admin" && isPastShiftDay}
-                              onClick={async () => {
-                                const resolvedInstanceId = await ensureShiftInstance(shift);
-                                if (!resolvedInstanceId) return;
-                                setActiveShiftInstanceId(resolvedInstanceId);
-
-                                if (profile?.role === "Admin") {
-                                  setAssignMessage("");
-                                  setAssignVolunteerSearch("");
-                                  setAssignShiftInstanceId(resolvedInstanceId);
-                                  setShowAssignVolunteer(true);
-                                  return;
-                                }
-
-                                const alreadyOnShift = assignmentList.some(
-                                  (slot) =>
-                                    slot.volunteer?.id === session.user.id && slot.status !== "dropped",
-                                );
-                                if (alreadyOnShift) {
-                                  setTakeShiftMessage("You are already on this shift!");
-                                  setShowTakeShiftPrompt(true);
-                                  return;
-                                }
-                                setTakeShiftMessage("");
-                                setTakeShiftMode("request");
-                                setShowTakeShiftPrompt(true);
-                              }}
-                            >
-                              Add Extra Volunteer
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  </div>
+                                <span className="month-event-dot" style={{ background: item.color }} />
+                                <span className="month-event-label">{item.label}</span>
+                              </div>
+                            ))}
+                            {items.length > maxItemsPerShift ? (
+                              <p className="month-more-label">{items.length - maxItemsPerShift} more</p>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="shift-list">
+                      {sortedDayShifts.map((shift) => renderInteractiveShiftBlock(shift))}
+                    </div>
+                  )
                 ) : null}
               </div>
             );
@@ -3718,22 +4512,55 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             <button
               className="account-button mobile-week-prev"
               type="button"
-              onClick={() => setWeekOffset((value) => Math.max(0, value - 1))}
-              disabled={weekOffset === 0}
+              onClick={handlePrevRange}
+              disabled={calendarRangeMode === "week" && weekOffset === 0}
             >
-              Previous week
+              {calendarRangeMode === "month"
+                  ? "Previous month"
+                  : "Previous week"}
             </button>
             <button
               className="account-button mobile-week-next"
               type="button"
-              onClick={() => setWeekOffset((value) => Math.min(maxWeekOffset, value + 1))}
-              disabled={weekOffset >= maxWeekOffset}
+              onClick={handleNextRange}
+              disabled={calendarRangeMode === "week" && weekOffset >= maxWeekOffset}
             >
-              Next week
+              {calendarRangeMode === "month"
+                  ? "Next month"
+                  : "Next week"}
             </button>
           </div>
         ) : null}
       </section>
+
+      {!isMobile && showFloatingViewToggle && !isAnyModalOpen ? (
+        <div className="floating-view-toggle">
+          <div className="calendar-view-toggle" role="tablist" aria-label="Calendar view mode">
+            <button
+              className={`calendar-view-toggle-button ${
+                calendarViewMode === "volunteers" ? "active" : ""
+              }`}
+              type="button"
+              role="tab"
+              aria-selected={calendarViewMode === "volunteers"}
+              onClick={() => setCalendarViewMode("volunteers")}
+            >
+              Volunteers
+            </button>
+            <button
+              className={`calendar-view-toggle-button ${
+                calendarViewMode === "appointments" ? "active" : ""
+              }`}
+              type="button"
+              role="tab"
+              aria-selected={calendarViewMode === "appointments"}
+              onClick={() => setCalendarViewMode("appointments")}
+            >
+              Appointments
+            </button>
+          </div>
+        </div>
+      ) : null}
 
 
       {showMyShifts ? (
@@ -3906,6 +4733,392 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   </div>
                 ) : null}
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showWeekGlance ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
+          <div className="modal-panel week-glance-panel">
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow">Schedule</p>
+                <h3 className="modal-title">This week at a glance</h3>
+                <p className="modal-location">{rangeLabel}</p>
+              </div>
+              <div className="modal-header-actions">
+                <button className="modal-close" type="button" onClick={() => setShowWeekGlance(false)}>
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="modal-body">
+              <div
+                className="calendar-view-toggle week-glance-mode-toggle"
+                role="tablist"
+                aria-label="Week glance mode"
+              >
+                <button
+                  className={`calendar-view-toggle-button ${
+                    weekGlanceMode === "volunteers" ? "active" : ""
+                  }`}
+                  type="button"
+                  role="tab"
+                  aria-selected={weekGlanceMode === "volunteers"}
+                  onClick={() => setWeekGlanceMode("volunteers")}
+                >
+                  Volunteers
+                </button>
+                <button
+                  className={`calendar-view-toggle-button ${
+                    weekGlanceMode === "appointments" ? "active" : ""
+                  }`}
+                  type="button"
+                  role="tab"
+                  aria-selected={weekGlanceMode === "appointments"}
+                  onClick={() => setWeekGlanceMode("appointments")}
+                >
+                  Appointments
+                </button>
+              </div>
+              {(weekGlanceMode === "volunteers" ? weekGlanceRows.length : weekGlanceAppointmentRows.length) === 0 ? (
+                <div className="empty-banner">No shifts found for this week.</div>
+              ) : (
+                <div className="week-glance-table-wrap">
+                  <table className="week-glance-table">
+                    <thead>
+                      <tr>
+                        <th>Shift</th>
+                        {displayDayKeys.map((dayKey, index) => {
+                          const day = addDays(weekStart, index);
+                          return (
+                            <th key={`glance-head-${dayKey}`}>
+                              {WEEKDAYS_MONDAY_FIRST[index]}
+                              <br />
+                              <span>{dayFormatter.format(day)}</span>
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(weekGlanceMode === "volunteers"
+                        ? weekGlanceRows
+                        : weekGlanceAppointmentRows
+                      ).map((row) => (
+                        <tr key={row.key}>
+                          <td>
+                            <div className="week-glance-shift-title">{row.title}</div>
+                            <div className="week-glance-shift-time">{row.timeLabel}</div>
+                          </td>
+                          {displayDayKeys.map((dayKey) => {
+                            const dayData = row.byDay[dayKey] as
+                              | { leads: string[]; volunteers: string[]; pending: string[] }
+                              | Array<{ id: string; title: string; timeLabel: string | null }>
+                              | undefined;
+                            if (!dayData) return <td key={`${row.key}-${dayKey}`}>—</td>;
+                            if (weekGlanceMode === "appointments") {
+                              const appointmentItems = dayData as Array<{
+                                id: string;
+                                title: string;
+                                timeLabel: string | null;
+                              }>;
+                              if (appointmentItems.length === 0) {
+                                return <td key={`${row.key}-${dayKey}`}>—</td>;
+                              }
+                              return (
+                                <td key={`${row.key}-${dayKey}`}>
+                                  {appointmentItems.map((item) => (
+                                    <p key={item.id} className="week-glance-line">
+                                      {item.timeLabel ? `${item.timeLabel} ` : ""}
+                                      {item.title}
+                                    </p>
+                                  ))}
+                                </td>
+                              );
+                            }
+                            const volunteerData = dayData as {
+                              leads: string[];
+                              volunteers: string[];
+                              pending: string[];
+                            };
+                            return (
+                              <td key={`${row.key}-${dayKey}`}>
+                                {volunteerData.leads.length > 0 ? (
+                                  <p className="week-glance-line">L: {volunteerData.leads.join(", ")}</p>
+                                ) : null}
+                                {volunteerData.volunteers.length > 0 ? (
+                                  <p className="week-glance-line">V: {volunteerData.volunteers.join(", ")}</p>
+                                ) : null}
+                                {volunteerData.pending.length > 0 ? (
+                                  <p className="week-glance-line week-glance-pending">
+                                    Pending: {volunteerData.pending.join(", ")}
+                                  </p>
+                                ) : null}
+                                {volunteerData.leads.length === 0 &&
+                                volunteerData.volunteers.length === 0 &&
+                                volunteerData.pending.length === 0
+                                  ? "—"
+                                  : null}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showMonthDayDetails && monthDayDetailsDate ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
+          <div className="modal-panel appointments-panel">
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow">Schedule details</p>
+                <h3 className="modal-title">
+                  {monthDayDetailsDate.toLocaleDateString("en-US", {
+                    weekday: "long",
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </h3>
+                <p className="modal-location">
+                  {monthDayDetailsShifts.length} shift{monthDayDetailsShifts.length === 1 ? "" : "s"}
+                </p>
+              </div>
+              <button className="modal-close" type="button" onClick={() => setShowMonthDayDetails(false)}>
+                Close
+              </button>
+            </div>
+            <div className="modal-body">
+              {monthDayDetailsShifts.length === 0 ? (
+                <div className="empty-banner">No shifts for this date.</div>
+              ) : (
+                <div className="shift-list">
+                  {monthDayDetailsShifts.map((shift) => renderInteractiveShiftBlock(shift, "month-details-"))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showAppointments ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
+          <div className="modal-panel appointments-panel">
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow">Shift planning</p>
+                <h3 className="modal-title">Appointments</h3>
+                <p className="modal-location">
+                  {appointmentsShift?.title ?? "Shift"}{" "}
+                  {appointmentsShift
+                    ? `• ${timeFormatter.format(appointmentsShift.start)}-${timeFormatter.format(
+                        appointmentsShift.end,
+                      )}`
+                    : ""}
+                </p>
+              </div>
+              <button className="modal-close" type="button" onClick={() => setShowAppointments(false)}>
+                Close
+              </button>
+            </div>
+            <div className="modal-body">
+              {appointmentsLoading ? <div className="loading-banner">Loading appointments...</div> : null}
+              {appointmentsMessage ? <div className="error-banner">{appointmentsMessage}</div> : null}
+
+              {canManageAppointments ? (
+                <div className="account-section appointment-form">
+                  <p className="account-section-title">
+                    {appointmentForm.id ? "Edit appointment" : "New appointment"}
+                  </p>
+                  <input
+                    className="form-input"
+                    type="text"
+                    placeholder="Title"
+                    value={appointmentForm.title}
+                    onChange={(event) =>
+                      setAppointmentForm((prev) => ({
+                        ...prev,
+                        title: event.target.value,
+                      }))
+                    }
+                  />
+                  <textarea
+                    className="form-input form-textarea"
+                    placeholder="Description"
+                    value={appointmentForm.description}
+                    onChange={(event) =>
+                      setAppointmentForm((prev) => ({
+                        ...prev,
+                        description: event.target.value,
+                      }))
+                    }
+                  />
+                  <div className="appointment-form-grid">
+                    <label className="form-label">
+                      Appointment type
+                      <select
+                        className="form-input"
+                        value={appointmentForm.kind}
+                        onChange={(event) => {
+                          const nextKind = event.target.value as AppointmentKind;
+                          setAppointmentForm((prev) => {
+                            if (nextKind === "foster") {
+                              return { ...prev, kind: nextKind, color: APPOINTMENT_COLOR_FOSTER };
+                            }
+                            if (nextKind === "adoption") {
+                              return { ...prev, kind: nextKind, color: APPOINTMENT_COLOR_ADOPTION };
+                            }
+                            const inheritedColor =
+                              prev.color === APPOINTMENT_COLOR_FOSTER ||
+                              prev.color === APPOINTMENT_COLOR_ADOPTION
+                                ? APPOINTMENT_COLOR_OTHER_DEFAULT
+                                : prev.color;
+                            return { ...prev, kind: nextKind, color: inheritedColor };
+                          });
+                        }}
+                      >
+                        <option value="foster">Foster</option>
+                        <option value="adoption">Adoption</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </label>
+                    {appointmentForm.kind === "other" ? (
+                      <label className="form-label">
+                        Color
+                        <input
+                          className="form-input form-color"
+                          type="color"
+                          value={appointmentForm.color}
+                          onChange={(event) =>
+                            setAppointmentForm((prev) => ({
+                              ...prev,
+                              color: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    ) : null}
+                    <label className="form-label">
+                      Start time (optional)
+                      <input
+                        className="form-input appointment-time-input"
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="HH:MM"
+                        maxLength={5}
+                        value={appointmentForm.starts_at}
+                        onChange={(event) =>
+                          setAppointmentForm((prev) => ({
+                            ...prev,
+                            starts_at: event.target.value.replace(/[^\d:]/g, "").slice(0, 5),
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                  <div className="modal-row">
+                    <button
+                      className="account-button"
+                      type="button"
+                      onClick={handleSaveAppointment}
+                      disabled={appointmentSaving}
+                    >
+                      {appointmentSaving ? "Saving..." : appointmentForm.id ? "Save changes" : "Add appointment"}
+                    </button>
+                    {appointmentForm.id ? (
+                      <button
+                        className="account-button"
+                        type="button"
+                        onClick={() =>
+                          setAppointmentForm({
+                            id: null,
+                            kind: "other",
+                            title: "",
+                            description: "",
+                            color: APPOINTMENT_COLOR_OTHER_DEFAULT,
+                            starts_at: "",
+                          })
+                        }
+                      >
+                        Cancel edit
+                      </button>
+                    ) : null}
+                    {appointmentForm.id ? (
+                      <button
+                        className="account-button"
+                        type="button"
+                        onClick={() => {
+                          if (!appointmentForm.id) return;
+                          void handleDeleteAppointment(appointmentForm.id);
+                        }}
+                        disabled={appointmentDeleteId === appointmentForm.id}
+                      >
+                        {appointmentDeleteId === appointmentForm.id ? "Deleting..." : "Delete"}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {!appointmentForm.id ? (
+                <div className="appointments-list">
+                  {selectedShiftAppointments.length === 0 ? (
+                    <div className="empty-banner">No appointments on this shift yet.</div>
+                  ) : (
+                    selectedShiftAppointments.map((appointment) => (
+                      <div
+                        key={appointment.id}
+                        className="appointment-card"
+                        style={{
+                          borderColor: appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT,
+                          background: `${appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT}22`,
+                        }}
+                      >
+                        <div className="appointment-card-header">
+                          <p className="appointment-title">{appointment.title}</p>
+                          <p className="appointment-time">
+                            {appointment.starts_at ? format24HourTime(appointment.starts_at) : "No time set"}
+                          </p>
+                        </div>
+                        {appointment.description ? (
+                          <button
+                            className="appointment-expand-button"
+                            type="button"
+                            onClick={() => toggleAppointmentExpanded(appointment.id)}
+                          >
+                            {expandedAppointmentIds.has(appointment.id)
+                              ? "Hide details"
+                              : "Show details"}
+                          </button>
+                        ) : null}
+                        {appointment.description && expandedAppointmentIds.has(appointment.id) ? (
+                          <p className="appointment-description">{appointment.description}</p>
+                        ) : null}
+                        {canManageAppointments ? (
+                          <div className="appointment-actions">
+                            <button
+                              className="nav-button"
+                              type="button"
+                              onClick={() => handleDeleteAppointment(appointment.id)}
+                              disabled={appointmentDeleteId === appointment.id}
+                            >
+                              {appointmentDeleteId === appointment.id ? "Deleting..." : "Delete"}
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))
+                  )}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
