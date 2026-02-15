@@ -55,6 +55,7 @@ type ShiftInstance = {
 type ShiftAssignmentDetail = {
   id: string;
   created_at?: string | null;
+  updated_at?: string | null;
   dropped_at?: string | null;
   status?: "active" | "dropped" | "pending";
   dropped_reason?: string | null;
@@ -235,7 +236,9 @@ function getMonthKey(date: Date) {
 }
 
 function getNotificationReadToken(item: ShiftAssignmentDetail) {
-  return item.id;
+  const status = item.status ?? "unknown";
+  const changeMoment = item.updated_at ?? item.dropped_at ?? item.created_at ?? "";
+  return `${item.id}:${status}:${changeMoment}`;
 }
 
 const SELF_DROP_REASON_PREFIX = "__self_drop__:";
@@ -1679,6 +1682,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const baseSelect = `
         id,
         created_at,
+        updated_at,
         dropped_at,
         status,
         dropped_reason,
@@ -2461,6 +2465,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         `
         id,
         created_at,
+        updated_at,
         status,
         dropped_reason,
         assignment_role,
@@ -2524,6 +2529,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         `
         id,
         created_at,
+        updated_at,
         status,
         dropped_reason,
         assignment_role,
@@ -3874,7 +3880,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                               type="button"
                               onClick={() => handleNotificationDecision(request.id, "approve")}
                             >
-                              Approve
+                              {`Approve (${volunteerName})`}
                             </button>
                           </div>
                         </div>
