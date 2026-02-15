@@ -55,7 +55,6 @@ type ShiftInstance = {
 type ShiftAssignmentDetail = {
   id: string;
   created_at?: string | null;
-  updated_at?: string | null;
   dropped_at?: string | null;
   status?: "active" | "dropped" | "pending";
   dropped_reason?: string | null;
@@ -79,6 +78,7 @@ type ShiftAssignmentDetail = {
     } | null;
   } | null;
 };
+
 
 type CalendarCell = {
   date: Date | null;
@@ -235,13 +235,20 @@ function getMonthKey(date: Date) {
   return `${year}-${month}`;
 }
 
-function getNotificationReadToken(item: ShiftAssignmentDetail) {
+function getNotificationSortTimestamp(item: ShiftAssignmentDetail) {
+  const value = item.dropped_at ?? item.created_at ?? "";
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function getNotificationDismissToken(item: ShiftAssignmentDetail) {
   const status = item.status ?? "unknown";
-  const changeMoment = item.updated_at ?? item.dropped_at ?? item.created_at ?? "";
+  const changeMoment = item.dropped_at ?? item.created_at ?? "";
   return `${item.id}:${status}:${changeMoment}`;
 }
 
 const SELF_DROP_REASON_PREFIX = "__self_drop__:";
+const ADMIN_DROPPED_NOTIFICATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 
 function isSelfDropReason(reason: string | null | undefined) {
   return Boolean(reason && reason.startsWith(SELF_DROP_REASON_PREFIX));
@@ -657,8 +664,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsMessage, setNotificationsMessage] = useState("");
   const [notifications, setNotifications] = useState<ShiftAssignmentDetail[]>([]);
+  const [dismissedNotificationTokens, setDismissedNotificationTokens] = useState<Set<string>>(new Set());
+  const [hasLoadedNotifications, setHasLoadedNotifications] = useState(false);
   const [notificationCount, setNotificationCount] = useState(0);
-  const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(new Set());
   const [showAssignVolunteer, setShowAssignVolunteer] = useState(false);
   const [assignShiftInstanceId, setAssignShiftInstanceId] = useState<number | null>(null);
   const [assignLoading, setAssignLoading] = useState(false);
@@ -666,6 +674,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [showDenyPrompt, setShowDenyPrompt] = useState(false);
   const [denyReason, setDenyReason] = useState("");
   const [denyTargetId, setDenyTargetId] = useState<string | null>(null);
+  const [showPendingDecisionPrompt, setShowPendingDecisionPrompt] = useState(false);
+  const [pendingDecisionTarget, setPendingDecisionTarget] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [showDropConfirm, setShowDropConfirm] = useState(false);
   const [showDropReason, setShowDropReason] = useState(false);
   const [dropReason, setDropReason] = useState("");
@@ -725,6 +738,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const scrollYRef = useRef(0);
+  const liveRefreshInFlightRef = useRef(false);
   const todayCellRef = useRef<HTMLDivElement | null>(null);
   const todayKey = getDateKey(today);
   const [showMenu, setShowMenu] = useState(false);
@@ -751,6 +765,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     ],
     [],
   );
+  const dismissedStorageKey = `notificationsDismissed:${session.user.id}`;
 
   useEffect(() => {
     let mounted = true;
@@ -1670,19 +1685,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     };
   }, [fetchWeekAssignments, fetchMyShifts, fetchPersonalAssignments]);
 
-  const computeUnreadCount = useCallback(
-    (items: ShiftAssignmentDetail[]) =>
-      items.filter((item) => !readNotificationIds.has(getNotificationReadToken(item))).length,
-    [readNotificationIds],
-  );
-
   const fetchNotifications = useCallback(async () => {
-    setNotificationsLoading(true);
+    setNotificationsLoading(!hasLoadedNotifications);
     setNotificationsMessage("");
     const baseSelect = `
         id,
         created_at,
-        updated_at,
         dropped_at,
         status,
         dropped_reason,
@@ -1799,26 +1807,29 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const items = rawItems
       .filter((item) => {
+        if (profile?.role === "Admin") {
+          if (item.status === "pending") return true;
+          if (item.status !== "dropped") return false;
+          const droppedAt = item.dropped_at ?? item.created_at ?? "";
+          const droppedTs = Date.parse(droppedAt);
+          if (Number.isNaN(droppedTs)) return false;
+          return Date.now() - droppedTs <= ADMIN_DROPPED_NOTIFICATION_WINDOW_MS;
+        }
         if (item.status === "dropped") return true;
-        if (item.status !== "active") return profile?.role === "Admin";
+        if (item.status !== "active") return false;
         const createdAt = item.created_at ? Date.parse(item.created_at) : NaN;
         if (Number.isNaN(createdAt)) return false;
         // Keep one-off active notifications fresh, but prevent recurring bulk assignments
         // from flooding the in-app notification list.
         return Date.now() - createdAt <= 5 * 60 * 1000;
       })
-      .sort((left, right) => {
-        const leftTs = Date.parse(left.dropped_at ?? left.created_at ?? "");
-        const rightTs = Date.parse(right.dropped_at ?? right.created_at ?? "");
-        if (Number.isNaN(leftTs) && Number.isNaN(rightTs)) return 0;
-        if (Number.isNaN(leftTs)) return 1;
-        if (Number.isNaN(rightTs)) return -1;
-        return rightTs - leftTs;
-      });
+      .filter((item) => !dismissedNotificationTokens.has(getNotificationDismissToken(item)))
+      .sort((left, right) => getNotificationSortTimestamp(right) - getNotificationSortTimestamp(left));
     setNotifications(items);
-    setNotificationCount(computeUnreadCount(items));
+    setNotificationCount(items.length);
     setNotificationsLoading(false);
-  }, [profile?.role, session.user.id, computeUnreadCount]);
+    setHasLoadedNotifications(true);
+  }, [profile?.role, session.user.id, hasLoadedNotifications, dismissedNotificationTokens]);
 
   useEffect(() => {
     if (!showNotifications) return;
@@ -1864,19 +1875,37 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [profile?.role, session.user.id, showNotifications, fetchNotifications]);
 
   useEffect(() => {
-    const readKey = `notificationsRead:${session.user.id}`;
-    const readStored = localStorage.getItem(readKey);
-    if (readStored) {
-      try {
-        const parsed = JSON.parse(readStored) as string[];
-        setReadNotificationIds(new Set(parsed));
-      } catch {
-        setReadNotificationIds(new Set());
-      }
-    } else {
-      setReadNotificationIds(new Set());
+    const stored = localStorage.getItem(dismissedStorageKey);
+    if (!stored) {
+      setDismissedNotificationTokens(new Set());
+      return;
     }
-  }, [session.user.id]);
+    try {
+      const parsed = JSON.parse(stored) as string[];
+      setDismissedNotificationTokens(new Set(parsed ?? []));
+    } catch {
+      setDismissedNotificationTokens(new Set());
+    }
+  }, [dismissedStorageKey]);
+
+  const persistDismissedTokens = useCallback(
+    (next: Set<string>) => {
+      localStorage.setItem(dismissedStorageKey, JSON.stringify(Array.from(next).slice(-1000)));
+      setDismissedNotificationTokens(next);
+    },
+    [dismissedStorageKey],
+  );
+
+  const handleDeleteAllNotifications = useCallback(() => {
+    if (notifications.length === 0) return;
+    const next = new Set(dismissedNotificationTokens);
+    notifications.forEach((item) => {
+      next.add(getNotificationDismissToken(item));
+    });
+    persistDismissedTokens(next);
+    setNotifications([]);
+    setNotificationCount(0);
+  }, [notifications, dismissedNotificationTokens, persistDismissedTokens]);
 
   useEffect(() => {
     const storageKey = `weekOffset:${session.user.id}`;
@@ -1894,11 +1923,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     localStorage.setItem(storageKey, String(weekOffset));
   }, [session.user.id, weekOffset]);
 
-  const persistReadIds = (next: Set<string>) => {
-    const readKey = `notificationsRead:${session.user.id}`;
-    localStorage.setItem(readKey, JSON.stringify(Array.from(next)));
-    setReadNotificationIds(next);
-  };
+  useEffect(() => {
+    setHasLoadedNotifications(false);
+  }, [session.user.id]);
 
   useEffect(() => {
     fetchNotifications();
@@ -1940,15 +1967,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     });
   }, [sortedVolunteers, assignVolunteerSearch]);
 
-  const unreadNotifications = useMemo(() => {
-    return notifications.filter(
-      (item) => !readNotificationIds.has(getNotificationReadToken(item)),
-    );
-  }, [notifications, readNotificationIds]);
-
   useEffect(() => {
-    setNotificationCount(computeUnreadCount(notifications));
-  }, [notifications, readNotificationIds, computeUnreadCount]);
+    setNotificationCount(notifications.length);
+  }, [notifications]);
 
   useEffect(() => {
     if (typeof document !== "undefined") {
@@ -2420,7 +2441,39 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    const approvedRequest = notifications.find((item) => item.id === assignmentId);
+    let approvedRequest = notifications.find((item) => item.id === assignmentId);
+    if (!approvedRequest) {
+      const { data: approvedData } = await supabase
+        .from("shift_assignments")
+        .select(
+          `
+          id,
+          created_at,
+          status,
+          dropped_reason,
+          assignment_role,
+          volunteer:profiles (
+            id,
+            full_name,
+            preferred_name,
+            role
+          ),
+          shift_instance:shift_instances (
+            id,
+            shift_date,
+            starts_at,
+            ends_at,
+            template:shift_templates (
+              id,
+              title
+            )
+          )
+        `,
+        )
+        .eq("id", assignmentId)
+        .maybeSingle();
+      approvedRequest = (approvedData as unknown as ShiftAssignmentDetail | null) ?? undefined;
+    }
     const approvedVolunteerId = approvedRequest?.volunteer?.id;
     const approvedVolunteerName =
       approvedRequest?.volunteer?.preferred_name ||
@@ -2465,7 +2518,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         `
         id,
         created_at,
-        updated_at,
         status,
         dropped_reason,
         assignment_role,
@@ -2488,7 +2540,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       `,
       )
       .eq("status", "pending")
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: false });
 
     setNotifications((data as unknown as ShiftAssignmentDetail[]) ?? []);
     setNotificationsLoading(false);
@@ -2529,7 +2581,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         `
         id,
         created_at,
-        updated_at,
         status,
         dropped_reason,
         assignment_role,
@@ -2552,7 +2603,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       `,
       )
       .eq("status", "pending")
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: false });
 
     setNotifications((data as unknown as ShiftAssignmentDetail[]) ?? []);
     setNotificationsLoading(false);
@@ -2941,6 +2992,38 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     target.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
   };
 
+  const jumpToNotificationShift = (item: ShiftAssignmentDetail) => {
+    const shift = item.shift_instance;
+    if (!shift) return;
+    let targetDate: Date | null = null;
+    if (shift.starts_at) {
+      const parsed = new Date(shift.starts_at);
+      if (!Number.isNaN(parsed.getTime())) {
+        targetDate = startOfDay(parsed);
+      }
+    }
+    if (!targetDate && shift.shift_date) {
+      const parsed = parseDateOnly(shift.shift_date);
+      if (parsed) targetDate = startOfDay(parsed);
+    }
+    if (!targetDate) return;
+
+    const targetWeekStart = getWeekStart(targetDate, true);
+    const currentWeekStart = getWeekStart(startOfDay(today), true);
+    const rawOffset = Math.floor(diffInDays(currentWeekStart, targetWeekStart) / 7);
+    const clampedOffset = Math.min(maxWeekOffset, Math.max(0, rawOffset));
+    const targetKey = getDateKey(targetDate);
+
+    setShowNotifications(false);
+    setWeekOffset(clampedOffset);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollToDateKey(targetKey);
+        window.setTimeout(() => scrollToDateKey(targetKey), 200);
+      });
+    });
+  };
+
   useEffect(() => {
     if (todayJumpToken === 0 || weekOffset !== 0) return;
     const targetKey = getDateKey(startOfDay(new Date()));
@@ -3059,6 +3142,48 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
   };
 
+  const runLiveRefresh = useCallback(async () => {
+    if (liveRefreshInFlightRef.current) return;
+    liveRefreshInFlightRef.current = true;
+    try {
+      await Promise.all([
+        fetchWeekAssignments(),
+        fetchPersonalAssignments(),
+        fetchMyShifts(),
+        fetchNotifications(),
+      ]);
+    } finally {
+      liveRefreshInFlightRef.current = false;
+    }
+  }, [fetchWeekAssignments, fetchPersonalAssignments, fetchMyShifts, fetchNotifications]);
+
+  useEffect(() => {
+    const handleVisibleRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void runLiveRefresh();
+    };
+
+    const handleOnlineRefresh = () => {
+      void runLiveRefresh();
+    };
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void runLiveRefresh();
+    }, 15000);
+
+    window.addEventListener("focus", handleVisibleRefresh);
+    document.addEventListener("visibilitychange", handleVisibleRefresh);
+    window.addEventListener("online", handleOnlineRefresh);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleVisibleRefresh);
+      document.removeEventListener("visibilitychange", handleVisibleRefresh);
+      window.removeEventListener("online", handleOnlineRefresh);
+    };
+  }, [runLiveRefresh]);
+
   const handleModalBackdropClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
     setShowMyShifts(false);
@@ -3070,6 +3195,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowDropConfirm(false);
     setShowDropReason(false);
     setShowDenyPrompt(false);
+    setShowPendingDecisionPrompt(false);
     setShowRemovePrompt(false);
     setShowAssignmentNotes(false);
     setShowVolunteers(false);
@@ -3427,10 +3553,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                     setDropTargetId(assignment.id);
                                     setShowDropConfirm(true);
                                   } else if (profile?.role === "Admin") {
-                                    setNotesTarget(assignment);
-                                    setNotesDraft(assignment.notes ?? "");
-                                    setNotesMessage("");
-                                    setShowAssignmentNotes(true);
+                                    if (assignment.status === "pending") {
+                                      const pendingName =
+                                        assignment.volunteer?.preferred_name ||
+                                        assignment.volunteer?.full_name ||
+                                        "Volunteer";
+                                      setPendingDecisionTarget({
+                                        id: assignment.id,
+                                        name: pendingName,
+                                      });
+                                      setShowPendingDecisionPrompt(true);
+                                    } else {
+                                      setNotesTarget(assignment);
+                                      setNotesDraft(assignment.notes ?? "");
+                                      setNotesMessage("");
+                                      setShowAssignmentNotes(true);
+                                    }
                                   }
                                 }}
                               >
@@ -3783,17 +3921,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </div>
               <div className="modal-header-actions">
                 <button
-                  className="nav-button"
+                  className="account-button"
                   type="button"
-                  onClick={() => {
-                    const next = new Set(readNotificationIds);
-                    unreadNotifications.forEach((item) => next.add(getNotificationReadToken(item)));
-                    persistReadIds(next);
-                    setNotifications([]);
-                    setNotificationCount(0);
-                  }}
+                  onClick={handleDeleteAllNotifications}
+                  disabled={notifications.length === 0}
                 >
-                  Clear all
+                  Delete all
                 </button>
                 <button
                   className="modal-close"
@@ -3806,17 +3939,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             </div>
             <div className="modal-body">
               {notificationsLoading ? (
-                <div className="loading-banner">Loading requests...</div>
+                <div className="loading-banner">
+                  {notifications.length > 0 ? "Refreshing notifications..." : "Loading notifications..."}
+                </div>
               ) : null}
               {notificationsMessage ? (
                 <div className="error-banner">{notificationsMessage}</div>
               ) : null}
-              {unreadNotifications.length === 0 && !notificationsLoading ? (
+              {notifications.length === 0 && !notificationsLoading ? (
                 <div className="empty-banner">Nothing Here!</div>
               ) : null}
-              {unreadNotifications.length > 0 ? (
+              {notifications.length > 0 ? (
                 <div className="notifications-list">
-                  {unreadNotifications.map((request) => {
+                  {notifications.map((request, index) => {
                     const volunteerName =
                       request.volunteer?.preferred_name ||
                       request.volunteer?.full_name ||
@@ -3829,27 +3964,30 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       endsAt ? ` — ${formatDateTime(endsAt)}` : ""
                     } · ${shiftTitle}`;
                     const readableDropReason = normalizeDropReason(request.dropped_reason);
-
-                    const markRead = () => {
-                      const next = new Set(readNotificationIds);
-                      next.add(getNotificationReadToken(request));
-                      persistReadIds(next);
-                      setNotifications((prev) => prev.filter((item) => item.id !== request.id));
-                    };
+                    const isLatest = index === 0;
 
                     if (profile?.role === "Admin") {
                       if (request.status === "dropped") {
                         return (
-                          <div key={request.id} className="notification-card">
-                            <label className="notification-read">
-                              <input type="checkbox" onChange={markRead} checked={false} />
-                              <span className="notification-check-label">Mark read</span>
-                            </label>
+                          <div
+                            key={request.id}
+                            className={`notification-card ${isLatest ? "latest" : ""}`}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => jumpToNotificationShift(request)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                jumpToNotificationShift(request);
+                              }
+                            }}
+                          >
                             <div className="notification-info">
+                              {isLatest ? <span className="notification-tag">Latest</span> : null}
+                              <p className="notification-meta">{timeLine}</p>
                               <p className="notification-name">
                                 {volunteerName} dropped a shift
                               </p>
-                              <p className="notification-meta">{timeLine}</p>
                               {readableDropReason ? (
                                 <p className="notification-reason">{readableDropReason}</p>
                               ) : null}
@@ -3858,29 +3996,44 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         );
                       }
                       return (
-                        <div key={request.id} className="notification-card">
-                          <label className="notification-read">
-                            <input type="checkbox" onChange={markRead} checked={false} />
-                            <span className="notification-check-label">Mark read</span>
-                          </label>
+                        <div
+                          key={request.id}
+                          className={`notification-card ${isLatest ? "latest" : ""}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => jumpToNotificationShift(request)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              jumpToNotificationShift(request);
+                            }
+                          }}
+                        >
                           <div className="notification-info">
-                            <p className="notification-name">{volunteerName} request to join</p>
+                            {isLatest ? <span className="notification-tag">Latest</span> : null}
                             <p className="notification-meta">{timeLine}</p>
+                            <p className="notification-name">{volunteerName} request to join</p>
                           </div>
                           <div className="notification-actions">
                             <button
                               className="nav-button"
                               type="button"
-                              onClick={() => handleNotificationDecision(request.id, "deny")}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleNotificationDecision(request.id, "deny");
+                              }}
                             >
                               Deny
                             </button>
                             <button
                               className="account-button"
                               type="button"
-                              onClick={() => handleNotificationDecision(request.id, "approve")}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleNotificationDecision(request.id, "approve");
+                              }}
                             >
-                              {`Approve (${volunteerName})`}
+                              Approve
                             </button>
                           </div>
                         </div>
@@ -3897,14 +4050,23 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           : `Shift Denied · ${shiftTitle}`;
 
                     return (
-                      <div key={request.id} className="notification-card">
-                        <label className="notification-read">
-                          <input type="checkbox" onChange={markRead} checked={false} />
-                          <span className="notification-check-label">Mark read</span>
-                        </label>
+                      <div
+                        key={request.id}
+                        className={`notification-card ${isLatest ? "latest" : ""}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => jumpToNotificationShift(request)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            jumpToNotificationShift(request);
+                          }
+                        }}
+                      >
                         <div className="notification-info">
-                          <p className="notification-name">{statusLabel}</p>
+                          {isLatest ? <span className="notification-tag">Latest</span> : null}
                           <p className="notification-meta">{timeLine}</p>
+                          <p className="notification-name">{statusLabel}</p>
                           {request.status === "dropped" &&
                           readableDropReason &&
                           request.dropped_reason !== "Removed by admin" &&
@@ -4195,6 +4357,64 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   onClick={handleConfirmDeny}
                 >
                   Deny request
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showPendingDecisionPrompt ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
+          <div className="modal-panel take-shift-panel">
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow">Admin</p>
+                <h3 className="modal-title">Pending request</h3>
+              </div>
+              <button
+                className="modal-close"
+                type="button"
+                onClick={() => {
+                  setShowPendingDecisionPrompt(false);
+                  setPendingDecisionTarget(null);
+                }}
+              >
+                Close
+              </button>
+            </div>
+            <div className="modal-body">
+              <p className="modal-text">
+                {pendingDecisionTarget
+                  ? `${pendingDecisionTarget.name} requested to join this shift.`
+                  : "This volunteer requested to join this shift."}
+              </p>
+              <div className="modal-actions">
+                <button
+                  className="nav-button"
+                  type="button"
+                  onClick={() => {
+                    if (!pendingDecisionTarget) return;
+                    const targetId = pendingDecisionTarget.id;
+                    setShowPendingDecisionPrompt(false);
+                    setPendingDecisionTarget(null);
+                    void handleNotificationDecision(targetId, "deny");
+                  }}
+                >
+                  Deny
+                </button>
+                <button
+                  className="account-button"
+                  type="button"
+                  onClick={() => {
+                    if (!pendingDecisionTarget) return;
+                    const targetId = pendingDecisionTarget.id;
+                    setShowPendingDecisionPrompt(false);
+                    setPendingDecisionTarget(null);
+                    void handleNotificationDecision(targetId, "approve");
+                  }}
+                >
+                  Approve
                 </button>
               </div>
             </div>
