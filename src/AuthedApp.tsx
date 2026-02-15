@@ -789,6 +789,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [appointmentsByShift, setAppointmentsByShift] = useState<Record<number, ShiftAppointment[]>>({});
   const [appointmentsLoading, setAppointmentsLoading] = useState(false);
   const [appointmentsMessage, setAppointmentsMessage] = useState("");
+  const [mobileAppointmentsShiftId, setMobileAppointmentsShiftId] = useState<number | null>(null);
   const [appointmentForm, setAppointmentForm] = useState({
     id: null as string | null,
     kind: "other" as AppointmentKind,
@@ -840,6 +841,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
   const notificationsEnabled = displayProfile?.notification_pref === "push_and_email";
   const canManageAppointments = profile?.role === "Admin" || profile?.role === "Lead";
+  const canModifyAppointments = profile?.role === "Admin";
   const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
   if (import.meta.env.DEV && !vapidPublicKey) {
     console.warn("Missing VITE_VAPID_PUBLIC_KEY");
@@ -2518,7 +2520,25 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           }
         >
           <div>
-            <p className="shift-block-title">{shift.title}</p>
+            <div className="shift-block-title-row">
+              <p className="shift-block-title">{shift.title}</p>
+              {isMobile && calendarViewMode === "volunteers" ? (
+                <button
+                  className={`shift-appointments-button ${
+                    mobileAppointmentsShiftId === shift.instanceId ? "shift-appointments-open" : ""
+                  }`}
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setMobileAppointmentsShiftId((current) =>
+                      current === shift.instanceId ? null : shift.instanceId,
+                    );
+                  }}
+                >
+                  Appointments {appointmentsForShift.length}
+                </button>
+              ) : null}
+            </div>
             <p className="shift-block-meta">
               {hasTimes ? `${timeFormatter.format(shift.start)}–${timeFormatter.format(shift.end)}` : "—"}
             </p>
@@ -2529,6 +2549,46 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         </div>
         {calendarViewMode === "volunteers" ? (
           <div className="shift-assignment-list">
+            {isMobile && mobileAppointmentsShiftId === shift.instanceId ? (
+              <div className="shift-appointments-inline">
+                {appointmentsForShift.length === 0 ? (
+                  <p className="shift-appointment-empty">No appointments</p>
+                ) : (
+                  appointmentsForShift.map((appointment) => (
+                    <div key={appointment.id} className="shift-appointment-item">
+                      <button
+                        className="shift-appointment-button"
+                        type="button"
+                        onClick={() => toggleAppointmentExpanded(appointment.id)}
+                        style={{
+                          borderLeftColor: appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT,
+                        }}
+                      >
+                        <span className="shift-appointment-title">{appointment.title}</span>
+                        {appointment.starts_at ? (
+                          <span className="shift-appointment-meta">{format24HourTime(appointment.starts_at)}</span>
+                        ) : null}
+                      </button>
+                      {expandedAppointmentIds.has(appointment.id) ? (
+                        <div className="shift-appointment-popover shift-appointment-popover-inline">
+                          <p className="shift-appointment-popover-title">{appointment.title}</p>
+                          {appointment.starts_at ? (
+                            <p className="shift-appointment-popover-meta">
+                              {format24HourTime(appointment.starts_at)}
+                            </p>
+                          ) : null}
+                          {appointment.description ? (
+                            <p className="shift-appointment-description">{appointment.description}</p>
+                          ) : (
+                            <p className="shift-appointment-description">No details added.</p>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            ) : null}
             {slotAssignments.map((assignment, index) => {
               const name = assignment?.volunteer?.preferred_name || assignment?.volunteer?.full_name || null;
               const hasVolunteer = Boolean(assignment?.volunteer?.id);
@@ -2684,7 +2744,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       onClick={async () => {
                         if (canManageAppointments) {
                           await handleOpenAppointments(shift);
-                          handleEditAppointment(appointment);
+                          if (canModifyAppointments) {
+                            handleEditAppointment(appointment);
+                          }
                           return;
                         }
                         toggleAppointmentExpanded(appointment.id);
@@ -3045,6 +3107,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, []);
 
   const handleSaveAppointment = useCallback(async () => {
+    if (!canModifyAppointments) {
+      setAppointmentsMessage("Only admins can add or edit appointments.");
+      return;
+    }
     if (!appointmentsShift || !appointmentsShiftInstanceId) return;
     if (!appointmentForm.title.trim()) {
       setAppointmentsMessage("Title is required.");
@@ -3106,6 +3172,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     appointmentForm,
     appointmentsShift,
     appointmentsShiftInstanceId,
+    canModifyAppointments,
     fetchWeekAppointments,
     session.user.id,
     toShiftDateTimeIso,
@@ -3113,6 +3180,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   const handleDeleteAppointment = useCallback(
     async (appointmentId: string) => {
+      if (!canModifyAppointments) {
+        setAppointmentsMessage("Only admins can delete appointments.");
+        return;
+      }
       setAppointmentDeleteId(appointmentId);
       setAppointmentsMessage("");
       const { error } = await supabase.from("shift_appointments").delete().eq("id", appointmentId);
@@ -3134,7 +3205,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setAppointmentDeleteId(null);
       await fetchWeekAppointments();
     },
-    [appointmentForm.id, fetchWeekAppointments],
+    [appointmentForm.id, canModifyAppointments, fetchWeekAppointments],
   );
 
   const toggleAppointmentExpanded = useCallback((appointmentId: string) => {
@@ -4933,7 +5004,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               {appointmentsLoading ? <div className="loading-banner">Loading appointments...</div> : null}
               {appointmentsMessage ? <div className="error-banner">{appointmentsMessage}</div> : null}
 
-              {canManageAppointments ? (
+              {canModifyAppointments ? (
                 <div className="account-section appointment-form">
                   <p className="account-section-title">
                     {appointmentForm.id ? "Edit appointment" : "New appointment"}
@@ -5102,7 +5173,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         {appointment.description && expandedAppointmentIds.has(appointment.id) ? (
                           <p className="appointment-description">{appointment.description}</p>
                         ) : null}
-                        {canManageAppointments ? (
+                        {canModifyAppointments ? (
                           <div className="appointment-actions">
                             <button
                               className="nav-button"

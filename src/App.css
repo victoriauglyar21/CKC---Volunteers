@@ -836,6 +836,13 @@
   font-size: 0.9rem;
 }
 
+.shift-block-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .shift-block-meta {
   margin: 4px 0 0;
   font-size: 0.75rem;
@@ -942,6 +949,27 @@
 .shift-appointments-open {
   width: auto;
   justify-self: start;
+}
+
+.shift-appointments-inline {
+  display: grid;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.shift-appointment-empty {
+  margin: 0;
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.shift-appointment-popover-inline {
+  position: static;
+  width: 100%;
+  margin-top: 4px;
 }
 
 .shift-chip {
@@ -2127,6 +2155,12 @@
   .appointment-form .modal-row .account-button {
     width: 100%;
     justify-content: center;
+  }
+
+  .shift-block-title-row .shift-appointments-button {
+    height: 24px;
+    padding: 0 8px;
+    font-size: 0.68rem;
   }
 }
 
