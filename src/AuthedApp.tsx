@@ -735,6 +735,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [profileSaveLoading, setProfileSaveLoading] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationLoading, setNotificationLoading] = useState(false);
+  const [notificationAction, setNotificationAction] = useState<"enable" | "disable" | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const scrollYRef = useRef(0);
@@ -748,6 +749,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     typeof document !== "undefined" ? document.title : "CKC Shift Calendar",
   );
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
+  const notificationsEnabled = displayProfile?.notification_pref === "push_and_email";
   const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
   if (import.meta.env.DEV && !vapidPublicKey) {
     console.warn("Missing VITE_VAPID_PUBLIC_KEY");
@@ -2269,6 +2271,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     setNotificationLoading(true);
+    setNotificationAction("enable");
     try {
       const permission = await Notification.requestPermission();
       if (permission !== "granted") {
@@ -2311,6 +2314,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         .update({ notification_pref: "push_and_email" })
         .eq("id", session.user.id);
 
+      setProfileOverride((previous) => ({
+        ...(previous ?? {}),
+        notification_pref: "push_and_email",
+      }));
       setNotificationMessage("Notifications enabled!");
     } catch (error) {
       setNotificationMessage(
@@ -2318,6 +2325,59 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       );
     } finally {
       setNotificationLoading(false);
+      setNotificationAction(null);
+    }
+  };
+
+  const handleDisableNotifications = async () => {
+    setNotificationMessage("");
+    setNotificationLoading(true);
+    setNotificationAction("disable");
+    try {
+      if ("serviceWorker" in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(
+          registrations.map(async (registration) => {
+            const subscription = await registration.pushManager.getSubscription();
+            if (subscription) {
+              await subscription.unsubscribe();
+            }
+          }),
+        );
+      }
+
+      const { error: removeSubsError } = await supabase
+        .from("push_subscriptions")
+        .delete()
+        .eq("user_id", session.user.id);
+
+      if (removeSubsError) {
+        setNotificationMessage(removeSubsError.message);
+        return;
+      }
+
+      const { error: prefError } = await supabase
+        .from("profiles")
+        .update({ notification_pref: "email_only" })
+        .eq("id", session.user.id);
+
+      if (prefError) {
+        setNotificationMessage(prefError.message);
+        return;
+      }
+
+      setProfileOverride((previous) => ({
+        ...(previous ?? {}),
+        notification_pref: "email_only",
+      }));
+      setNotificationMessage("Notifications disabled.");
+    } catch (error) {
+      setNotificationMessage(
+        error instanceof Error ? error.message : "Unable to disable notifications.",
+      );
+    } finally {
+      setNotificationLoading(false);
+      setNotificationAction(null);
     }
   };
 
@@ -4931,13 +4991,29 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   app from the icon to enable notifications.
                 </p>
                 <div className="modal-row">
+                  <span className="modal-label">Status</span>
+                  <span>{notificationsEnabled ? "Enabled" : "Disabled"}</span>
+                </div>
+                <div className="modal-row">
                   <button
                     className="account-button"
                     type="button"
                     onClick={handleEnableNotifications}
-                    disabled={notificationLoading}
+                    disabled={notificationLoading || notificationsEnabled}
                   >
-                    {notificationLoading ? "Enabling..." : "Enable notifications"}
+                    {notificationLoading && notificationAction === "enable"
+                      ? "Enabling..."
+                      : "Enable notifications"}
+                  </button>
+                  <button
+                    className="account-button"
+                    type="button"
+                    onClick={handleDisableNotifications}
+                    disabled={notificationLoading || !notificationsEnabled}
+                  >
+                    {notificationLoading && notificationAction === "disable"
+                      ? "Disabling..."
+                      : "Disable notifications"}
                   </button>
                 </div>
                 {notificationMessage ? (

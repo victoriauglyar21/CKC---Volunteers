@@ -70,7 +70,7 @@ serve(async () => {
   const userIds = Array.from(new Set(targets.map((t) => t.user_id)));
   const { data: eligibleProfiles, error: eligibleError } = await supabaseAdmin
     .from("profiles")
-    .select("id")
+    .select("id,notification_settings")
     .in("id", userIds)
     .eq("notification_pref", "push_and_email");
 
@@ -80,7 +80,14 @@ serve(async () => {
     });
   }
 
-  const eligibleIds = new Set((eligibleProfiles ?? []).map((profile) => profile.id));
+  const eligibleIds = new Set(
+    (eligibleProfiles ?? [])
+      .filter((profile) => {
+        const settings = profile.notification_settings as Record<string, boolean> | null | undefined;
+        return settings?.shift_reminder !== false;
+      })
+      .map((profile) => profile.id),
+  );
   const filteredTargets = targets.filter((target) => eligibleIds.has(target.user_id));
 
   if (filteredTargets.length === 0) {
