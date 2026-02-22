@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ChangeEvent } from "react";
-import { supabase } from "./supabaseClient";
+import { signOutSafely, supabase } from "./supabaseClient";
 import type { AuthError } from "@supabase/supabase-js";
 
 type AuthProps = {
@@ -128,7 +128,7 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
         });
         if (error) return setMsg(mapSignupError(error));
         if (data.session) {
-          await supabase.auth.signOut();
+          await signOutSafely();
         }
         setIsSignup(false);
         setPassword("");

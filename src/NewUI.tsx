@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AuthedApp from "./AuthedApp";
 import type { AuthedAppProps } from "./authedApp/types";
-import { supabase } from "./supabaseClient";
+import { signOutSafely } from "./supabaseClient";
 
 export default function NewUI({ session, profile }: AuthedAppProps) {
   const [signingOut, setSigningOut] = useState(false);
@@ -47,10 +47,14 @@ export default function NewUI({ session, profile }: AuthedAppProps) {
   const handleSignOut = async () => {
     setActionMessage("");
     setSigningOut(true);
-    const { error } = await supabase.auth.signOut();
+    const { error } = await signOutSafely();
     if (error) {
       setActionMessage(`Unable to sign out: ${error.message}`);
       setSigningOut(false);
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.location.assign("/signin");
       return;
     }
     setActionMessage("Signed out.");

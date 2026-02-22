@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
-import { supabase } from "./supabaseClient";
+import { signOutSafely, supabase } from "./supabaseClient";
 import Auth from "./Auth";
 import AuthedApp from "./AuthedApp";
 import ProfileOnboarding from "./ProfileOnboarding";
@@ -110,7 +110,7 @@ function MainApp() {
       if (!mounted) return;
 
       if (signupConfirmation && data.session) {
-        await supabase.auth.signOut();
+        await signOutSafely();
         if (!mounted) return;
         setSession(null);
       } else {
@@ -126,7 +126,7 @@ function MainApp() {
           setPasswordRecovery(true);
         }
         if (event === "SIGNED_IN" && signupConfirmation) {
-          void supabase.auth.signOut();
+          void signOutSafely();
           setSession(null);
           setLoading(false);
           return;

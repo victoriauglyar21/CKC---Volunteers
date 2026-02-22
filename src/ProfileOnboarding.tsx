@@ -220,6 +220,14 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
     }
   }, [form, storageKey]);
 
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.body.classList.add("profile-onboarding-active");
+    return () => {
+      document.body.classList.remove("profile-onboarding-active");
+    };
+  }, []);
+
   return (
     <div className="onboarding-shell">
       <div className="onboarding-card">
