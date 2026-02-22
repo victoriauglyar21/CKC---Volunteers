@@ -459,7 +459,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         });
 
         if (rowsToInsert.length > 0) {
-          const { error: insertError } = await supabase.from("shift_instances").insert(rowsToInsert);
+          const { error: insertError } = await supabase
+            .from("shift_instances")
+            .upsert(rowsToInsert, { onConflict: "template_id,shift_date" });
           if (insertError && import.meta.env.DEV) {
             console.warn("Unable to generate visible shift instances", insertError.message);
           }
@@ -637,16 +639,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    const visibleShiftDays = instanceShifts.map((shift) => startOfDay(shift.start));
-    const rangeStart = visibleShiftDays.reduce((earliest, day) =>
-      day.getTime() < earliest.getTime() ? day : earliest,
-    );
-    const rangeEndInclusive = visibleShiftDays.reduce((latest, day) =>
-      day.getTime() > latest.getTime() ? day : latest,
-    );
-    const rangeEndExclusive = addDays(rangeEndInclusive, 1);
-    const rangeStartDate = getDateKey(rangeStart);
-    const rangeEndDate = getDateKey(rangeEndExclusive);
+    const instanceIds = instanceShifts
+      .map((shift) => shift.instanceId)
+      .filter((id) => id > 0);
+    if (instanceIds.length === 0) {
+      setWeekAssignments({});
+      return;
+    }
+
     const { data, error } = await supabase
       .from("shift_assignments")
       .select(
@@ -675,46 +675,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         )
       `,
       )
+      .in("shift_instance_id", instanceIds)
       .in("status", ["active", "pending"])
-      .or(
-        `starts_at.gte.${rangeStart.toISOString()},starts_at.lt.${rangeEndExclusive.toISOString()},shift_date.gte.${rangeStartDate},shift_date.lt.${rangeEndDate}`,
-        { foreignTable: "shift_instances" },
-      )
       .order("created_at", { ascending: true });
-
     if (error || !data) {
       setWeekAssignments({});
       return;
     }
 
-    const visibleInstanceIds = new Set(instanceShifts.map((shift) => shift.instanceId));
-    const visibleShiftKeys = new Map<string, number>();
-    instanceShifts.forEach((shift) => {
-      if (!shift.templateId) return;
-      visibleShiftKeys.set(`${shift.templateId}-${getDateKey(shift.start)}`, shift.instanceId);
-    });
-
     const map: Record<number, ShiftAssignmentDetail[]> = {};
     (data as unknown as ShiftAssignmentDetail[]).forEach((assignment) => {
-      const shiftInstance = assignment.shift_instance;
-      const exactInstanceId = shiftInstance?.id ?? null;
-      let targetInstanceId: number | null = null;
-
-      if (exactInstanceId && visibleInstanceIds.has(exactInstanceId)) {
-        targetInstanceId = exactInstanceId;
-      } else {
-        const templateId = shiftInstance?.template?.id ?? null;
-        const dateKey =
-          shiftInstance?.shift_date ??
-          (shiftInstance?.starts_at ? getDateKey(new Date(shiftInstance.starts_at)) : null);
-        if (templateId && dateKey) {
-          targetInstanceId = visibleShiftKeys.get(`${templateId}-${dateKey}`) ?? null;
-        }
-      }
-
-      if (!targetInstanceId) return;
-      if (!map[targetInstanceId]) map[targetInstanceId] = [];
-      map[targetInstanceId].push(assignment);
+      const instanceId = assignment.shift_instance?.id;
+      if (!instanceId) return;
+      if (!map[instanceId]) map[instanceId] = [];
+      map[instanceId].push(assignment);
     });
 
     setWeekAssignments(map);
@@ -742,6 +716,23 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [instanceShifts]);
 
   const ensureShiftInstance = useCallback(async (shift: ShiftInstance) => {
+    const syncVisibleShiftToRealInstance = (realInstanceId: number) => {
+      setInstanceShifts((previous) =>
+        previous.map((item) => {
+          const sameVirtualSlot =
+            item.instanceId === shift.instanceId ||
+            (item.templateId === shift.templateId && getDateKey(item.start) === getDateKey(shift.start));
+          if (!sameVirtualSlot) return item;
+          return {
+            ...item,
+            id: `${realInstanceId}`,
+            instanceId: realInstanceId,
+            isVirtual: false,
+          };
+        }),
+      );
+    };
+
     if (!shift.isVirtual && shift.instanceId > 0) {
       return shift.instanceId;
     }
@@ -761,6 +752,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return null;
     }
     if (existing?.id) {
+      syncVisibleShiftToRealInstance(existing.id);
       return existing.id;
     }
 
@@ -780,6 +772,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return null;
     }
 
+    syncVisibleShiftToRealInstance(created.id as number);
     return created.id as number;
   }, []);
 
@@ -2502,6 +2495,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     closeTakeShiftPrompt();
     setTakeShiftLoading(false);
+    setShiftInstancesRefreshToken((value) => value + 1);
 
     if (takeShiftMode === "request") {
       const volunteerName =
@@ -3144,10 +3138,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (notificationErrors.length > 0) {
       setAssignMessage(`Volunteer added, but ${notificationErrors.join(" | ")}`);
       setAssignLoading(false);
+      setShiftInstancesRefreshToken((value) => value + 1);
       await fetchWeekAssignments();
       return;
     }
 
+    setShiftInstancesRefreshToken((value) => value + 1);
     await fetchWeekAssignments();
     setAssignLoading(false);
   };
@@ -3211,6 +3207,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         ? `Added Other, but ${notificationErrors.join(" | ")}`
         : "Added Other to this shift.",
     );
+    setShiftInstancesRefreshToken((value) => value + 1);
     await fetchWeekAssignments();
   }, [
     assignOtherDetails,
