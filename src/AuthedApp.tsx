@@ -1555,6 +1555,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         .filter((value): value is string => Boolean(value)),
     [displayCells],
   );
+  const weekGlanceStart = getWeekStart(startOfDay(today), true);
+  const weekGlanceDayKeys = useMemo(
+    () =>
+      buildWeekCells(weekGlanceStart, true)
+        .map((cell) => (cell.date ? getDateKey(cell.date) : null))
+        .filter((value): value is string => Boolean(value)),
+    [weekGlanceStart],
+  );
+  const weekGlanceRangeLabel = `${dayFormatter.format(weekGlanceStart)} – ${dayFormatter.format(
+    addDays(weekGlanceStart, 6),
+  )}`;
   const allVisibleDaysCollapsed =
     displayDayKeys.length > 0 && displayDayKeys.every((key) => collapsedDayKeys.has(key));
   const monthLabel = monthFormatter.format(baseDate);
@@ -1670,7 +1681,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const getDisplayName = (assignment: ShiftAssignmentDetail) =>
       assignment.volunteer?.preferred_name || assignment.volunteer?.full_name || "Volunteer";
 
-    displayDayKeys.forEach((dayKey) => {
+    weekGlanceDayKeys.forEach((dayKey) => {
       const dayShifts = orderedShiftsByDate[dayKey] ?? [];
       dayShifts.forEach((shift) => {
         const rowKey = shift.templateId || `${shift.title}-${timeFormatter.format(shift.start)}`;
@@ -1724,7 +1735,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       if (startDiff !== 0) return startDiff;
       return left.title.localeCompare(right.title);
     });
-  }, [displayDayKeys, orderedShiftsByDate, weekAssignments]);
+  }, [weekGlanceDayKeys, orderedShiftsByDate, weekAssignments]);
   const weekGlanceAppointmentRows = useMemo(() => {
     const rowMap = new Map<
       string,
@@ -1745,7 +1756,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
     >();
 
-    displayDayKeys.forEach((dayKey) => {
+    weekGlanceDayKeys.forEach((dayKey) => {
       const dayShifts = orderedShiftsByDate[dayKey] ?? [];
       dayShifts.forEach((shift) => {
         const rowKey = shift.templateId || `${shift.title}-${timeFormatter.format(shift.start)}`;
@@ -1788,7 +1799,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       if (startDiff !== 0) return startDiff;
       return left.title.localeCompare(right.title);
     });
-  }, [appointmentsByShift, displayDayKeys, orderedShiftsByDate]);
+  }, [appointmentsByShift, weekGlanceDayKeys, orderedShiftsByDate]);
 
   const renderInteractiveShiftBlock = (shift: ShiftInstance, keyPrefix = "") => {
     const hasTimes = Boolean(shift.start && shift.end);
@@ -3303,6 +3314,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   };
 
   const handleCalendarTouchMove = (event: ReactTouchEvent<HTMLElement>) => {
+    if (calendarRangeMode !== "week") return;
     if (!swipeStartRef.current || swipeTriggeredRef.current) return;
     const touch = event.touches[0];
     if (!touch) return;
@@ -3322,6 +3334,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     swipeStartRef.current = null;
     swipeTriggeredRef.current = false;
   };
+
+  useEffect(() => {
+    if (!isMobile || calendarRangeMode !== "month") return;
+    window.scrollTo(0, window.scrollY);
+  }, [isMobile, calendarRangeMode, monthOffset]);
 
   const toggleDayCollapsed = (dateKey: string) => {
     setCollapsedDayKeys((prev) => {
@@ -3612,10 +3629,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       <section
         className={`calendar-panel ${isMobile && calendarRangeMode === "month" ? "month-mode" : ""}`}
-        onTouchStart={isMobile ? handleCalendarTouchStart : undefined}
-        onTouchMove={isMobile ? handleCalendarTouchMove : undefined}
-        onTouchEnd={isMobile ? handleCalendarTouchEnd : undefined}
-        onTouchCancel={isMobile ? handleCalendarTouchEnd : undefined}
+        onTouchStart={isMobile && calendarRangeMode === "week" ? handleCalendarTouchStart : undefined}
+        onTouchMove={isMobile && calendarRangeMode === "week" ? handleCalendarTouchMove : undefined}
+        onTouchEnd={isMobile && calendarRangeMode === "week" ? handleCalendarTouchEnd : undefined}
+        onTouchCancel={isMobile && calendarRangeMode === "week" ? handleCalendarTouchEnd : undefined}
       >
         <div className="calendar-header">
           <div>
@@ -4138,7 +4155,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               <div>
                 <p className="modal-eyebrow">Schedule</p>
                 <h3 className="modal-title week-glance-title">This week at a glance</h3>
-                <p className="modal-location">{rangeLabel}</p>
+                <p className="modal-location">{weekGlanceRangeLabel}</p>
               </div>
               <div className="modal-header-actions">
                 <button className="modal-close" type="button" onClick={() => setShowWeekGlance(false)}>
@@ -4183,8 +4200,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     <thead>
                       <tr>
                         <th>Shift</th>
-                        {displayDayKeys.map((dayKey, index) => {
-                          const day = addDays(weekStart, index);
+                        {weekGlanceDayKeys.map((dayKey, index) => {
+                          const day = parseDateOnly(dayKey) ?? addDays(weekGlanceStart, index);
                           return (
                             <th key={`glance-head-${dayKey}`}>
                               {WEEKDAYS_MONDAY_FIRST[index]}
@@ -4205,7 +4222,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             <div className="week-glance-shift-title">{row.title}</div>
                             <div className="week-glance-shift-time">{row.timeLabel}</div>
                           </td>
-                          {displayDayKeys.map((dayKey) => {
+                          {weekGlanceDayKeys.map((dayKey) => {
                             const dayData = row.byDay[dayKey] as
                               | { leads: string[]; volunteers: string[]; pending: string[] }
                               | Array<{ id: string; title: string; timeLabel: string | null }>
