@@ -152,6 +152,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [showDropReason, setShowDropReason] = useState(false);
   const [dropReason, setDropReason] = useState("");
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [dropTargetShiftContext, setDropTargetShiftContext] = useState<{
+    shift_instance_id: number | null;
+    starts_at?: string | null;
+    shift_date?: string | null;
+    title?: string | null;
+  } | null>(null);
   const [showRemovePrompt, setShowRemovePrompt] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<ShiftAssignmentDetail | null>(null);
   const [removeLoading, setRemoveLoading] = useState(false);
@@ -246,6 +252,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     assignmentId: string;
   } | null>(null);
   const [notificationFocusAssignmentId, setNotificationFocusAssignmentId] = useState<string | null>(null);
+  const [calendarFocusDateKeyFromUrl, setCalendarFocusDateKeyFromUrl] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const scrollYRef = useRef(0);
@@ -2171,6 +2178,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       }
                     } else if (assignment.volunteer?.id === session.user.id && profile?.role !== "Admin") {
                       setDropTargetId(assignment.id);
+                      setDropTargetShiftContext({
+                        shift_instance_id: resolvedInstanceId,
+                        starts_at: shift.start.toISOString(),
+                        title: shift.title,
+                      });
                       setShowDropConfirm(true);
                     } else if (isPrimaryAdminAccount) {
                       if (assignment.status === "pending") {
@@ -2373,6 +2385,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const requestedAssignmentId = Array.isArray(savedAssignments)
         ? (savedAssignments[0]?.id ?? null)
         : null;
+      const focusDateUrl =
+        requestedShift ? `/?focusDate=${getDateKey(startOfDay(requestedShift.start))}` : "/";
       const requestNotificationsUrl = "/?view=notifications";
       const focusNotificationsUrl = requestedAssignmentId
         ? `/?view=notifications&focusAssignmentId=${requestedAssignmentId}`
@@ -2390,7 +2404,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             starts_at: requestedShift?.start?.toISOString(),
             title: requestedShift?.title,
           })})`,
-          url: focusNotificationsUrl,
+          url: focusDateUrl,
           actions: requestedAssignmentId
             ? [
                 { action: "approve-request", title: "Approve" },
@@ -3271,14 +3285,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const handleDropShift = async () => {
     if (!dropTargetId) return;
     const targetAssignment = assignments.find((assignment) => assignment.id === dropTargetId);
-    const targetShiftInstanceId = targetAssignment?.shift_instance?.id ?? null;
+    const targetShiftInstanceId =
+      targetAssignment?.shift_instance?.id ?? dropTargetShiftContext?.shift_instance_id ?? null;
     if (profile?.role !== "Admin") {
-      const targetDay = getShiftDayStart(targetAssignment?.shift_instance);
+      const targetDay = getShiftDayStart(
+        targetAssignment?.shift_instance ?? dropTargetShiftContext ?? undefined,
+      );
       if (targetDay && targetDay.getTime() < todayStartMs) {
         setAssignmentsMessage("Past shifts are locked and can no longer be changed.");
         setShowDropConfirm(false);
         setShowDropReason(false);
         setDropTargetId(null);
+        setDropTargetShiftContext(null);
         return;
       }
     }
@@ -3320,6 +3338,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const droppedShiftLabel = formatShortShiftRequestLabel(
       targetAssignment?.shift_instance
         ? targetAssignment.shift_instance
+        : dropTargetShiftContext
+          ? {
+              starts_at: dropTargetShiftContext.starts_at ?? null,
+              shift_date: dropTargetShiftContext.shift_date ?? null,
+              title: dropTargetShiftContext.title ?? null,
+            }
         : fallbackShiftForLabel
           ? {
               starts_at: fallbackShiftForLabel.start.toISOString(),
@@ -3330,7 +3354,24 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const pushMessage = reasonText
       ? `${actorName} Dropped (${droppedShiftLabel}). Reason: ${reasonText}`
       : `${actorName} Dropped (${droppedShiftLabel})`;
-    const pushError = await sendAdminDropPush(pushMessage);
+    const dropFocusDateKey = (() => {
+      if (targetAssignment?.shift_instance?.shift_date) return targetAssignment.shift_instance.shift_date;
+      if (targetAssignment?.shift_instance?.starts_at) {
+        const parsed = new Date(targetAssignment.shift_instance.starts_at);
+        if (!Number.isNaN(parsed.getTime())) return getDateKey(startOfDay(parsed));
+      }
+      if (dropTargetShiftContext?.shift_date) return dropTargetShiftContext.shift_date;
+      if (dropTargetShiftContext?.starts_at) {
+        const parsed = new Date(dropTargetShiftContext.starts_at);
+        if (!Number.isNaN(parsed.getTime())) return getDateKey(startOfDay(parsed));
+      }
+      if (fallbackShiftForLabel) return getDateKey(startOfDay(fallbackShiftForLabel.start));
+      return null;
+    })();
+    const pushError = await sendAdminDropPush(
+      pushMessage,
+      dropFocusDateKey ? `/?focusDate=${dropFocusDateKey}` : "/",
+    );
     const isVolunteerDrop = profile?.role !== "Admin";
     if (isVolunteerDrop && targetShiftInstanceId) {
       const memberNotifyError = await notifyActiveMembersOnShiftInstance({
@@ -3345,6 +3386,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
     }
     setDropReason("");
+    setDropTargetShiftContext(null);
     if (pushError) {
       setAssignmentsMessage(`Shift dropped, but push notification failed: ${pushError}`);
     }
@@ -3363,9 +3405,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("view") !== "notifications") return;
-    setShowNotifications(true);
-    setShowMenu(false);
+    const viewParam = params.get("view");
+    if (viewParam === "notifications") {
+      setShowNotifications(true);
+      setShowMenu(false);
+    }
     const notificationActionParam = params.get("notificationAction");
     const assignmentIdParam = params.get("assignmentId");
     if (
@@ -3386,6 +3430,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (focusAssignmentIdParam) {
       setNotificationFocusAssignmentId(focusAssignmentIdParam);
       params.delete("focusAssignmentId");
+      const nextQuery = params.toString();
+      const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
+      window.history.replaceState(null, "", nextUrl);
+    }
+    const focusDateParam = params.get("focusDate");
+    if (focusDateParam) {
+      setCalendarFocusDateKeyFromUrl(focusDateParam);
+      params.delete("focusDate");
       const nextQuery = params.toString();
       const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
       window.history.replaceState(null, "", nextUrl);
@@ -3483,6 +3535,31 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     window.setTimeout(scrollToTarget, 80);
   }, [showNotifications, notifications, notificationFocusAssignmentId]);
+
+  useEffect(() => {
+    if (!calendarFocusDateKeyFromUrl) return;
+    const parsedDate = parseDateOnly(calendarFocusDateKeyFromUrl);
+    if (!parsedDate) {
+      setCalendarFocusDateKeyFromUrl(null);
+      return;
+    }
+    const targetWeekStart = getWeekStart(startOfDay(parsedDate), true);
+    const currentWeekStart = getWeekStart(startOfDay(today), true);
+    const rawOffset = Math.floor(diffInDays(currentWeekStart, targetWeekStart) / 7);
+    const clampedOffset = Math.min(maxWeekOffset, Math.max(0, rawOffset));
+
+    setShowNotifications(false);
+    setCalendarRangeMode("week");
+    setWeekOffset(clampedOffset);
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollToDateKey(calendarFocusDateKeyFromUrl);
+        window.setTimeout(() => scrollToDateKey(calendarFocusDateKeyFromUrl), 200);
+      });
+    });
+    setCalendarFocusDateKeyFromUrl(null);
+  }, [calendarFocusDateKeyFromUrl, today, maxWeekOffset]);
 
   // Removed focus refresh to avoid reloading view on tab switch.
 
@@ -4360,6 +4437,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           onClick={() => {
                             if (isPastShift) return;
                             setDropTargetId(assignment.id);
+                            setDropTargetShiftContext({
+                              shift_instance_id: shift.id ?? null,
+                              starts_at: shift.starts_at,
+                              shift_date: shift.shift_date,
+                              title: shift.template?.title ?? null,
+                            });
                             setShowDropConfirm(true);
                           }}
                         >
