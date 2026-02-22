@@ -322,8 +322,8 @@ export function formatByDay(days: string[] | null | undefined) {
   return days.map((day) => dayMap[day] ?? day).join(", ");
 }
 
-export function formatByDayLongList(days: string[] | null | undefined) {
-  if (!days || days.length === 0) return "Every day";
+export function formatByDayLongList(days: string[] | null | undefined, intervalWeeks = 1) {
+  if (!days || days.length === 0) return intervalWeeks === 2 ? "Every other week" : "Every day";
   const dayMap: Record<string, string> = {
     SU: "Sunday",
     MO: "Monday",
@@ -333,7 +333,8 @@ export function formatByDayLongList(days: string[] | null | undefined) {
     FR: "Friday",
     SA: "Saturday",
   };
-  return days.map((day) => dayMap[day] ?? day).join(", ");
+  const prefix = intervalWeeks === 2 ? "Every other week on " : "";
+  return `${prefix}${days.map((day) => dayMap[day] ?? day).join(", ")}`;
 }
 
 export function formatCompactTemplateTimeRange(
@@ -378,7 +379,7 @@ export function formatRepeatPattern(rrule: string | null | undefined) {
   return `Every ${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
 }
 
-export function formatRepeatPatternFromDays(days: string[] | null | undefined) {
+export function formatRepeatPatternFromDays(days: string[] | null | undefined, intervalWeeks = 1) {
   const dayMap: Record<string, string> = {
     SU: "Sunday",
     MO: "Monday",
@@ -390,10 +391,11 @@ export function formatRepeatPatternFromDays(days: string[] | null | undefined) {
   };
 
   const labels = (days ?? []).map((day) => dayMap[day] ?? day).filter(Boolean);
-  if (labels.length === 0) return "Every day";
-  if (labels.length === 1) return `Every ${labels[0]}`;
-  if (labels.length === 2) return `Every ${labels[0]} and ${labels[1]}`;
-  return `Every ${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
+  const everyLabel = intervalWeeks === 2 ? "Every other" : "Every";
+  if (labels.length === 0) return intervalWeeks === 2 ? "Every other week" : "Every day";
+  if (labels.length === 1) return `${everyLabel} ${labels[0]}`;
+  if (labels.length === 2) return `${everyLabel} ${labels[0]} and ${labels[1]}`;
+  return `${everyLabel} ${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
 }
 
 export function getDayCode(value: string | null | undefined) {

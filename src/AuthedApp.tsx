@@ -169,6 +169,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     templateId: "",
     startsOn: "",
     endsOn: "",
+    repeatEveryWeeks: "1" as "1" | "2",
   });
   const [recurringSaving, setRecurringSaving] = useState(false);
   const [recurringDeleteId, setRecurringDeleteId] = useState<string | null>(null);
@@ -823,6 +824,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         starts_on,
         ends_on,
         byday,
+        repeat_interval_weeks,
         template:shift_templates (
           id,
           title
@@ -893,7 +895,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const fetchMyRecurring = useCallback(async () => {
     const { data, error } = await supabase
       .from("recurring_assignments")
-      .select("id, volunteer_id, template_id, starts_on, ends_on, byday")
+      .select("id, volunteer_id, template_id, starts_on, ends_on, byday, repeat_interval_weeks")
       .eq("volunteer_id", session.user.id);
 
     if (error || !data) {
@@ -992,6 +994,34 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     fetchMyShifts();
   }, [fetchMyShifts]);
 
+  const getRecurringIntervalWeeks = useCallback(
+    (recurring: Pick<RecurringAssignment, "repeat_interval_weeks"> | null | undefined) =>
+      recurring?.repeat_interval_weeks === 2 ? 2 : 1,
+    [],
+  );
+
+  const matchesRecurringWeek = useCallback(
+    (
+      dateValue: string | null | undefined,
+      startsOn: string,
+      repeatIntervalWeeks: number | null | undefined,
+    ) => {
+      const intervalWeeks = repeatIntervalWeeks === 2 ? 2 : 1;
+      if (intervalWeeks === 1) return true;
+      const anchor = parseDateOnly(startsOn);
+      const candidate = dateValue
+        ? dateValue.includes("T")
+          ? new Date(dateValue)
+          : parseDateOnly(dateValue)
+        : null;
+      if (!anchor || !candidate || Number.isNaN(candidate.getTime())) return false;
+      const dayDiff = diffInDays(startOfDay(candidate), startOfDay(anchor));
+      if (dayDiff < 0) return false;
+      return Math.floor(dayDiff / 7) % intervalWeeks === 0;
+    },
+    [],
+  );
+
   const handleRecurringSave = useCallback(async () => {
     if (!selectedVolunteer) return;
     setRecurringMessage("");
@@ -1025,11 +1055,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       );
 
     const allowedDays = recurringDays;
+    const repeatIntervalWeeks = Number(recurringForm.repeatEveryWeeks) === 2 ? 2 : 1;
     const filteredInstances =
       allowedDays.length > 0
         ? (instances ?? []).filter((instance) => {
             const dayCode = getDayCode(instance.shift_date ?? instance.starts_at ?? undefined);
-            return dayCode ? allowedDays.includes(dayCode) : false;
+            if (!dayCode || !allowedDays.includes(dayCode)) return false;
+            return matchesRecurringWeek(
+              instance.shift_date ?? instance.starts_at ?? undefined,
+              recurringForm.startsOn,
+              repeatIntervalWeeks,
+            );
           })
         : instances ?? [];
 
@@ -1055,7 +1091,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       const { data: oldInstances, error: oldInstancesError } = await supabase
         .from("shift_instances")
-        .select("id")
+        .select("id, shift_date, starts_at")
         .eq("template_id", targetRecurring.template_id)
         .or(
           `starts_at.gte.${oldStartIso},starts_at.lt.${oldEndExclusive},shift_date.gte.${oldRangeStart},shift_date.lte.${oldRangeEnd}`,
@@ -1067,7 +1103,21 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         return;
       }
 
-      const oldInstanceIds = (oldInstances ?? []).map((item) => item.id);
+      const oldRepeatIntervalWeeks = getRecurringIntervalWeeks(targetRecurring);
+      const oldAllowedDays = targetRecurring.byday ?? [];
+      const oldInstanceIds = (oldInstances ?? [])
+        .filter((item) => {
+          const dayCode = getDayCode(item.shift_date ?? item.starts_at ?? undefined);
+          if (oldAllowedDays.length > 0 && (!dayCode || !oldAllowedDays.includes(dayCode))) {
+            return false;
+          }
+          return matchesRecurringWeek(
+            item.shift_date ?? item.starts_at ?? undefined,
+            targetRecurring.starts_on,
+            oldRepeatIntervalWeeks,
+          );
+        })
+        .map((item) => item.id);
       if (oldInstanceIds.length > 0) {
         const { error: oldAssignmentDeleteError } = await supabase
           .from("shift_assignments")
@@ -1088,6 +1138,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           starts_on: recurringForm.startsOn,
           ends_on: recurringForm.endsOn || null,
           byday: recurringDays,
+          repeat_interval_weeks: repeatIntervalWeeks,
         })
         .eq("id", recurringEditId)
         .eq("volunteer_id", selectedVolunteer.id);
@@ -1106,6 +1157,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           starts_on: recurringForm.startsOn,
           ends_on: recurringForm.endsOn || null,
           byday: recurringDays,
+          repeat_interval_weeks: repeatIntervalWeeks,
         })
         .select("*")
         .single();
@@ -1151,7 +1203,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setRecurringMessage("Recurring pattern saved. No matching shift dates were found yet.");
     }
 
-    setRecurringForm({ templateId: "", startsOn: "", endsOn: "" });
+    setRecurringForm({ templateId: "", startsOn: "", endsOn: "", repeatEveryWeeks: "1" });
     setRecurringDays([]);
     setRecurringEditId(null);
     setShowAddRecurring(false);
@@ -1169,6 +1221,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     fetchVolunteerRecurring,
     fetchMyShifts,
     fetchWeekAssignments,
+    getRecurringIntervalWeeks,
+    matchesRecurringWeek,
   ]);
 
   const handleRecurringDelete = useCallback(
@@ -1192,7 +1246,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       const { data: instances, error: instanceError } = await supabase
         .from("shift_instances")
-        .select("id")
+        .select("id, shift_date, starts_at")
         .eq("template_id", target.template_id)
         .or(
           `starts_at.gte.${startIso},starts_at.lt.${endExclusive},shift_date.gte.${rangeStart},shift_date.lte.${rangeEnd}`,
@@ -1204,7 +1258,21 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         return;
       }
 
-      const instanceIds = (instances ?? []).map((item) => item.id);
+      const targetRepeatIntervalWeeks = getRecurringIntervalWeeks(target);
+      const targetAllowedDays = target.byday ?? [];
+      const instanceIds = (instances ?? [])
+        .filter((item) => {
+          const dayCode = getDayCode(item.shift_date ?? item.starts_at ?? undefined);
+          if (targetAllowedDays.length > 0 && (!dayCode || !targetAllowedDays.includes(dayCode))) {
+            return false;
+          }
+          return matchesRecurringWeek(
+            item.shift_date ?? item.starts_at ?? undefined,
+            target.starts_on,
+            targetRepeatIntervalWeeks,
+          );
+        })
+        .map((item) => item.id);
       if (instanceIds.length > 0) {
         const { error: assignmentError } = await supabase
           .from("shift_assignments")
@@ -1250,7 +1318,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setRecurringDeleteId(null);
       if (recurringEditId === recurringId) {
         setRecurringEditId(null);
-        setRecurringForm({ templateId: "", startsOn: "", endsOn: "" });
+        setRecurringForm({ templateId: "", startsOn: "", endsOn: "", repeatEveryWeeks: "1" });
         setRecurringDays([]);
         setShowAddRecurring(false);
       }
@@ -1266,6 +1334,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       fetchVolunteerRecurring,
       fetchMyShifts,
       fetchWeekAssignments,
+      getRecurringIntervalWeeks,
+      matchesRecurringWeek,
     ],
   );
 
@@ -1275,6 +1345,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       templateId: recurring.template_id,
       startsOn: recurring.starts_on,
       endsOn: recurring.ends_on ?? "",
+      repeatEveryWeeks: recurring.repeat_interval_weeks === 2 ? "2" : "1",
     });
     setRecurringDays(recurring.byday ?? []);
     setRecurringMessage("");
@@ -3325,6 +3396,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     swipeStartRef.current = null;
     swipeTriggeredRef.current = false;
   };
+  const enableCalendarSwipe = isMobile && calendarRangeMode !== "month";
 
   const toggleDayCollapsed = (dateKey: string) => {
     setCollapsedDayKeys((prev) => {
@@ -3615,10 +3687,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       <section
         className={`calendar-panel ${isMobile && calendarRangeMode === "month" ? "month-mode" : ""}`}
-        onTouchStart={isMobile ? handleCalendarTouchStart : undefined}
-        onTouchMove={isMobile ? handleCalendarTouchMove : undefined}
-        onTouchEnd={isMobile ? handleCalendarTouchEnd : undefined}
-        onTouchCancel={isMobile ? handleCalendarTouchEnd : undefined}
+        onTouchStart={enableCalendarSwipe ? handleCalendarTouchStart : undefined}
+        onTouchMove={enableCalendarSwipe ? handleCalendarTouchMove : undefined}
+        onTouchEnd={enableCalendarSwipe ? handleCalendarTouchEnd : undefined}
+        onTouchCancel={enableCalendarSwipe ? handleCalendarTouchEnd : undefined}
       >
         <div className="calendar-header">
           <div>
@@ -4103,7 +4175,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           : "—";
                       const repeatPattern =
                         recurring.byday && recurring.byday.length > 0
-                          ? formatRepeatPatternFromDays(recurring.byday)
+                          ? formatRepeatPatternFromDays(
+                              recurring.byday,
+                              getRecurringIntervalWeeks(recurring),
+                            )
                           : formatRepeatPattern(template.rrule);
                       const shiftType = /evening/i.test(template.title)
                         ? "Evening Shift"
@@ -5342,7 +5417,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                               if (showAddRecurring) {
                                 setShowAddRecurring(false);
                                 setRecurringEditId(null);
-                                setRecurringForm({ templateId: "", startsOn: "", endsOn: "" });
+                                setRecurringForm({ templateId: "", startsOn: "", endsOn: "", repeatEveryWeeks: "1" });
                                 setRecurringDays([]);
                                 return;
                               }
@@ -5381,7 +5456,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                     templateInstance.end,
                                   )
                                 : "—";
-                            const dayList = formatByDayLongList(recurring.byday);
+                            const dayList = formatByDayLongList(
+                              recurring.byday,
+                              getRecurringIntervalWeeks(recurring),
+                            );
                             return (
                               <div key={recurring.id} className="recurring-card">
                                 <div>
@@ -5473,6 +5551,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           </label>
                         ))}
                       </div>
+                      <label className="form-field">
+                        <span className="form-label">Repeat cadence</span>
+                        <select
+                          className="form-input"
+                          value={recurringForm.repeatEveryWeeks}
+                          onChange={(event) =>
+                            setRecurringForm((prev) => ({
+                              ...prev,
+                              repeatEveryWeeks: event.target.value === "2" ? "2" : "1",
+                            }))
+                          }
+                        >
+                          <option value="1">Every week</option>
+                          <option value="2">Every other week</option>
+                        </select>
+                      </label>
                       <div className="form-grid form-grid-compact">
                         <label className="form-field">
                           <span className="form-label">Start date</span>
@@ -5513,7 +5607,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           onClick={() => {
                             setShowAddRecurring(false);
                             setRecurringEditId(null);
-                            setRecurringForm({ templateId: "", startsOn: "", endsOn: "" });
+                            setRecurringForm({ templateId: "", startsOn: "", endsOn: "", repeatEveryWeeks: "1" });
                             setRecurringDays([]);
                           }}
                           disabled={recurringSaving}
@@ -5632,7 +5726,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         onClick={() => {
                           setSelectedVolunteer(volunteer);
                           setShowAddRecurring(false);
-                          setRecurringForm({ templateId: "", startsOn: "", endsOn: "" });
+                          setRecurringForm({ templateId: "", startsOn: "", endsOn: "", repeatEveryWeeks: "1" });
                           setRecurringDays([]);
                         }}
                       >

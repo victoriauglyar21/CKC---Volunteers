@@ -102,6 +102,7 @@ export type RecurringAssignment = {
   starts_on: string;
   ends_on: string | null;
   byday?: string[] | null;
+  repeat_interval_weeks?: number | null;
   template?: {
     id: string;
     title: string;
