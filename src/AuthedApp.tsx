@@ -639,9 +639,56 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    const instanceIds = instanceShifts
-      .map((shift) => shift.instanceId)
-      .filter((id) => id > 0);
+    const visibleShiftKeys = new Map<string, number>();
+    const visibleTemplateIds = new Set<string>();
+    let rangeStart = startOfDay(instanceShifts[0].start);
+    let rangeEnd = startOfDay(instanceShifts[0].start);
+    instanceShifts.forEach((shift) => {
+      const dayStart = startOfDay(shift.start);
+      if (dayStart.getTime() < rangeStart.getTime()) rangeStart = dayStart;
+      if (dayStart.getTime() > rangeEnd.getTime()) rangeEnd = dayStart;
+      if (!shift.templateId) return;
+      visibleTemplateIds.add(shift.templateId);
+      visibleShiftKeys.set(`${shift.templateId}-${getDateKey(shift.start)}`, shift.instanceId);
+    });
+
+    const realVisibleInstanceIds = instanceShifts.map((shift) => shift.instanceId).filter((id) => id > 0);
+    const rangeEndExclusive = addDays(rangeEnd, 1);
+    const rangeStartDate = getDateKey(rangeStart);
+    const rangeEndDate = getDateKey(rangeEndExclusive);
+
+    let eligibleInstanceIds = new Set<number>(realVisibleInstanceIds);
+    const realInstanceIdToVisibleInstanceId = new Map<number, number>();
+    realVisibleInstanceIds.forEach((id) => {
+      realInstanceIdToVisibleInstanceId.set(id, id);
+    });
+    if (visibleTemplateIds.size > 0) {
+      const { data: matchingInstances, error: matchingInstancesError } = await supabase
+        .from("shift_instances")
+        .select("id, template_id, shift_date, starts_at")
+        .in("template_id", Array.from(visibleTemplateIds))
+        .or(
+          `starts_at.gte.${rangeStart.toISOString()},starts_at.lt.${rangeEndExclusive.toISOString()},shift_date.gte.${rangeStartDate},shift_date.lt.${rangeEndDate}`,
+        );
+
+      if (matchingInstancesError) {
+        setWeekAssignments({});
+        return;
+      }
+
+      (matchingInstances ?? []).forEach((row) => {
+        const dayKey = row.shift_date ?? (row.starts_at ? getDateKey(new Date(row.starts_at)) : null);
+        if (!dayKey) return;
+        const visibleKey = `${row.template_id}-${dayKey}`;
+        const visibleInstanceId = visibleShiftKeys.get(visibleKey);
+        if (!visibleInstanceId) return;
+        const realInstanceId = row.id as number;
+        eligibleInstanceIds.add(realInstanceId);
+        realInstanceIdToVisibleInstanceId.set(realInstanceId, visibleInstanceId);
+      });
+    }
+
+    const instanceIds = Array.from(eligibleInstanceIds).filter((id) => id > 0);
     if (instanceIds.length === 0) {
       setWeekAssignments({});
       return;
@@ -652,6 +699,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       .select(
         `
         id,
+        shift_instance_id,
+        volunteer_id,
         created_at,
         status,
         assignment_role,
@@ -684,11 +733,51 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     const map: Record<number, ShiftAssignmentDetail[]> = {};
-    (data as unknown as ShiftAssignmentDetail[]).forEach((assignment) => {
-      const instanceId = assignment.shift_instance?.id;
-      if (!instanceId) return;
-      if (!map[instanceId]) map[instanceId] = [];
-      map[instanceId].push(assignment);
+    (data as unknown as ShiftAssignmentDetail[]).forEach((rawAssignment) => {
+      const rawShiftInstanceId =
+        (rawAssignment as ShiftAssignmentDetail & { shift_instance_id?: number | null }).shift_instance_id ?? null;
+      const fallbackVolunteerId =
+        (rawAssignment as ShiftAssignmentDetail & { volunteer_id?: string | null }).volunteer_id ?? null;
+      const normalizedVolunteer = Array.isArray((rawAssignment as { volunteer?: unknown }).volunteer)
+        ? ((rawAssignment as { volunteer?: ShiftAssignmentDetail["volunteer"][] }).volunteer?.[0] ?? null)
+        : rawAssignment.volunteer;
+      const normalizedAssignment = {
+        ...rawAssignment,
+        volunteer:
+          normalizedVolunteer ??
+          (fallbackVolunteerId
+            ? {
+                id: fallbackVolunteerId,
+                full_name: "Assigned Volunteer",
+                preferred_name: null,
+                role: null,
+              }
+            : null),
+        shift_instance: Array.isArray((rawAssignment as { shift_instance?: unknown }).shift_instance)
+          ? ((rawAssignment as { shift_instance?: ShiftAssignmentDetail["shift_instance"][] }).shift_instance?.[0] ??
+            null)
+          : rawAssignment.shift_instance,
+      } as ShiftAssignmentDetail;
+
+      const directInstanceId = normalizedAssignment.shift_instance?.id ?? null;
+      let targetInstanceId =
+        (rawShiftInstanceId ? realInstanceIdToVisibleInstanceId.get(rawShiftInstanceId) : null) ??
+        (directInstanceId ? realInstanceIdToVisibleInstanceId.get(directInstanceId) : null) ??
+        null;
+      if (!targetInstanceId && directInstanceId) {
+        const templateId = normalizedAssignment.shift_instance?.template?.id ?? null;
+        const dayKey =
+          normalizedAssignment.shift_instance?.shift_date ??
+          (normalizedAssignment.shift_instance?.starts_at
+            ? getDateKey(new Date(normalizedAssignment.shift_instance.starts_at))
+            : null);
+        if (templateId && dayKey) {
+          targetInstanceId = visibleShiftKeys.get(`${templateId}-${dayKey}`) ?? null;
+        }
+      }
+      if (!targetInstanceId) return;
+      if (!map[targetInstanceId]) map[targetInstanceId] = [];
+      map[targetInstanceId].push(normalizedAssignment);
     });
 
     setWeekAssignments(map);
@@ -2609,7 +2698,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       });
       setWeekAssignments(map);
     }
-    await fetchWeekAssignments();
+    setShiftInstancesRefreshToken((value) => value + 1);
     await fetchPersonalAssignments();
   };
 
@@ -3139,12 +3228,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setAssignMessage(`Volunteer added, but ${notificationErrors.join(" | ")}`);
       setAssignLoading(false);
       setShiftInstancesRefreshToken((value) => value + 1);
-      await fetchWeekAssignments();
       return;
     }
 
     setShiftInstancesRefreshToken((value) => value + 1);
-    await fetchWeekAssignments();
     setAssignLoading(false);
   };
 
