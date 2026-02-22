@@ -1722,6 +1722,65 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return left.start.getTime() - right.start.getTime();
     });
   }, [monthDayDetailsDateKey, orderedShiftsByDate]);
+  const formatShortShiftRequestLabel = useCallback(
+    (shift: {
+      starts_at?: string | null;
+      shift_date?: string | null;
+      template?: { title?: string | null } | null;
+      title?: string | null;
+    } | null | undefined) => {
+      if (!shift) return "an upcoming shift";
+      const parsedDate = shift.starts_at
+        ? new Date(shift.starts_at)
+        : shift.shift_date
+          ? parseDateOnly(shift.shift_date)
+          : null;
+      const dateLabel =
+        parsedDate && !Number.isNaN(parsedDate.getTime())
+          ? parsedDate.toLocaleDateString("en-US", {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+            })
+          : "Upcoming";
+      const title = (shift.template?.title ?? shift.title ?? "").toLowerCase();
+      const shiftPeriod = title.includes("morning")
+        ? "AM shift"
+        : title.includes("evening")
+          ? "PM shift"
+          : "shift";
+      return `${dateLabel}, ${shiftPeriod}`;
+    },
+    [],
+  );
+  const formatAppointmentNotificationBody = useCallback(
+    (
+      action: "Added" | "Deleted",
+      shift: { start?: Date | null; title?: string | null } | null | undefined,
+      kindLabel: string,
+    ) => {
+      const parsedDate = shift?.start ?? null;
+      const datePart =
+        parsedDate && !Number.isNaN(parsedDate.getTime())
+          ? parsedDate.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+            })
+          : "Upcoming";
+      const weekdayPart =
+        parsedDate && !Number.isNaN(parsedDate.getTime())
+          ? parsedDate.toLocaleDateString("en-US", { weekday: "short" })
+          : "day";
+      const title = (shift?.title ?? "").toLowerCase();
+      const shiftPeriod = title.includes("morning")
+        ? "AM shift"
+        : title.includes("evening")
+          ? "PM shift"
+          : "shift";
+      return `Appointment ${action}: to ${datePart}, ${weekdayPart}, ${shiftPeriod} (${kindLabel})`;
+    },
+    [],
+  );
   const weekGlanceRows = useMemo(() => {
     const rowMap = new Map<
       string,
@@ -2292,10 +2351,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         displayProfile?.full_name ||
         session.user.email ||
         "A volunteer";
+      const requestedShift = instanceShifts.find((shift) => shift.instanceId === activeShiftInstanceId);
       await supabase.functions.invoke("send-admin-push", {
         body: {
           title: "Shift request",
-          body: `${volunteerName} requested to join a shift.`,
+          body: `${volunteerName} requested to join ${formatShortShiftRequestLabel({
+            starts_at: requestedShift?.start?.toISOString(),
+            title: requestedShift?.title,
+          })}.`,
           url: "/?view=notifications",
         },
       });
@@ -2665,20 +2728,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 ? "Orientation"
               : "Other";
       if (appointmentForm.kind !== "orientation") {
+        const notificationBody = formatAppointmentNotificationBody("Added", appointmentsShift, kindLabel);
         const leadNotifyError = await notifyLeadsOnShiftInstance({
           shiftInstanceId: appointmentsShiftInstanceId,
           excludeVolunteerIds: [session.user.id],
           title: "New appointment",
-          body: `${kindLabel}: ${appointmentForm.title.trim()} was added to ${appointmentsShift.title}.`,
+          body: notificationBody,
           notificationType: "shift_added",
         });
         if (leadNotifyError) {
           setAppointmentsMessage(`Appointment saved, but ${leadNotifyError}`);
         }
       }
+      const notificationBody = formatAppointmentNotificationBody("Added", appointmentsShift, kindLabel);
       const adminNotifyError = await sendAdminPush({
         title: "New appointment",
-        body: `${kindLabel}: ${appointmentForm.title.trim()} was added to ${appointmentsShift.title}.`,
+        body: notificationBody,
       });
       if (adminNotifyError) {
         setAppointmentsMessage((previous) =>
@@ -2705,6 +2770,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     appointmentsShiftInstanceId,
     canModifyAppointments,
     fetchWeekAppointments,
+    formatAppointmentNotificationBody,
     session.user.id,
     toShiftDateTimeIso,
   ]);
@@ -2736,18 +2802,35 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         });
       }
       if (appointmentsShiftInstanceId) {
-        const appointmentTitle = (deletedAppointment?.title ?? "An appointment").trim();
-        const shiftTitle = appointmentsShift?.title ?? "the shift";
+        const deletedKindLabel = deletedAppointment
+          ? (() => {
+              const kind = getAppointmentKindFromColor(deletedAppointment.color);
+              return kind === "foster"
+                ? "Foster"
+                : kind === "adoption"
+                  ? "Adoption"
+                  : kind === "vax"
+                    ? "Vax"
+                    : kind === "orientation"
+                      ? "Orientation"
+                      : "Other";
+            })()
+          : "Other";
+        const notificationBody = formatAppointmentNotificationBody(
+          "Deleted",
+          appointmentsShift,
+          deletedKindLabel,
+        );
         const leadNotifyError = await notifyLeadsOnShiftInstance({
           shiftInstanceId: appointmentsShiftInstanceId,
           excludeVolunteerIds: [session.user.id],
           title: "Appointment deleted",
-          body: `${appointmentTitle} was deleted from ${shiftTitle}.`,
+          body: notificationBody,
           notificationType: "shift_removed",
         });
         const adminNotifyError = await sendAdminPush({
           title: "Appointment deleted",
-          body: `${appointmentTitle} was deleted from ${shiftTitle}.`,
+          body: notificationBody,
         });
         const notificationErrors = [leadNotifyError, adminNotifyError && `admin notification failed: ${adminNotifyError}`]
           .filter((value): value is string => Boolean(value));
@@ -2764,6 +2847,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       appointmentsShiftInstanceId,
       canModifyAppointments,
       fetchWeekAppointments,
+      formatAppointmentNotificationBody,
       selectedShiftAppointments,
       session.user.id,
     ],
@@ -4714,9 +4798,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     const startsAt = shiftInstance?.starts_at ?? shiftInstance?.shift_date ?? "";
                     const endsAt = shiftInstance?.ends_at ?? "";
                     const shiftTitle = shiftInstance?.template?.title ?? "Shift";
-                    const timeLine = `${formatDateTime(startsAt)}${
-                      endsAt ? ` — ${formatDateTime(endsAt)}` : ""
-                    } · ${shiftTitle}`;
+                    const timeLine =
+                      request.status === "pending"
+                        ? formatShortShiftRequestLabel(shiftInstance)
+                        : `${formatDateTime(startsAt)}${
+                            endsAt ? ` — ${formatDateTime(endsAt)}` : ""
+                          } · ${shiftTitle}`;
                     const readableDropReason = normalizeDropReason(request.dropped_reason);
                     const isLatest = index === 0;
 

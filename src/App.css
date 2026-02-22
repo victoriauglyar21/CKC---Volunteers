@@ -869,6 +869,10 @@
   gap: 3px;
 }
 
+.calendar-grid.month-mode .day-cell {
+  overflow: hidden;
+}
+
 .month-shift-group {
   display: grid;
   gap: 2px;
