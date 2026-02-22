@@ -1204,7 +1204,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         .from("shift_instances")
         .select("id, shift_date, starts_at")
         .eq("template_id", recurringForm.templateId)
-        .in("shift_date", targetDateKeys);
+        .or(
+          `starts_at.gte.${startIso},starts_at.lt.${endExclusive},shift_date.gte.${rangeStart},shift_date.lte.${rangeEnd}`,
+        );
       if (targetInstancesError) {
         setRecurringMessage(targetInstancesError.message);
         setRecurringSaving(false);
