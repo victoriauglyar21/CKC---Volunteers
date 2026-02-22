@@ -2372,6 +2372,12 @@
   background: #ffb6cf;
 }
 
+.notification-card-focus {
+  outline: 2px solid #b9693c;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(185, 105, 60, 0.18);
+}
+
 
 .notification-actions {
   display: flex;

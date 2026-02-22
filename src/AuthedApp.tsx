@@ -233,6 +233,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     action: "approve" | "deny";
     assignmentId: string;
   } | null>(null);
+  const [notificationFocusAssignmentId, setNotificationFocusAssignmentId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const scrollYRef = useRef(0);
@@ -2361,11 +2362,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         ? (savedAssignments[0]?.id ?? null)
         : null;
       const requestNotificationsUrl = "/?view=notifications";
+      const focusNotificationsUrl = requestedAssignmentId
+        ? `/?view=notifications&focusAssignmentId=${requestedAssignmentId}`
+        : requestNotificationsUrl;
       const approveActionUrl = requestedAssignmentId
-        ? `/?view=notifications&notificationAction=approve&assignmentId=${requestedAssignmentId}`
+        ? `/?view=notifications&notificationAction=approve&assignmentId=${requestedAssignmentId}&focusAssignmentId=${requestedAssignmentId}`
         : requestNotificationsUrl;
       const denyActionUrl = requestedAssignmentId
-        ? `/?view=notifications&notificationAction=deny&assignmentId=${requestedAssignmentId}`
+        ? `/?view=notifications&notificationAction=deny&assignmentId=${requestedAssignmentId}&focusAssignmentId=${requestedAssignmentId}`
         : requestNotificationsUrl;
       await supabase.functions.invoke("send-admin-push", {
         body: {
@@ -2374,7 +2378,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             starts_at: requestedShift?.start?.toISOString(),
             title: requestedShift?.title,
           })})`,
-          url: requestNotificationsUrl,
+          url: focusNotificationsUrl,
           actions: requestedAssignmentId
             ? [
                 { action: "approve-request", title: "Approve" },
@@ -3297,7 +3301,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const actorName =
       displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "A volunteer";
     const reasonText = dropReason.trim();
-    const droppedShiftLabel = formatShortShiftRequestLabel(targetAssignment?.shift_instance);
+    const fallbackShiftForLabel =
+      targetShiftInstanceId != null
+        ? instanceShifts.find((shift) => shift.instanceId === targetShiftInstanceId)
+        : null;
+    const droppedShiftLabel = formatShortShiftRequestLabel(
+      targetAssignment?.shift_instance
+        ? targetAssignment.shift_instance
+        : fallbackShiftForLabel
+          ? {
+              starts_at: fallbackShiftForLabel.start.toISOString(),
+              title: fallbackShiftForLabel.title,
+            }
+          : null,
+    );
     const pushMessage = reasonText
       ? `${actorName} Dropped (${droppedShiftLabel}). Reason: ${reasonText}`
       : `${actorName} Dropped (${droppedShiftLabel})`;
@@ -3353,6 +3370,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
       window.history.replaceState(null, "", nextUrl);
     }
+    const focusAssignmentIdParam = params.get("focusAssignmentId");
+    if (focusAssignmentIdParam) {
+      setNotificationFocusAssignmentId(focusAssignmentIdParam);
+      params.delete("focusAssignmentId");
+      const nextQuery = params.toString();
+      const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
+      window.history.replaceState(null, "", nextUrl);
+    }
   }, []);
 
   useEffect(() => {
@@ -3368,6 +3393,30 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     );
     setPendingNotificationUrlAction(null);
   }, [pendingNotificationUrlAction, showNotifications, isPrimaryAdminAccount]);
+
+  useEffect(() => {
+    if (!showNotifications || !notificationFocusAssignmentId) return;
+    if (notifications.length === 0) return;
+
+    const targetId = `notification-${notificationFocusAssignmentId}`;
+    let attempts = 0;
+    const scrollToTarget = () => {
+      const target = document.getElementById(targetId);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.classList.add("notification-card-focus");
+        window.setTimeout(() => target.classList.remove("notification-card-focus"), 1800);
+        setNotificationFocusAssignmentId(null);
+        return;
+      }
+      if (attempts < 8) {
+        attempts += 1;
+        window.setTimeout(scrollToTarget, 120);
+      }
+    };
+
+    window.setTimeout(scrollToTarget, 80);
+  }, [showNotifications, notifications, notificationFocusAssignmentId]);
 
   // Removed focus refresh to avoid reloading view on tab switch.
 
@@ -4878,6 +4927,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         return (
                           <div
                             key={request.id}
+                            id={`notification-${request.id}`}
                             className={`notification-card ${isLatest ? "latest" : ""}`}
                             role="button"
                             tabIndex={0}
@@ -4905,6 +4955,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       return (
                         <div
                           key={request.id}
+                          id={`notification-${request.id}`}
                           className={`notification-card ${isLatest ? "latest" : ""}`}
                           role="button"
                           tabIndex={0}
@@ -4961,6 +5012,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     return (
                       <div
                         key={request.id}
+                        id={`notification-${request.id}`}
                         className={`notification-card ${isLatest ? "latest" : ""}`}
                         role="button"
                         tabIndex={0}
