@@ -11,6 +11,7 @@ import { signOutSafely, supabase } from "./supabaseClient";
 import {
   APPOINTMENT_COLOR_ADOPTION,
   APPOINTMENT_COLOR_FOSTER,
+  APPOINTMENT_COLOR_ORIENTATION,
   APPOINTMENT_COLOR_VAX,
   APPOINTMENT_COLOR_OTHER_DEFAULT,
   dayFormatter,
@@ -2660,16 +2661,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             ? "Adoption"
             : appointmentForm.kind === "vax"
               ? "Vax"
+              : appointmentForm.kind === "orientation"
+                ? "Orientation"
               : "Other";
-      const leadNotifyError = await notifyLeadsOnShiftInstance({
-        shiftInstanceId: appointmentsShiftInstanceId,
-        excludeVolunteerIds: [session.user.id],
-        title: "New appointment",
-        body: `${kindLabel}: ${appointmentForm.title.trim()} was added to ${appointmentsShift.title}.`,
-        notificationType: "shift_added",
-      });
-      if (leadNotifyError) {
-        setAppointmentsMessage(`Appointment saved, but ${leadNotifyError}`);
+      if (appointmentForm.kind !== "orientation") {
+        const leadNotifyError = await notifyLeadsOnShiftInstance({
+          shiftInstanceId: appointmentsShiftInstanceId,
+          excludeVolunteerIds: [session.user.id],
+          title: "New appointment",
+          body: `${kindLabel}: ${appointmentForm.title.trim()} was added to ${appointmentsShift.title}.`,
+          notificationType: "shift_added",
+        });
+        if (leadNotifyError) {
+          setAppointmentsMessage(`Appointment saved, but ${leadNotifyError}`);
+        }
       }
       const adminNotifyError = await sendAdminPush({
         title: "New appointment",
@@ -4450,10 +4455,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             if (nextKind === "vax") {
                               return { ...prev, kind: nextKind, color: APPOINTMENT_COLOR_VAX };
                             }
+                            if (nextKind === "orientation") {
+                              return { ...prev, kind: nextKind, color: APPOINTMENT_COLOR_ORIENTATION };
+                            }
                             const inheritedColor =
                               prev.color === APPOINTMENT_COLOR_FOSTER ||
                               prev.color === APPOINTMENT_COLOR_ADOPTION ||
-                              prev.color === APPOINTMENT_COLOR_VAX
+                              prev.color === APPOINTMENT_COLOR_VAX ||
+                              prev.color === APPOINTMENT_COLOR_ORIENTATION
                                 ? APPOINTMENT_COLOR_OTHER_DEFAULT
                                 : prev.color;
                             return { ...prev, kind: nextKind, color: inheritedColor };
@@ -4463,6 +4472,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         <option value="foster">Foster</option>
                         <option value="adoption">Adoption</option>
                         <option value="vax">Vax</option>
+                        <option value="orientation">Orientation</option>
                         <option value="other">Other</option>
                       </select>
                     </label>

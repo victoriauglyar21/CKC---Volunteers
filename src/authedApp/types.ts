@@ -139,7 +139,7 @@ export type ShiftAppointment = {
   created_by: string | null;
 };
 
-export type AppointmentKind = "foster" | "adoption" | "vax" | "other";
+export type AppointmentKind = "foster" | "adoption" | "vax" | "orientation" | "other";
 
 export type DropDayLeadAssignment = {
   volunteer_id: string;

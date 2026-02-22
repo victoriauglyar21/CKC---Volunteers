@@ -2,6 +2,7 @@ import { supabase } from "../../supabaseClient";
 import {
   APPOINTMENT_COLOR_ADOPTION,
   APPOINTMENT_COLOR_FOSTER,
+  APPOINTMENT_COLOR_ORIENTATION,
   APPOINTMENT_COLOR_VAX,
   APPOINTMENT_COLOR_OTHER_DEFAULT,
 } from "../constants";
@@ -64,6 +65,8 @@ export async function saveAppointment(input: SaveAppointmentInput) {
         ? APPOINTMENT_COLOR_ADOPTION
         : input.kind === "vax"
           ? APPOINTMENT_COLOR_VAX
+          : input.kind === "orientation"
+            ? APPOINTMENT_COLOR_ORIENTATION
         : input.color || APPOINTMENT_COLOR_OTHER_DEFAULT;
 
   const payload = {

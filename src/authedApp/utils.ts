@@ -1,6 +1,7 @@
 import {
   APPOINTMENT_COLOR_ADOPTION,
   APPOINTMENT_COLOR_FOSTER,
+  APPOINTMENT_COLOR_ORIENTATION,
   APPOINTMENT_COLOR_VAX,
   SELF_DROP_REASON_PREFIX,
   timeFormatter,
@@ -210,6 +211,7 @@ export function getAppointmentKindFromColor(color: string | null | undefined): A
   if (normalized === APPOINTMENT_COLOR_FOSTER) return "foster";
   if (normalized === APPOINTMENT_COLOR_ADOPTION) return "adoption";
   if (normalized === APPOINTMENT_COLOR_VAX) return "vax";
+  if (normalized === APPOINTMENT_COLOR_ORIENTATION) return "orientation";
   return "other";
 }
 
