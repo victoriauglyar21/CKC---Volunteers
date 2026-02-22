@@ -100,8 +100,6 @@ import {
 } from "./authedApp/utils";
 
 export default function AuthedApp({ session, profile }: AuthedAppProps) {
-  const calendarDebugEnabled =
-    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugCalendar") === "1";
   const [today, setToday] = useState(() => startOfDay(new Date()));
   const [templates, setTemplates] = useState<ShiftTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -797,27 +795,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       map[targetInstanceId].push(normalizedAssignment);
     });
 
-    if (calendarDebugEnabled) {
-      const mappedCount = Object.values(map).reduce((sum, items) => sum + items.length, 0);
-      // Temporary runtime diagnostics for assignment visibility mismatches.
-      console.log("[calendar-debug] fetchWeekAssignments", {
-        visibleShiftCount: instanceShifts.length,
-        realVisibleInstanceIds,
-        eligibleInstanceIds: instanceIds,
-        fetchedAssignments: allAssignments.length,
-        mappedAssignments: mappedCount,
-        droppedAssignments,
-        sampleAssignments: (allAssignments as Array<Record<string, unknown>>).slice(0, 5).map((item) => ({
-          id: item.id,
-          shift_instance_id: item.shift_instance_id,
-          volunteer_id: item.volunteer_id,
-          status: item.status,
-        })),
-      });
-    }
-
     setWeekAssignments(map);
-  }, [instanceShifts, calendarDebugEnabled]);
+  }, [instanceShifts]);
 
   const fetchWeekAppointments = useCallback(async () => {
     if (instanceShifts.length === 0) {
@@ -3199,29 +3178,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       );
 
     if (error) {
-      if (calendarDebugEnabled) {
-        console.log("[calendar-debug] handleAssignVolunteer upsert error", {
-          assignShiftInstanceId,
-          volunteerId,
-          error: error.message,
-        });
-      }
       setAssignMessage(error.message);
       setAssignLoading(false);
       return;
-    }
-
-    if (calendarDebugEnabled) {
-      console.log("[calendar-debug] handleAssignVolunteer upsert success", {
-        assignShiftInstanceId,
-        volunteerId,
-        visibleShiftForInstance: instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId)
-          ? {
-              instanceId: assignShiftInstanceId,
-              shift: instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId)?.title,
-            }
-          : null,
-      });
     }
 
     setShowAssignVolunteer(false);
