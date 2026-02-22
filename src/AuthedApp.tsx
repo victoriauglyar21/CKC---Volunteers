@@ -1181,16 +1181,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       if (rowsToInsert.length > 0) {
         const { data: insertedInstances, error: insertInstanceError } = await supabase
           .from("shift_instances")
-          .insert(rowsToInsert)
+          .upsert(rowsToInsert, { onConflict: "template_id,shift_date" })
           .select("id, shift_date, starts_at");
         if (insertInstanceError) {
-          const looksLikeDuplicate =
-            insertInstanceError.code === "23505" || /duplicate|unique/i.test(insertInstanceError.message);
-          if (!looksLikeDuplicate) {
-            setRecurringMessage(insertInstanceError.message);
-            setRecurringSaving(false);
-            return;
-          }
+          setRecurringMessage(insertInstanceError.message);
+          setRecurringSaving(false);
+          return;
         }
         if (insertedInstances && insertedInstances.length > 0) {
           instancesForRange = [...instancesForRange, ...insertedInstances];
@@ -2120,11 +2116,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       leadAssignment,
       ...regularAssignments,
       ...otherAssignments,
-    ].slice(0, 8);
+    ];
     while (slotAssignments.length < 6) {
       slotAssignments.push(null);
     }
-    const canAddExtraVolunteer = slotAssignments.length < 8;
+    const canAddExtraVolunteer = true;
     const appointmentsForShift = appointmentsByShift[shift.instanceId] ?? [];
 
     return (
