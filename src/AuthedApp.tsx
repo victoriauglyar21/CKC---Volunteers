@@ -255,6 +255,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [calendarFocusDateKeyFromUrl, setCalendarFocusDateKeyFromUrl] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [todayJumpToken, setTodayJumpToken] = useState(0);
+  const [shiftInstancesRefreshToken, setShiftInstancesRefreshToken] = useState(0);
   const scrollYRef = useRef(0);
   const liveRefreshInFlightRef = useRef(false);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -553,7 +554,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     return () => {
       mounted = false;
     };
-  }, [today, weekOffset, monthOffset, calendarRangeMode, templates]);
+  }, [today, weekOffset, monthOffset, calendarRangeMode, templates, shiftInstancesRefreshToken]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 600px)");
@@ -1079,11 +1080,70 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         `starts_at.gte.${startIso},starts_at.lt.${endExclusive},shift_date.gte.${rangeStart},shift_date.lte.${rangeEnd}`,
       );
 
+    if (instanceError) {
+      setRecurringMessage(instanceError.message);
+      setRecurringSaving(false);
+      return;
+    }
+
+    let instancesForRange = instances ?? [];
+    const selectedTemplate = templateMap[recurringForm.templateId];
+    if (selectedTemplate) {
+      const existingKeys = new Set(
+        instancesForRange
+          .map((instance) => {
+            if (instance.shift_date) return instance.shift_date;
+            if (!instance.starts_at) return null;
+            const parsed = new Date(instance.starts_at);
+            return Number.isNaN(parsed.getTime()) ? null : getDateKey(parsed);
+          })
+          .filter((value): value is string => Boolean(value)),
+      );
+      const rowsToInsert: {
+        template_id: string;
+        shift_date: string;
+        starts_at: string;
+        ends_at: string;
+      }[] = [];
+      let cursor = parseDateOnly(rangeStart);
+      const endCursor = parseDateOnly(rangeEnd);
+      while (cursor && endCursor && cursor.getTime() <= endCursor.getTime()) {
+        const dayKey = getDateKey(cursor);
+        if (!existingKeys.has(dayKey)) {
+          const startsAt = toIsoForDateAndTime(cursor, resolveTemplateStartTime(selectedTemplate));
+          const endsAt = toIsoForDateAndTime(cursor, resolveTemplateEndTime(selectedTemplate));
+          if (startsAt && endsAt) {
+            rowsToInsert.push({
+              template_id: recurringForm.templateId,
+              shift_date: dayKey,
+              starts_at: startsAt,
+              ends_at: endsAt,
+            });
+            existingKeys.add(dayKey);
+          }
+        }
+        cursor = addDays(cursor, 1);
+      }
+
+      if (rowsToInsert.length > 0) {
+        const { data: insertedInstances, error: insertInstanceError } = await supabase
+          .from("shift_instances")
+          .insert(rowsToInsert)
+          .select("id, shift_date, starts_at");
+        if (insertInstanceError) {
+          setRecurringMessage(insertInstanceError.message);
+          setRecurringSaving(false);
+          return;
+        }
+        instancesForRange = [...instancesForRange, ...(insertedInstances ?? [])];
+      }
+    }
+
     const allowedDays = recurringDays;
     const repeatIntervalWeeks = Number(recurringForm.repeatEveryWeeks) === 2 ? 2 : 1;
     const filteredInstances =
       allowedDays.length > 0
-        ? (instances ?? []).filter((instance) => {
+        ? instancesForRange.filter((instance) => {
             const dayCode = getDayCode(instance.shift_date ?? instance.starts_at ?? undefined);
             if (!dayCode || !allowedDays.includes(dayCode)) return false;
             return matchesRecurringWeek(
@@ -1092,13 +1152,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               repeatIntervalWeeks,
             );
           })
-        : instances ?? [];
-
-    if (instanceError) {
-      setRecurringMessage(instanceError.message);
-      setRecurringSaving(false);
-      return;
-    }
+        : instancesForRange;
 
     if (recurringEditId) {
       const targetRecurring = volunteerRecurring.find((item) => item.id === recurringEditId);
@@ -1233,6 +1287,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setRecurringEditId(null);
     setShowAddRecurring(false);
     setRecurringSaving(false);
+    setShiftInstancesRefreshToken((value) => value + 1);
     fetchVolunteerRecurring(selectedVolunteer.id);
     fetchMyShifts();
     fetchWeekAssignments();
@@ -1243,6 +1298,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     recurringForm,
     recurringDays,
     today,
+    templateMap,
     fetchVolunteerRecurring,
     fetchMyShifts,
     fetchWeekAssignments,
@@ -1347,6 +1403,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         setRecurringDays([]);
         setShowAddRecurring(false);
       }
+      setShiftInstancesRefreshToken((value) => value + 1);
       fetchVolunteerRecurring(selectedVolunteer.id);
       fetchMyShifts();
       fetchWeekAssignments();
@@ -4519,10 +4576,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       const templateInstance = instanceShifts.find(
                         (shift) => shift.templateId === recurring.template_id,
                       );
-                      const timeRange = template.start_time
-                        ? `${formatTemplateTime(template.start_time)} — ${formatTemplateTime(
-                            template.end_time,
-                          )}`
+                      const timeRange = template
+                        ? formatCompactTemplateTimeRange(
+                            resolveTemplateStartTime(template),
+                            resolveTemplateEndTime(template),
+                          )
                         : templateInstance
                           ? formatTimeRangeFromInstance(templateInstance.start, templateInstance.end)
                           : "—";
@@ -5836,10 +5894,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             const templateInstance = instanceShifts.find(
                               (shift) => shift.templateId === recurring.template_id,
                             );
-                            const timeRange = templateMeta?.start_time
+                            const timeRange = templateMeta
                               ? formatCompactTemplateTimeRange(
-                                  templateMeta.start_time,
-                                  templateMeta.end_time,
+                                  resolveTemplateStartTime(templateMeta),
+                                  resolveTemplateEndTime(templateMeta),
                                 )
                               : templateInstance
                                 ? formatTimeRangeFromInstance(
