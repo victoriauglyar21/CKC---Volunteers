@@ -24,6 +24,7 @@ export type ShiftInstance = {
 
 export type ShiftAssignmentDetail = {
   id: string;
+  shift_instance_id?: number | null;
   created_at?: string | null;
   dropped_at?: string | null;
   status?: "active" | "dropped" | "pending";

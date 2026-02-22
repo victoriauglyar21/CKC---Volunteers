@@ -5,6 +5,7 @@ import type { ShiftAssignmentDetail } from "../types";
 
 const NOTIFICATION_SELECT = `
   id,
+  shift_instance_id,
   created_at,
   dropped_at,
   status,

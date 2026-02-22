@@ -117,6 +117,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsMessage, setNotificationsMessage] = useState("");
   const [notifications, setNotifications] = useState<ShiftAssignmentDetail[]>([]);
+  const [notificationShiftFallbacks, setNotificationShiftFallbacks] = useState<
+    Record<
+      number,
+      {
+        id: number;
+        shift_date: string | null;
+        starts_at: string | null;
+        ends_at: string | null;
+        template: { id: string; title: string } | null;
+      }
+    >
+  >({});
   const [dismissedNotificationTokens, setDismissedNotificationTokens] = useState<Set<string>>(new Set());
   const [hasLoadedNotifications, setHasLoadedNotifications] = useState(false);
   const [notificationCount, setNotificationCount] = useState(0);
@@ -3395,6 +3407,60 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [pendingNotificationUrlAction, showNotifications, isPrimaryAdminAccount]);
 
   useEffect(() => {
+    const missingIds = Array.from(
+      new Set(
+        notifications
+          .map((item) => {
+            const hasShiftDate = Boolean(item.shift_instance?.starts_at || item.shift_instance?.shift_date);
+            if (hasShiftDate) return null;
+            const rawId = item.shift_instance?.id ?? item.shift_instance_id ?? null;
+            return Number.isInteger(rawId) ? Number(rawId) : null;
+          })
+          .filter((value): value is number => Boolean(value) && !notificationShiftFallbacks[value]),
+      ),
+    );
+    if (missingIds.length === 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      const { data, error } = await supabase
+        .from("shift_instances")
+        .select(
+          `
+          id,
+          shift_date,
+          starts_at,
+          ends_at,
+          template:shift_templates (
+            id,
+            title
+          )
+        `,
+        )
+        .in("id", missingIds);
+      if (cancelled || error || !data) return;
+      setNotificationShiftFallbacks((prev) => {
+        const next = { ...prev };
+        (data as unknown as ShiftAssignmentDetail["shift_instance"][]).forEach((item) => {
+          if (!item?.id) return;
+          next[item.id] = {
+            id: item.id,
+            shift_date: item.shift_date ?? null,
+            starts_at: item.starts_at ?? null,
+            ends_at: item.ends_at ?? null,
+            template: item.template ?? null,
+          };
+        });
+        return next;
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [notifications, notificationShiftFallbacks]);
+
+  useEffect(() => {
     if (!showNotifications || !notificationFocusAssignmentId) return;
     if (notifications.length === 0) return;
 
@@ -4910,17 +4976,28 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       request.volunteer?.full_name ||
                       "Volunteer";
                     const shiftInstance = request.shift_instance;
-                    const fallbackNotificationShift =
-                      shiftInstance?.id != null
-                        ? instanceShifts.find((shift) => shift.instanceId === shiftInstance.id)
+                    const fallbackNotificationShiftFromQuery =
+                      (shiftInstance?.id ?? request.shift_instance_id ?? null) != null
+                        ? notificationShiftFallbacks[
+                            Number(shiftInstance?.id ?? request.shift_instance_id ?? -1)
+                          ] ?? null
                         : null;
+                    const fallbackNotificationShiftFromCalendar =
+                      ((shiftInstance?.id ?? request.shift_instance_id ?? null) != null
+                        ? instanceShifts.find(
+                            (shift) =>
+                              shift.instanceId === (shiftInstance?.id ?? request.shift_instance_id ?? -1),
+                          )
+                        : null);
                     const notificationShiftLabel = formatShortShiftRequestLabel(
                       shiftInstance?.starts_at || shiftInstance?.shift_date
                         ? shiftInstance
-                        : fallbackNotificationShift
+                        : fallbackNotificationShiftFromQuery
+                          ? fallbackNotificationShiftFromQuery
+                          : fallbackNotificationShiftFromCalendar
                           ? {
-                              starts_at: fallbackNotificationShift.start.toISOString(),
-                              title: fallbackNotificationShift.title,
+                              starts_at: fallbackNotificationShiftFromCalendar.start.toISOString(),
+                              title: fallbackNotificationShiftFromCalendar.title,
                             }
                           : null,
                     );
