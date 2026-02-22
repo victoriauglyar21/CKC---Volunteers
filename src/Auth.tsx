@@ -340,27 +340,29 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
           </button>
         </form>
 
-        {!isSignup ? (
+        <div className="auth-actions">
+          {!isSignup ? (
+            <button
+              className="auth-switch"
+              type="button"
+              onClick={handleForgotPassword}
+              disabled={resetting}
+            >
+              {resetting ? "Sending reset email…" : "Forgot your password?"}
+            </button>
+          ) : null}
+
           <button
             className="auth-switch"
             type="button"
-            onClick={handleForgotPassword}
-            disabled={resetting}
+            onClick={() => {
+              setMsg("");
+              setIsSignup((v) => !v);
+            }}
           >
-            {resetting ? "Sending reset email…" : "Forgot your password?"}
+            Switch to {isSignup ? "Sign In" : "Sign Up"}
           </button>
-        ) : null}
-
-        <button
-          className="auth-switch"
-          type="button"
-          onClick={() => {
-            setMsg("");
-            setIsSignup((v) => !v);
-          }}
-        >
-          Switch to {isSignup ? "Sign In" : "Sign Up"}
-        </button>
+        </div>
 
         {msg ? <p className="auth-message">{msg}</p> : null}
       </div>

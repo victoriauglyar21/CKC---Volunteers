@@ -222,9 +222,13 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
 
   useEffect(() => {
     if (typeof document === "undefined") return;
+    document.documentElement.classList.add("profile-onboarding-active");
     document.body.classList.add("profile-onboarding-active");
+    document.getElementById("root")?.classList.add("profile-onboarding-active");
     return () => {
+      document.documentElement.classList.remove("profile-onboarding-active");
       document.body.classList.remove("profile-onboarding-active");
+      document.getElementById("root")?.classList.remove("profile-onboarding-active");
     };
   }, []);
 
