@@ -7,722 +7,96 @@ import {
   type MouseEvent as ReactMouseEvent,
   type TouchEvent as ReactTouchEvent,
 } from "react";
-import type { Session } from "@supabase/supabase-js";
-import { supabase } from "./supabaseClient";
-
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const WEEKDAYS_MONDAY_FIRST = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-const monthFormatter = new Intl.DateTimeFormat("en-US", {
-  month: "short",
-});
-
-const monthJumpFormatter = new Intl.DateTimeFormat("en-US", {
-  month: "long",
-});
-
-const dayFormatter = new Intl.DateTimeFormat("en-US", {
-  month: "short",
-  day: "numeric",
-});
-
-const timeFormatter = new Intl.DateTimeFormat("en-US", {
-  hour: "numeric",
-  minute: "2-digit",
-});
-
-const PRIMARY_ADMIN_EMAIL = "victoriauglyar21@gmail.com";
-
-type ShiftTemplate = {
-  id: string;
-  title: string;
-  start_time: string;
-  end_time: string;
-  rrule: string | null;
-  capacity: number | null;
-  timezone: string | null;
-  description: string | null;
-  is_active: boolean;
-};
-
-type ShiftInstance = {
-  id: string;
-  title: string;
-  start: Date;
-  end: Date;
-  templateId: string;
-  instanceId: number;
-  isVirtual?: boolean;
-};
-
-type ShiftAssignmentDetail = {
-  id: string;
-  created_at?: string | null;
-  dropped_at?: string | null;
-  status?: "active" | "dropped" | "pending";
-  dropped_reason?: string | null;
-  notes?: string | null;
-  assignment_role: "lead" | "regular";
-  volunteer: {
-    id: string;
-    full_name: string | null;
-    preferred_name: string | null;
-    phone?: string | null;
-    role?: "Regular Volunteer" | "Lead" | "Admin" | null;
-  } | null;
-  shift_instance?: {
-    id: number;
-    shift_date: string | null;
-    starts_at: string | null;
-    ends_at: string | null;
-    template?: {
-      id: string;
-      title: string;
-    } | null;
-  } | null;
-};
-
-
-type CalendarCell = {
-  date: Date | null;
-  label: string;
-};
-
-type ProfileRecord = {
-  id: string;
-  role: "Regular Volunteer" | "Lead" | "Admin";
-  full_name: string | null;
-  preferred_name: string | null;
-  pronouns: string | null;
-  date_of_birth: string | null;
-  phone: string | null;
-  emergency_contact_name: string | null;
-  emergency_contact_phone: string | null;
-  status: string | null;
-  joined_at: string | null;
-  internal_notes: string | null;
-  interests: string[] | null;
-  training_completed: boolean | null;
-  training_completed_at: string | null;
-  notification_pref?: "email_only" | "push_and_email" | null;
-  notification_settings?: Record<string, boolean> | null;
-  created_at?: string | null;
-};
-
-type VolunteerRow = {
-  id: string;
-  full_name: string | null;
-  preferred_name: string | null;
-  pronouns: string | null;
-  role: "Regular Volunteer" | "Lead" | "Admin";
-  joined_at: string | null;
-  date_of_birth: string | null;
-  phone: string | null;
-  emergency_contact_name: string | null;
-  emergency_contact_phone: string | null;
-  status: string | null;
-  internal_notes: string | null;
-  interests: string[] | null;
-  training_completed: boolean | null;
-  training_completed_at: string | null;
-  notification_pref?: "email_only" | "push_and_email" | null;
-  created_at?: string | null;
-};
-
-type RecurringAssignment = {
-  id: string;
-  volunteer_id: string;
-  template_id: string;
-  starts_on: string;
-  ends_on: string | null;
-  byday?: string[] | null;
-  template?: {
-    id: string;
-    title: string;
-  } | null;
-};
-
-type ShiftAssignment = {
-  id: string;
-  status: "active" | "dropped" | "pending";
-  assignment_role: "lead" | "regular";
-  shift_instance: {
-    id: number;
-    shift_date: string | null;
-    starts_at: string | null;
-    ends_at: string | null;
-    notes: string | null;
-    template: {
-      id: string;
-      title: string;
-    } | null;
-  } | null;
-};
-
-type ShiftAppointment = {
-  id: string;
-  shift_instance_id: number;
-  title: string;
-  description: string | null;
-  color: string | null;
-  starts_at: string | null;
-  ends_at: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-  created_by: string | null;
-};
-
-type AppointmentKind = "foster" | "adoption" | "other";
-
-const APPOINTMENT_COLOR_FOSTER = "#22c55e";
-const APPOINTMENT_COLOR_ADOPTION = "#a855f7";
-const APPOINTMENT_COLOR_OTHER_DEFAULT = "#f97316";
-
-type DropDayLeadAssignment = {
-  volunteer_id: string;
-  assignment_role: string | null;
-  volunteer:
-    | {
-        id: string;
-        role: string | null;
-      }
-    | {
-        id: string;
-        role: string | null;
-      }[]
-    | null;
-};
-
-function getDropAssignmentVolunteerRole(assignment: DropDayLeadAssignment) {
-  if (Array.isArray(assignment.volunteer)) {
-    return assignment.volunteer[0]?.role ?? null;
-  }
-  return assignment.volunteer?.role ?? null;
-}
-
-type PersonalAssignment = {
-  shift_date: string | null;
-  starts_at: string | null;
-  template_id: string | null;
-};
-
-type AuthedAppProps = {
-  session: Session;
-  profile: ProfileRecord | null;
-};
-
-const NOTIFICATION_SETTING_KEYS = [
-  "shift_added",
-  "shift_removed",
-  "shift_dropped",
-  "shift_approved",
-  "recurring_added",
-  "recurring_removed",
-  "shift_reminder",
-] as const;
-
-type NotificationSettingKey = (typeof NOTIFICATION_SETTING_KEYS)[number];
-
-function startOfDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function addDays(date: Date, amount: number) {
-  const next = new Date(date);
-  next.setDate(next.getDate() + amount);
-  return next;
-}
-
-function addMonths(date: Date, amount: number) {
-  const next = new Date(date);
-  next.setMonth(next.getMonth() + amount);
-  return next;
-}
-
-function diffInDays(start: Date, end: Date) {
-  const ms = startOfDay(end).getTime() - startOfDay(start).getTime();
-  return Math.floor(ms / (24 * 60 * 60 * 1000));
-}
-
-function getDateKey(date: Date) {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function getMonthKey(date: Date) {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  return `${year}-${month}`;
-}
-
-function getNotificationSortTimestamp(item: ShiftAssignmentDetail) {
-  const value = item.dropped_at ?? item.created_at ?? "";
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
-function getNotificationDismissToken(item: ShiftAssignmentDetail) {
-  const status = item.status ?? "unknown";
-  const changeMoment = item.dropped_at ?? item.created_at ?? "";
-  return `${item.id}:${status}:${changeMoment}`;
-}
-
-const SELF_DROP_REASON_PREFIX = "__self_drop__:";
-const ADMIN_DROPPED_NOTIFICATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
-
-function isSelfDropReason(reason: string | null | undefined) {
-  return Boolean(reason && reason.startsWith(SELF_DROP_REASON_PREFIX));
-}
-
-function normalizeDropReason(reason: string | null | undefined) {
-  if (!reason) return "";
-  return isSelfDropReason(reason) ? reason.slice(SELF_DROP_REASON_PREFIX.length).trim() : reason;
-}
-
-function parseDateOnly(value: string) {
-  const [year, month, day] = value.split("-").map((part) => Number(part));
-  if (!year || !month || !day) return null;
-  return new Date(year, month - 1, day);
-}
-
-function getShiftDayStart(shift: { starts_at?: string | null; shift_date?: string | null } | null | undefined) {
-  if (!shift) return null;
-  if (shift.shift_date) {
-    const parsed = parseDateOnly(shift.shift_date);
-    if (parsed) return startOfDay(parsed);
-  }
-  if (!shift.starts_at) return null;
-  const parsed = new Date(shift.starts_at);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return startOfDay(parsed);
-}
-
-function getWeekStart(baseDate: Date, mondayFirst: boolean) {
-  const weekdayOffset = mondayFirst ? (baseDate.getDay() + 6) % 7 : baseDate.getDay();
-  return addDays(startOfDay(baseDate), -weekdayOffset);
-}
-
-type ShiftInstanceRow = {
-  id: number;
-  starts_at: string | null;
-  ends_at: string | null;
-  shift_date: string | null;
-  template: {
-    id: string;
-    title: string;
-  } | null;
-};
-
-function buildWeekCells(baseDate: Date, mondayFirst: boolean): CalendarCell[] {
-  const weekStart = getWeekStart(baseDate, mondayFirst);
-  const cells: CalendarCell[] = [];
-  for (let i = 0; i < 7; i += 1) {
-    const date = addDays(weekStart, i);
-    cells.push({ date, label: String(date.getDate()) });
-  }
-  return cells;
-}
-
-function buildMonthCells(baseDate: Date, mondayFirst: boolean): CalendarCell[] {
-  const firstOfMonth = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
-  const start = getWeekStart(firstOfMonth, mondayFirst);
-  const cells: CalendarCell[] = [];
-  for (let i = 0; i < 42; i += 1) {
-    const date = addDays(start, i);
-    cells.push({
-      date,
-      label: String(date.getDate()),
-    });
-  }
-  return cells;
-}
-
-function formatDate(value: string | null | undefined) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function toDateInputValue(value: string | null | undefined) {
-  if (!value) return "";
-  const directMatch = value.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (directMatch) return directMatch[1];
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function formatDateWithWeekday(value: string | null | undefined) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function formatDateTime(value: string | null | undefined) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function formatTimeOnly(value: string | null | undefined) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function format24HourTime(value: string | null | undefined) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
-}
-
-function toTimeInputValue(value: string | null | undefined) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
-}
-
-function normalizeHexColor(value: string | null | undefined) {
-  return (value ?? "").trim().toLowerCase();
-}
-
-function getAppointmentKindFromColor(color: string | null | undefined): AppointmentKind {
-  const normalized = normalizeHexColor(color);
-  if (normalized === APPOINTMENT_COLOR_FOSTER) return "foster";
-  if (normalized === APPOINTMENT_COLOR_ADOPTION) return "adoption";
-  return "other";
-}
-
-function normalizePhoneLink(value: string) {
-  return value.replace(/[^\d+]/g, "");
-}
-
-function parseStoredSet(raw: string | null) {
-  if (!raw) return new Set<string>();
-  try {
-    const parsed = JSON.parse(raw) as string[];
-    return new Set(parsed);
-  } catch {
-    return new Set<string>();
-  }
-}
-
-function formatTemplateTime(value: string | null | undefined) {
-  if (!value) return "—";
-  const [hours, minutes] = value.split(":");
-  if (!hours || !minutes) return value;
-  const date = new Date();
-  date.setHours(Number(hours), Number(minutes), 0, 0);
-  if (Number.isNaN(date.getTime())) return value;
-  return timeFormatter.format(date);
-}
-
-function getShiftPeriodLabel(template: ShiftTemplate | undefined) {
-  if (!template) return "shift";
-  if (/evening/i.test(template.title)) return "evening shift";
-  if (/morning/i.test(template.title)) return "morning shift";
-  const [hours] = (template.start_time ?? "").split(":");
-  const hour = Number(hours);
-  if (!Number.isNaN(hour)) {
-    return hour >= 12 ? "evening shift" : "morning shift";
-  }
-  return "shift";
-}
-
-function rankShiftForDisplay(shift: ShiftInstance) {
-  if (/lead/i.test(shift.title)) return 0;
-  if (/morning/i.test(shift.title)) return 1;
-  if (/evening/i.test(shift.title)) return 2;
-  return 3;
-}
-
-function getNormalizedRole(role: string | null | undefined) {
-  return (role ?? "").trim().toLowerCase();
-}
-
-function isAdminRole(role: string | null | undefined) {
-  const normalizedRole = getNormalizedRole(role);
-  return normalizedRole === "admin";
-}
-
-function isLeadRole(role: string | null | undefined) {
-  const normalizedRole = getNormalizedRole(role);
-  return normalizedRole === "lead" || normalizedRole === "lead volunteer";
-}
-
-function isLeadAssignmentRole(role: string | null | undefined) {
-  const normalizedRole = getNormalizedRole(role);
-  return normalizedRole === "lead" || normalizedRole === "lead volunteer";
-}
-
-function formatTimeRangeFromInstance(start: Date, end: Date) {
-  return `${timeFormatter.format(start)} — ${timeFormatter.format(end)}`;
-}
-
-function formatRRule(rrule: string | null | undefined) {
-  if (!rrule) return "Repeats";
-  const parts = rrule.split(";");
-  const freq = parts.find((part) => part.startsWith("FREQ="))?.replace("FREQ=", "");
-  const byday = parts.find((part) => part.startsWith("BYDAY="))?.replace("BYDAY=", "");
-  const dayMap: Record<string, string> = {
-    SU: "Sun",
-    MO: "Mon",
-    TU: "Tue",
-    WE: "Wed",
-    TH: "Thu",
-    FR: "Fri",
-    SA: "Sat",
-  };
-  const days = byday
-    ? byday
-        .split(",")
-        .map((day) => dayMap[day] ?? day)
-        .filter(Boolean)
-    : [];
-  const freqLabel = freq
-    ? freq.charAt(0).toUpperCase() + freq.slice(1).toLowerCase()
-    : "Repeats";
-  if (days.length > 0) {
-    return `${freqLabel} on ${days.join(", ")}`;
-  }
-  return freqLabel;
-}
-
-function formatByDay(days: string[] | null | undefined) {
-  if (!days || days.length === 0) return "Repeats";
-  const dayMap: Record<string, string> = {
-    SU: "Sun",
-    MO: "Mon",
-    TU: "Tue",
-    WE: "Wed",
-    TH: "Thu",
-    FR: "Fri",
-    SA: "Sat",
-  };
-  return days.map((day) => dayMap[day] ?? day).join(", ");
-}
-
-function formatByDayLongList(days: string[] | null | undefined) {
-  if (!days || days.length === 0) return "Every day";
-  const dayMap: Record<string, string> = {
-    SU: "Sunday",
-    MO: "Monday",
-    TU: "Tuesday",
-    WE: "Wednesday",
-    TH: "Thursday",
-    FR: "Friday",
-    SA: "Saturday",
-  };
-  return days.map((day) => dayMap[day] ?? day).join(", ");
-}
-
-function formatCompactTemplateTimeRange(startTime: string | null | undefined, endTime: string | null | undefined) {
-  const parse = (value: string | null | undefined) => {
-    const match = (value ?? "").match(/^(\d{1,2}):(\d{2})/);
-    if (!match) return null;
-    const rawHour = Number(match[1]);
-    const minute = Number(match[2]);
-    if (Number.isNaN(rawHour) || Number.isNaN(minute)) return null;
-    const meridiem = rawHour >= 12 ? "PM" : "AM";
-    const hour12 = rawHour % 12 || 12;
-    const minutePart = minute === 0 ? "" : `:${String(minute).padStart(2, "0")}`;
-    return { meridiem, label: `${hour12}${minutePart}` };
-  };
-
-  const start = parse(startTime);
-  const end = parse(endTime);
-  if (!start || !end) return "—";
-  if (start.meridiem === end.meridiem) return `${start.label}-${end.label}${end.meridiem}`;
-  return `${start.label}${start.meridiem}-${end.label}${end.meridiem}`;
-}
-
-function formatRepeatPattern(rrule: string | null | undefined) {
-  const days = parseRRuleDays(rrule);
-  const dayMap: Record<string, string> = {
-    SU: "Sunday",
-    MO: "Monday",
-    TU: "Tuesday",
-    WE: "Wednesday",
-    TH: "Thursday",
-    FR: "Friday",
-    SA: "Saturday",
-  };
-
-  const labels = days.map((day) => dayMap[day] ?? day).filter(Boolean);
-  if (labels.length === 0) return "Every day";
-  if (labels.length === 1) return `Every ${labels[0]}`;
-  if (labels.length === 2) return `Every ${labels[0]} and ${labels[1]}`;
-  return `Every ${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
-}
-
-function formatRepeatPatternFromDays(days: string[] | null | undefined) {
-  const dayMap: Record<string, string> = {
-    SU: "Sunday",
-    MO: "Monday",
-    TU: "Tuesday",
-    WE: "Wednesday",
-    TH: "Thursday",
-    FR: "Friday",
-    SA: "Saturday",
-  };
-
-  const labels = (days ?? []).map((day) => dayMap[day] ?? day).filter(Boolean);
-  if (labels.length === 0) return "Every day";
-  if (labels.length === 1) return `Every ${labels[0]}`;
-  if (labels.length === 2) return `Every ${labels[0]} and ${labels[1]}`;
-  return `Every ${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
-}
-
-function getDayCode(value: string | null | undefined) {
-  if (!value) return null;
-  const date = value.includes("T") ? new Date(value) : parseDateOnly(value);
-  if (!date || Number.isNaN(date.getTime())) return null;
-  const map = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
-  return map[date.getDay()] ?? null;
-}
-
-function parseRRuleDays(rrule: string | null | undefined) {
-  if (!rrule) return [];
-  const byday = rrule
-    .split(";")
-    .find((part) => part.trim().toUpperCase().startsWith("BYDAY="))
-    ?.split("=")[1];
-  if (!byday) return [];
-  return byday
-    .split(",")
-    .map((part) => part.trim().toUpperCase())
-    .filter(Boolean);
-}
-
-function parseRRuleFreq(rrule: string | null | undefined) {
-  if (!rrule) return null;
-  const freq = rrule
-    .split(";")
-    .find((part) => part.trim().toUpperCase().startsWith("FREQ="))
-    ?.split("=")[1];
-  return freq?.trim().toUpperCase() ?? null;
-}
-
-function toIsoForDateAndTime(date: Date, hhmm: string | null | undefined) {
-  if (!hhmm) return null;
-  const timeMatch = hhmm.match(/(\d{1,2}):(\d{2})/);
-  if (!timeMatch) return null;
-  const [, hours, minutes] = timeMatch;
-  if (!hours || !minutes) return null;
-  const local = new Date(date);
-  local.setHours(Number(hours), Number(minutes), 0, 0);
-  if (Number.isNaN(local.getTime())) return null;
-  return local.toISOString();
-}
-
-function resolveTemplateStartTime(template: ShiftTemplate) {
-  const dynamic = template as ShiftTemplate & Record<string, unknown>;
-  const candidates = [
-    template.start_time,
-    typeof dynamic.time_start === "string" ? dynamic.time_start : null,
-    typeof dynamic.starts_at === "string" ? dynamic.starts_at : null,
-  ];
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    const parsed = candidate.match(/(\d{1,2}):(\d{2})/);
-    if (parsed) return `${parsed[1].padStart(2, "0")}:${parsed[2]}`;
-  }
-  return "09:00";
-}
-
-function resolveTemplateEndTime(template: ShiftTemplate) {
-  const dynamic = template as ShiftTemplate & Record<string, unknown>;
-  const candidates = [
-    template.end_time,
-    typeof dynamic.time_end === "string" ? dynamic.time_end : null,
-    typeof dynamic.ends_at === "string" ? dynamic.ends_at : null,
-  ];
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    const parsed = candidate.match(/(\d{1,2}):(\d{2})/);
-    if (parsed) return `${parsed[1].padStart(2, "0")}:${parsed[2]}`;
-  }
-  return "11:00";
-}
-
-function shouldIncludeDateForTemplate(date: Date, template: ShiftTemplate) {
-  if (!template.rrule) return true;
-  const byDay = parseRRuleDays(template.rrule);
-  const dayCode = getDayCode(getDateKey(date));
-  if (!dayCode) return false;
-
-  // Only enforce explicit BYDAY constraints; otherwise render active templates
-  // so future weeks do not disappear when RRULE variants differ.
-  if (byDay.length > 0) return byDay.includes(dayCode);
-
-  const freq = parseRRuleFreq(template.rrule);
-  if (freq === "DAILY" || freq === "WEEKLY" || freq === "MONTHLY") return true;
-  return true;
-}
-
-function buildVirtualInstanceId(templateId: string, dayKey: string) {
-  const input = `${templateId}-${dayKey}`;
-  let hash = 0;
-  for (let i = 0; i < input.length; i += 1) {
-    hash = (hash << 5) - hash + input.charCodeAt(i);
-    hash |= 0;
-  }
-  return -Math.abs(hash || 1);
-}
-
-function formatPhone(value: string) {
-  const digits = value.replace(/\D/g, "").slice(0, 10);
-  const part1 = digits.slice(0, 3);
-  const part2 = digits.slice(3, 6);
-  const part3 = digits.slice(6, 10);
-  if (digits.length <= 3) return part1;
-  if (digits.length <= 6) return `${part1}-${part2}`;
-  return `${part1}-${part2}-${part3}`;
-}
-
-function urlBase64ToUint8Array(base64String: string) {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; i += 1) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
+import { signOutSafely, supabase } from "./supabaseClient";
+import {
+  APPOINTMENT_COLOR_ADOPTION,
+  APPOINTMENT_COLOR_FOSTER,
+  APPOINTMENT_COLOR_VAX,
+  APPOINTMENT_COLOR_OTHER_DEFAULT,
+  dayFormatter,
+  monthFormatter,
+  monthJumpFormatter,
+  PRIMARY_ADMIN_EMAIL,
+  SELF_DROP_REASON_PREFIX,
+  timeFormatter,
+  WEEKDAYS_MONDAY_FIRST,
+} from "./authedApp/constants";
+import {
+  deleteAppointmentById,
+  fetchWeekAppointmentsByInstanceIds,
+  saveAppointment,
+} from "./authedApp/services/appointmentService";
+import {
+  approveNotificationAssignment,
+  denyNotificationAssignment,
+  fetchAssignmentById,
+  fetchNotificationsData,
+  fetchPendingNotifications,
+} from "./authedApp/services/notificationService";
+import {
+  notifyActiveMembersOnShiftInstance,
+  notifyLeadsOnShiftInstance,
+  sendAdminPush,
+  sendAdminDropPush,
+  sendVolunteerPush,
+} from "./authedApp/services/pushNotificationService";
+import type {
+  AuthedAppProps,
+  AppointmentKind,
+  PersonalAssignment,
+  ProfileRecord,
+  RecurringAssignment,
+  ShiftAppointment,
+  ShiftAssignment,
+  ShiftAssignmentDetail,
+  ShiftInstance,
+  ShiftInstanceRow,
+  ShiftTemplate,
+  VolunteerRow,
+} from "./authedApp/types";
+import {
+  addDays,
+  addMonths,
+  buildMonthCells,
+  buildVirtualInstanceId,
+  buildWeekCells,
+  diffInDays,
+  format24HourTime,
+  formatByDayLongList,
+  formatCompactTemplateTimeRange,
+  formatDate,
+  formatDateTime,
+  formatDateWithWeekday,
+  formatPhone,
+  formatRepeatPattern,
+  formatRepeatPatternFromDays,
+  formatTemplateTime,
+  formatTimeOnly,
+  formatTimeRangeFromInstance,
+  getAppointmentKindFromColor,
+  getDateKey,
+  getDayCode,
+  getMonthKey,
+  getNotificationDismissToken,
+  getShiftDayStart,
+  getShiftPeriodLabel,
+  getWeekStart,
+  isAdminRole,
+  isLeadAssignmentRole,
+  isLeadRole,
+  isSelfDropReason,
+  normalizeDropReason,
+  normalizePhoneLink,
+  parseDateOnly,
+  rankShiftForDisplay,
+  resolveTemplateEndTime,
+  resolveTemplateStartTime,
+  startOfDay,
+  toDateInputValue,
+  toIsoForDateAndTime,
+  toTimeInputValue,
+  urlBase64ToUint8Array,
+} from "./authedApp/utils";
 
 export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [today, setToday] = useState(() => startOfDay(new Date()));
@@ -734,6 +108,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     Record<number, ShiftAssignmentDetail[]>
   >({});
   const [showTakeShiftPrompt, setShowTakeShiftPrompt] = useState(false);
+  const [isTakeShiftClosing, setIsTakeShiftClosing] = useState(false);
   const [takeShiftLoading, setTakeShiftLoading] = useState(false);
   const [takeShiftMessage, setTakeShiftMessage] = useState("");
   const [takeShiftMode, setTakeShiftMode] = useState<"request" | "join">("request");
@@ -748,6 +123,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [assignShiftInstanceId, setAssignShiftInstanceId] = useState<number | null>(null);
   const [assignLoading, setAssignLoading] = useState(false);
   const [assignMessage, setAssignMessage] = useState("");
+  const [showAssignOtherForm, setShowAssignOtherForm] = useState(false);
+  const [assignOtherName, setAssignOtherName] = useState("");
+  const [assignOtherDetails, setAssignOtherDetails] = useState("");
+  const [assignOtherLoading, setAssignOtherLoading] = useState(false);
   const [showDenyPrompt, setShowDenyPrompt] = useState(false);
   const [denyReason, setDenyReason] = useState("");
   const [denyTargetId, setDenyTargetId] = useState<string | null>(null);
@@ -774,7 +153,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [volunteersLoading, setVolunteersLoading] = useState(false);
   const [volunteersMessage, setVolunteersMessage] = useState("");
   const [volunteers, setVolunteers] = useState<VolunteerRow[]>([]);
+  const [volunteerSearchInput, setVolunteerSearchInput] = useState("");
   const [volunteerSearch, setVolunteerSearch] = useState("");
+  const [volunteerRoleFilter, setVolunteerRoleFilter] = useState<
+    "All" | "Admin" | "Lead" | "Regular Volunteer"
+  >("All");
+  const [assignVolunteerSearchInput, setAssignVolunteerSearchInput] = useState("");
   const [assignVolunteerSearch, setAssignVolunteerSearch] = useState("");
   const [selectedVolunteer, setSelectedVolunteer] = useState<VolunteerRow | null>(null);
   const [volunteerRecurring, setVolunteerRecurring] = useState<RecurringAssignment[]>([]);
@@ -840,7 +224,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [profileSaveLoading, setProfileSaveLoading] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationLoading, setNotificationLoading] = useState(false);
-  const [notificationAction, setNotificationAction] = useState<"enable" | "disable" | null>(null);
+  const [notificationAction, setNotificationAction] = useState<"enable" | "disable" | "test" | null>(
+    null,
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const scrollYRef = useRef(0);
@@ -853,11 +239,21 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [showHelpfulLinks, setShowHelpfulLinks] = useState(false);
   const [showFloatingViewToggle, setShowFloatingViewToggle] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const takeShiftCloseTimerRef = useRef<number | null>(null);
   const baseDocumentTitleRef = useRef<string>(
     typeof document !== "undefined" ? document.title : "CKC Shift Calendar",
   );
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
   const notificationsEnabled = displayProfile?.notification_pref === "push_and_email";
+  const notificationPermission =
+    typeof window !== "undefined" && "Notification" in window
+      ? Notification.permission
+      : "default";
+  const notificationStatusLabel = notificationsEnabled
+    ? "Enabled"
+    : notificationPermission === "granted"
+      ? "Allowed on device (tap Enable to finish setup)"
+      : "Disabled";
   const canManageAppointments = profile?.role === "Admin" || profile?.role === "Lead";
   const canModifyAppointments = profile?.role === "Admin";
   const isPrimaryAdminAccount =
@@ -899,6 +295,36 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     showVolunteers ||
     showProfile ||
     showAddRecurring;
+
+  const closeTakeShiftPrompt = useCallback(() => {
+    if (!showTakeShiftPrompt) return;
+    setIsTakeShiftClosing(true);
+    if (takeShiftCloseTimerRef.current !== null) {
+      window.clearTimeout(takeShiftCloseTimerRef.current);
+    }
+    takeShiftCloseTimerRef.current = window.setTimeout(() => {
+      setShowTakeShiftPrompt(false);
+      setIsTakeShiftClosing(false);
+      takeShiftCloseTimerRef.current = null;
+    }, 340);
+  }, [showTakeShiftPrompt]);
+
+  const openTakeShiftPrompt = useCallback(() => {
+    if (takeShiftCloseTimerRef.current !== null) {
+      window.clearTimeout(takeShiftCloseTimerRef.current);
+      takeShiftCloseTimerRef.current = null;
+    }
+    setIsTakeShiftClosing(false);
+    setShowTakeShiftPrompt(true);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (takeShiftCloseTimerRef.current !== null) {
+        window.clearTimeout(takeShiftCloseTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -1239,31 +665,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setAppointmentsLoading(false);
       return;
     }
+
     setAppointmentsLoading(true);
     const instanceIds = instanceShifts.map((shift) => shift.instanceId);
-    const { data, error } = await supabase
-      .from("shift_appointments")
-      .select(
-        "id,shift_instance_id,title,description,color,starts_at,ends_at,created_at,updated_at,created_by",
-      )
-      .in("shift_instance_id", instanceIds)
-      .order("starts_at", { ascending: true, nullsFirst: false })
-      .order("created_at", { ascending: true });
+    const { data, error } = await fetchWeekAppointmentsByInstanceIds(instanceIds);
 
-    if (error || !data) {
+    if (error) {
       setAppointmentsByShift({});
       setAppointmentsLoading(false);
       return;
     }
 
-    const map: Record<number, ShiftAppointment[]> = {};
-    (data as ShiftAppointment[]).forEach((appointment) => {
-      const instanceId = appointment.shift_instance_id;
-      if (!instanceId) return;
-      if (!map[instanceId]) map[instanceId] = [];
-      map[instanceId].push(appointment);
-    });
-    setAppointmentsByShift(map);
+    setAppointmentsByShift(data);
     setAppointmentsLoading(false);
   }, [instanceShifts]);
 
@@ -1391,7 +804,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [showAssignVolunteer, fetchVolunteers]);
 
   const handleSignOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    await signOutSafely();
+    if (typeof window !== "undefined") {
+      window.location.assign("/signin");
+    }
   }, []);
 
   const fetchVolunteerRecurring = useCallback(async (volunteerId: string) => {
@@ -1900,96 +1316,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const fetchNotifications = useCallback(async () => {
     setNotificationsLoading(!hasLoadedNotifications);
     setNotificationsMessage("");
-    const baseSelect = `
-        id,
-        created_at,
-        dropped_at,
-        status,
-        dropped_reason,
-        assignment_role,
-        volunteer:profiles (
-          id,
-          full_name,
-          preferred_name,
-          role
-        ),
-        shift_instance:shift_instances (
-          id,
-          shift_date,
-          starts_at,
-          ends_at,
-          template:shift_templates (
-            id,
-            title
-          )
-        )
-      `;
+    const { items, error } = await fetchNotificationsData({
+      sessionUserId: session.user.id,
+      role: profile?.role,
+      isPrimaryAdminAccount,
+      dismissedTokens: dismissedNotificationTokens,
+    });
 
-    let rawItems: ShiftAssignmentDetail[] = [];
-
-    if (isPrimaryAdminAccount) {
-      const { data, error } = await supabase
-        .from("shift_assignments")
-        .select(baseSelect)
-        .in("status", ["pending", "dropped"])
-        .order("created_at", { ascending: true });
-      if (error) {
-        setNotifications([]);
-        setNotificationsMessage(error.message);
-        setNotificationsLoading(false);
-        return;
-      }
-      rawItems = (data as unknown as ShiftAssignmentDetail[]) ?? [];
-    } else if (profile?.role === "Lead") {
-      const { data: ownData, error: ownError } = await supabase
-        .from("shift_assignments")
-        .select(baseSelect)
-        .eq("volunteer_id", session.user.id)
-        .in("status", ["active", "dropped"]);
-
-      if (ownError) {
-        setNotifications([]);
-        setNotificationsMessage(ownError.message);
-        setNotificationsLoading(false);
-        return;
-      }
-      rawItems = (ownData as unknown as ShiftAssignmentDetail[]) ?? [];
-    } else {
-      const { data, error } = await supabase
-        .from("shift_assignments")
-        .select(baseSelect)
-        .eq("volunteer_id", session.user.id)
-        .in("status", ["active", "dropped"])
-        .order("created_at", { ascending: false });
-      if (error) {
-        setNotifications([]);
-        setNotificationsMessage(error.message);
-        setNotificationsLoading(false);
-        return;
-      }
-      rawItems = (data as unknown as ShiftAssignmentDetail[]) ?? [];
+    if (error) {
+      setNotifications([]);
+      setNotificationsMessage(error);
+      setNotificationsLoading(false);
+      return;
     }
 
-    const items = rawItems
-      .filter((item) => {
-        if (isPrimaryAdminAccount) {
-          if (item.status === "pending") return true;
-          if (item.status !== "dropped") return false;
-          const droppedAt = item.dropped_at ?? item.created_at ?? "";
-          const droppedTs = Date.parse(droppedAt);
-          if (Number.isNaN(droppedTs)) return false;
-          return Date.now() - droppedTs <= ADMIN_DROPPED_NOTIFICATION_WINDOW_MS;
-        }
-        if (item.status === "dropped") return true;
-        if (item.status !== "active") return false;
-        const createdAt = item.created_at ? Date.parse(item.created_at) : NaN;
-        if (Number.isNaN(createdAt)) return false;
-        // Keep one-off active notifications fresh, but prevent recurring bulk assignments
-        // from flooding the in-app notification list.
-        return Date.now() - createdAt <= 5 * 60 * 1000;
-      })
-      .filter((item) => !dismissedNotificationTokens.has(getNotificationDismissToken(item)))
-      .sort((left, right) => getNotificationSortTimestamp(right) - getNotificationSortTimestamp(left));
     setNotifications(items);
     setNotificationCount(items.length);
     setNotificationsLoading(false);
@@ -2113,13 +1453,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [volunteers]);
   const filteredSortedVolunteers = useMemo(() => {
     const query = volunteerSearch.trim().toLowerCase();
-    if (!query) return sortedVolunteers;
     return sortedVolunteers.filter((volunteer) => {
+      if (volunteerRoleFilter !== "All" && volunteer.role !== volunteerRoleFilter) return false;
+      if (!query) return true;
       const fullName = (volunteer.full_name ?? "").toLowerCase();
       const preferredName = (volunteer.preferred_name ?? "").toLowerCase();
       return fullName.includes(query) || preferredName.includes(query);
     });
-  }, [sortedVolunteers, volunteerSearch]);
+  }, [sortedVolunteers, volunteerRoleFilter, volunteerSearch]);
   const filteredAssignableVolunteers = useMemo(() => {
     const query = assignVolunteerSearch.trim().toLowerCase();
     if (!query) return sortedVolunteers;
@@ -2129,6 +1470,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return fullName.includes(query) || preferredName.includes(query);
     });
   }, [sortedVolunteers, assignVolunteerSearch]);
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      setVolunteerSearch(volunteerSearchInput);
+    }, 120);
+    return () => window.clearTimeout(timerId);
+  }, [volunteerSearchInput]);
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      setAssignVolunteerSearch(assignVolunteerSearchInput);
+    }, 120);
+    return () => window.clearTimeout(timerId);
+  }, [assignVolunteerSearchInput]);
 
   useEffect(() => {
     setNotificationCount(notifications.length);
@@ -2206,10 +1561,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const allVisibleDaysCollapsed =
     displayDayKeys.length > 0 && displayDayKeys.every((key) => collapsedDayKeys.has(key));
   const monthLabel = monthFormatter.format(baseDate);
-  const calendarTitleLabel =
-    calendarRangeMode === "month"
-      ? baseDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })
-      : monthLabel;
+  const calendarTitleLabel = baseDate.toLocaleDateString("en-US", { month: "long" });
   const weekStart = getWeekStart(baseDate, true);
   const weekEnd = addDays(weekStart, 6);
   const rangeLabel =
@@ -2461,6 +1813,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return leftCreated.localeCompare(rightCreated);
     });
     const filledAssignments = sortedAssignments.filter((assignment) => Boolean(assignment.volunteer?.id));
+    const otherAssignments = sortedAssignments.filter(
+      (assignment) =>
+        !assignment.volunteer?.id &&
+        assignment.status !== "pending" &&
+        Boolean((assignment.notes ?? "").trim()),
+    );
     const leadAssignment =
       filledAssignments.find(
         (assignment) =>
@@ -2471,7 +1829,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const regularAssignments = leadAssignment
       ? filledAssignments.filter((assignment) => assignment !== leadAssignment)
       : filledAssignments;
-    const slotAssignments: Array<ShiftAssignmentDetail | null> = [leadAssignment, ...regularAssignments].slice(0, 8);
+    const slotAssignments: Array<ShiftAssignmentDetail | null> = [
+      leadAssignment,
+      ...regularAssignments,
+      ...otherAssignments,
+    ].slice(0, 8);
     while (slotAssignments.length < 6) {
       slotAssignments.push(null);
     }
@@ -2503,12 +1865,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               : undefined
           }
         >
-          <div>
+          <div className="shift-block-header-content">
             <div className="shift-block-title-row">
               <p className="shift-block-title">{shift.title}</p>
-              {isMobile && calendarViewMode === "volunteers" ? (
+            </div>
+            {calendarViewMode === "volunteers" ? (
+              <div className="shift-appointments-group">
                 <button
-                  className={`shift-appointments-button ${
+                  className={`shift-appointments-toggle ${
                     mobileAppointmentsShiftId === shift.instanceId ? "shift-appointments-open" : ""
                   }`}
                   type="button"
@@ -2521,8 +1885,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 >
                   Appointments {appointmentsForShift.length}
                 </button>
-              ) : null}
-            </div>
+                {canModifyAppointments ? (
+                  <button
+                    className="shift-appointments-add"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleOpenAppointments(shift);
+                    }}
+                    aria-label={`Add appointment for ${shift.title}`}
+                    title="Add appointment"
+                  >
+                    +
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <p className="shift-block-meta">
               {hasTimes ? `${timeFormatter.format(shift.start)}–${timeFormatter.format(shift.end)}` : "—"}
             </p>
@@ -2533,7 +1911,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         </div>
         {calendarViewMode === "volunteers" ? (
           <div className="shift-assignment-list">
-            {isMobile && mobileAppointmentsShiftId === shift.instanceId ? (
+            {mobileAppointmentsShiftId === shift.instanceId ? (
               <div className="shift-appointments-inline">
                 {appointmentsForShift.length === 0 ? (
                   <p className="shift-appointment-empty">No appointments</p>
@@ -2576,6 +1954,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             {slotAssignments.map((assignment, index) => {
               const name = assignment?.volunteer?.preferred_name || assignment?.volunteer?.full_name || null;
               const hasVolunteer = Boolean(assignment?.volunteer?.id);
+              const hasOtherLabel = Boolean(!hasVolunteer && (assignment?.notes ?? "").trim());
               const isLeadCoverageSlot = index === 0 && !hasVolunteer;
               const canClaimLeadCoverage = profile?.role === "Lead" || profile?.role === "Admin";
               const isVolunteerPastLocked = profile?.role !== "Admin" && isPastShiftDay;
@@ -2583,6 +1962,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 !assignment || !assignment.volunteer?.id
                   ? index === 0
                     ? "needs-lead"
+                    : hasOtherLabel
+                      ? "other"
                     : "none"
                   : assignment.status === "pending"
                     ? "pending"
@@ -2610,8 +1991,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
                     if (!assignment || !hasVolunteer) {
                       if (profile?.role === "Admin") {
+                        if (assignment && hasOtherLabel) {
+                          setRemoveTarget(assignment);
+                          setRemoveMessage("");
+                          setShowRemovePrompt(true);
+                          return;
+                        }
                         setAssignMessage("");
+                        setAssignVolunteerSearchInput("");
                         setAssignVolunteerSearch("");
+                        setShowAssignOtherForm(false);
+                        setAssignOtherName("");
+                        setAssignOtherDetails("");
                         setAssignShiftInstanceId(resolvedInstanceId);
                         setShowAssignVolunteer(true);
                       } else {
@@ -2623,12 +2014,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         );
                         if (alreadyOnShift) {
                           setTakeShiftMessage("You are already on this shift!");
-                          setShowTakeShiftPrompt(true);
+                          openTakeShiftPrompt();
                           return;
                         }
                         setTakeShiftMessage("");
                         setTakeShiftMode("request");
-                        setShowTakeShiftPrompt(true);
+                        openTakeShiftPrompt();
                       }
                     } else if (assignment.volunteer?.id === session.user.id && profile?.role !== "Admin") {
                       setDropTargetId(assignment.id);
@@ -2655,6 +2046,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 >
                   {assignment?.status === "pending" ? (
                     "Pending"
+                  ) : assignment && hasOtherLabel ? (
+                    <div className="capacity-slot-content">
+                      <span className="capacity-slot-name">{assignment.notes}</span>
+                    </div>
                   ) : assignment && hasVolunteer ? (
                     <div className="capacity-slot-content">
                       <span className="capacity-slot-name">{name ?? "No Volunteer Assigned"}</span>
@@ -2694,7 +2089,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
                   if (profile?.role === "Admin") {
                     setAssignMessage("");
+                    setAssignVolunteerSearchInput("");
                     setAssignVolunteerSearch("");
+                    setShowAssignOtherForm(false);
+                    setAssignOtherName("");
+                    setAssignOtherDetails("");
                     setAssignShiftInstanceId(resolvedInstanceId);
                     setShowAssignVolunteer(true);
                     return;
@@ -2705,12 +2104,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   );
                   if (alreadyOnShift) {
                     setTakeShiftMessage("You are already on this shift!");
-                    setShowTakeShiftPrompt(true);
+                    openTakeShiftPrompt();
                     return;
                   }
                   setTakeShiftMessage("");
                   setTakeShiftMode("request");
-                  setShowTakeShiftPrompt(true);
+                  openTakeShiftPrompt();
                 }}
               >
                 Add Extra Volunteer
@@ -2812,7 +2211,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    setShowTakeShiftPrompt(false);
+    closeTakeShiftPrompt();
     setTakeShiftLoading(false);
 
     if (takeShiftMode === "request") {
@@ -2933,21 +2332,47 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const isStandalone =
+      window.matchMedia?.("(display-mode: standalone)").matches ||
+      (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
+    if (isIOS && !isStandalone) {
+      setNotificationMessage(
+        "On iPhone, open this app from the Home Screen icon first (Safari -> Share -> Add to Home Screen), then tap Enable notifications again.",
+      );
+      return;
+    }
+
     setNotificationLoading(true);
     setNotificationAction("enable");
     try {
-      const permission = await Notification.requestPermission();
+      if (Notification.permission === "denied") {
+        setNotificationMessage(
+          "Notifications are blocked in iPhone/browser settings. Re-enable them in Settings, then try again.",
+        );
+        return;
+      }
+
+      const permission =
+        Notification.permission === "granted"
+          ? "granted"
+          : await Notification.requestPermission();
       if (permission !== "granted") {
-        setNotificationMessage("Notifications are blocked. Enable them in your browser settings.");
+        setNotificationMessage(
+          "Notification permission was not granted. If no popup appeared, permissions are already set for this app.",
+        );
         return;
       }
 
       const registration = await navigator.serviceWorker.register("/sw.js");
       await navigator.serviceWorker.ready;
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-      });
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+        });
+      }
 
       const json = subscription.toJSON();
       const p256dh = json.keys?.p256dh;
@@ -2972,10 +2397,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         return;
       }
 
-      await supabase
+      const { error: prefError } = await supabase
         .from("profiles")
         .update({ notification_pref: "push_and_email" })
         .eq("id", session.user.id);
+      if (prefError) {
+        setNotificationMessage(prefError.message);
+        return;
+      }
 
       setProfileOverride((previous) => ({
         ...(previous ?? {}),
@@ -3044,6 +2473,37 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
   };
 
+  const handleNotificationToggle = async (nextEnabled: boolean) => {
+    if (nextEnabled) {
+      await handleEnableNotifications();
+      return;
+    }
+    await handleDisableNotifications();
+  };
+
+  const handleTestNotification = async () => {
+    setNotificationMessage("");
+    setNotificationLoading(true);
+    setNotificationAction("test");
+    try {
+      const pushError = await sendVolunteerPush({
+        userId: session.user.id,
+        title: "Test notification",
+        body: "Push is working on this device.",
+        notificationType: "self_test",
+        url: "/?view=notifications",
+      });
+      if (pushError) {
+        setNotificationMessage(`Test failed: ${pushError}`);
+      } else {
+        setNotificationMessage("Test push sent.");
+      }
+    } finally {
+      setNotificationLoading(false);
+      setNotificationAction(null);
+    }
+  };
+
   const toShiftDateTimeIso = useCallback(
     (shift: ShiftInstance, timeValue: string) => {
       if (!timeValue) return null;
@@ -3101,44 +2561,55 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
     const startIso = toShiftDateTimeIso(appointmentsShift, appointmentForm.starts_at);
+    const isNewAppointment = !appointmentForm.id;
 
     setAppointmentSaving(true);
     setAppointmentsMessage("");
-    const resolvedColor =
-      appointmentForm.kind === "foster"
-        ? APPOINTMENT_COLOR_FOSTER
-        : appointmentForm.kind === "adoption"
-          ? APPOINTMENT_COLOR_ADOPTION
-          : appointmentForm.color || APPOINTMENT_COLOR_OTHER_DEFAULT;
-    const payload = {
-      shift_instance_id: appointmentsShiftInstanceId,
-      title: appointmentForm.title.trim(),
-      description: appointmentForm.description.trim() || null,
-      color: resolvedColor,
-      starts_at: startIso,
-      ends_at: null,
-      updated_at: new Date().toISOString(),
-    };
+    const { error } = await saveAppointment({
+      id: appointmentForm.id,
+      shiftInstanceId: appointmentsShiftInstanceId,
+      kind: appointmentForm.kind,
+      title: appointmentForm.title,
+      description: appointmentForm.description,
+      color: appointmentForm.color,
+      startsAtIso: startIso,
+      userId: session.user.id,
+    });
+    if (error) {
+      setAppointmentsMessage(error);
+      setAppointmentSaving(false);
+      return;
+    }
 
-    if (appointmentForm.id) {
-      const { error } = await supabase
-        .from("shift_appointments")
-        .update(payload)
-        .eq("id", appointmentForm.id);
-      if (error) {
-        setAppointmentsMessage(error.message);
-        setAppointmentSaving(false);
-        return;
-      }
-    } else {
-      const { error } = await supabase.from("shift_appointments").insert({
-        ...payload,
-        created_by: session.user.id,
+    if (isNewAppointment) {
+      const kindLabel =
+        appointmentForm.kind === "foster"
+          ? "Foster"
+          : appointmentForm.kind === "adoption"
+            ? "Adoption"
+            : appointmentForm.kind === "vax"
+              ? "Vax"
+              : "Other";
+      const leadNotifyError = await notifyLeadsOnShiftInstance({
+        shiftInstanceId: appointmentsShiftInstanceId,
+        excludeVolunteerIds: [session.user.id],
+        title: "New appointment",
+        body: `${kindLabel}: ${appointmentForm.title.trim()} was added to ${appointmentsShift.title}.`,
+        notificationType: "shift_added",
       });
-      if (error) {
-        setAppointmentsMessage(error.message);
-        setAppointmentSaving(false);
-        return;
+      if (leadNotifyError) {
+        setAppointmentsMessage(`Appointment saved, but ${leadNotifyError}`);
+      }
+      const adminNotifyError = await sendAdminPush({
+        title: "New appointment",
+        body: `${kindLabel}: ${appointmentForm.title.trim()} was added to ${appointmentsShift.title}.`,
+      });
+      if (adminNotifyError) {
+        setAppointmentsMessage((previous) =>
+          previous
+            ? `${previous} | admin notification failed: ${adminNotifyError}`
+            : `Appointment saved, but admin notification failed: ${adminNotifyError}`,
+        );
       }
     }
 
@@ -3168,11 +2639,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         setAppointmentsMessage("Only admins can delete appointments.");
         return;
       }
+      const deletedAppointment =
+        selectedShiftAppointments.find((appointment) => appointment.id === appointmentId) ?? null;
       setAppointmentDeleteId(appointmentId);
       setAppointmentsMessage("");
-      const { error } = await supabase.from("shift_appointments").delete().eq("id", appointmentId);
+      const { error } = await deleteAppointmentById(appointmentId);
       if (error) {
-        setAppointmentsMessage(error.message);
+        setAppointmentsMessage(error);
         setAppointmentDeleteId(null);
         return;
       }
@@ -3186,10 +2659,38 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           starts_at: "",
         });
       }
+      if (appointmentsShiftInstanceId) {
+        const appointmentTitle = (deletedAppointment?.title ?? "An appointment").trim();
+        const shiftTitle = appointmentsShift?.title ?? "the shift";
+        const leadNotifyError = await notifyLeadsOnShiftInstance({
+          shiftInstanceId: appointmentsShiftInstanceId,
+          excludeVolunteerIds: [session.user.id],
+          title: "Appointment deleted",
+          body: `${appointmentTitle} was deleted from ${shiftTitle}.`,
+          notificationType: "shift_removed",
+        });
+        const adminNotifyError = await sendAdminPush({
+          title: "Appointment deleted",
+          body: `${appointmentTitle} was deleted from ${shiftTitle}.`,
+        });
+        const notificationErrors = [leadNotifyError, adminNotifyError && `admin notification failed: ${adminNotifyError}`]
+          .filter((value): value is string => Boolean(value));
+        if (notificationErrors.length > 0) {
+          setAppointmentsMessage(`Appointment deleted, but ${notificationErrors.join(" | ")}`);
+        }
+      }
       setAppointmentDeleteId(null);
       await fetchWeekAppointments();
     },
-    [appointmentForm.id, canModifyAppointments, fetchWeekAppointments],
+    [
+      appointmentForm.id,
+      appointmentsShift,
+      appointmentsShiftInstanceId,
+      canModifyAppointments,
+      fetchWeekAppointments,
+      selectedShiftAppointments,
+      session.user.id,
+    ],
   );
 
   const toggleAppointmentExpanded = useCallback((appointmentId: string) => {
@@ -3238,8 +2739,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     setShowAssignVolunteer(false);
+    setAssignVolunteerSearchInput("");
     setAssignVolunteerSearch("");
     setAssignShiftInstanceId(null);
+    setShowAssignOtherForm(false);
+    setAssignOtherName("");
+    setAssignOtherDetails("");
 
     const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
     const volunteerName = volunteer.preferred_name || volunteer.full_name || "A volunteer";
@@ -3284,6 +2789,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       title: "Shift added",
       body: `${adminName} added you to ${shiftDate}, ${shiftTime}, ${shiftTitle}.`,
       notificationType: "shift_added",
+      shiftInstanceId: assignShiftInstanceId,
     });
     if (pushError) {
       notificationErrors.push(`volunteer notification failed: ${pushError}`);
@@ -3298,6 +2804,75 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     await fetchWeekAssignments();
     setAssignLoading(false);
   };
+
+  const handleAssignOther = useCallback(async () => {
+    if (!assignShiftInstanceId) {
+      setAssignMessage("Shift instance not found.");
+      return;
+    }
+    const label = assignOtherName.trim();
+    if (!label) {
+      setAssignMessage("Please enter a name for Other.");
+      return;
+    }
+
+    setAssignOtherLoading(true);
+    setAssignMessage("");
+    const details = assignOtherDetails.trim();
+    const notes = details ? `${label} — ${details}` : label;
+    const { error } = await supabase.from("shift_assignments").insert({
+      shift_instance_id: assignShiftInstanceId,
+      volunteer_id: null,
+      status: "active",
+      assignment_role: "regular",
+      notes,
+      dropped_at: null,
+      dropped_reason: null,
+    });
+
+    if (error) {
+      setAssignMessage(error);
+      setAssignOtherLoading(false);
+      return;
+    }
+
+    const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
+    const shiftTitle = assignedShift?.title ?? "Shift";
+    const leadNotifyError = await notifyLeadsOnShiftInstance({
+      shiftInstanceId: assignShiftInstanceId,
+      excludeVolunteerIds: [session.user.id],
+      title: "Shift updated",
+      body: `Other: ${label} was added to ${shiftTitle}.`,
+      notificationType: "shift_added",
+    });
+    const adminNotifyError = await sendAdminPush({
+      title: "Shift updated",
+      body: `Other: ${label} was added to ${shiftTitle}.`,
+    });
+
+    const notificationErrors = [
+      leadNotifyError,
+      adminNotifyError ? `admin notification failed: ${adminNotifyError}` : null,
+    ].filter((value): value is string => Boolean(value));
+
+    setAssignOtherName("");
+    setAssignOtherDetails("");
+    setShowAssignOtherForm(false);
+    setAssignOtherLoading(false);
+    setAssignMessage(
+      notificationErrors.length > 0
+        ? `Added Other, but ${notificationErrors.join(" | ")}`
+        : "Added Other to this shift.",
+    );
+    await fetchWeekAssignments();
+  }, [
+    assignOtherDetails,
+    assignOtherName,
+    assignShiftInstanceId,
+    fetchWeekAssignments,
+    instanceShifts,
+    session.user.id,
+  ]);
 
   const handleNotificationDecision = async (
     assignmentId: string,
@@ -3317,49 +2892,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setNotificationsLoading(true);
     setNotificationsMessage("");
 
-    const { error } = await supabase
-      .from("shift_assignments")
-      .update({ status: "active" })
-      .eq("id", assignmentId);
+    const { error } = await approveNotificationAssignment(assignmentId);
 
     if (error) {
-      setNotificationsMessage(error.message);
+      setNotificationsMessage(error);
       setNotificationsLoading(false);
       return;
     }
 
     let approvedRequest = notifications.find((item) => item.id === assignmentId);
     if (!approvedRequest) {
-      const { data: approvedData } = await supabase
-        .from("shift_assignments")
-        .select(
-          `
-          id,
-          created_at,
-          status,
-          dropped_reason,
-          assignment_role,
-          volunteer:profiles (
-            id,
-            full_name,
-            preferred_name,
-            role
-          ),
-          shift_instance:shift_instances (
-            id,
-            shift_date,
-            starts_at,
-            ends_at,
-            template:shift_templates (
-              id,
-              title
-            )
-          )
-        `,
-        )
-        .eq("id", assignmentId)
-        .maybeSingle();
-      approvedRequest = (approvedData as unknown as ShiftAssignmentDetail | null) ?? undefined;
+      const { data: approvedData } = await fetchAssignmentById(assignmentId);
+      approvedRequest = approvedData ?? undefined;
     }
     const approvedVolunteerId = approvedRequest?.volunteer?.id;
     const approvedVolunteerName =
@@ -3399,37 +2943,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setNotificationsMessage(`Approved, but ${approvalNotificationErrors.join(" | ")}`);
     }
 
-    const { data } = await supabase
-      .from("shift_assignments")
-      .select(
-        `
-        id,
-        created_at,
-        status,
-        dropped_reason,
-        assignment_role,
-        volunteer:profiles (
-          id,
-          full_name,
-          preferred_name,
-          role
-        ),
-        shift_instance:shift_instances (
-          id,
-          shift_date,
-          starts_at,
-          ends_at,
-          template:shift_templates (
-            id,
-            title
-          )
-        )
-      `,
-      )
-      .eq("status", "pending")
-      .order("created_at", { ascending: false });
-
-    setNotifications((data as unknown as ShiftAssignmentDetail[]) ?? []);
+    const { data: pendingItems } = await fetchPendingNotifications();
+    setNotifications(pendingItems);
     setNotificationsLoading(false);
     await fetchWeekAssignments();
   };
@@ -3447,17 +2962,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setNotificationsLoading(true);
     setNotificationsMessage("");
 
-    const { error } = await supabase
-      .from("shift_assignments")
-      .update({
-        status: "dropped",
-        dropped_at: new Date().toISOString(),
-        dropped_reason: denyReason.trim(),
-      })
-      .eq("id", denyTargetId);
+    const { error } = await denyNotificationAssignment(denyTargetId, denyReason.trim());
 
     if (error) {
-      setNotificationsMessage(error.message);
+      setNotificationsMessage(error);
       setNotificationsLoading(false);
       return;
     }
@@ -3466,212 +2974,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setDenyTargetId(null);
     setDenyReason("");
 
-    const { data } = await supabase
-      .from("shift_assignments")
-      .select(
-        `
-        id,
-        created_at,
-        status,
-        dropped_reason,
-        assignment_role,
-        volunteer:profiles (
-          id,
-          full_name,
-          preferred_name,
-          role
-        ),
-        shift_instance:shift_instances (
-          id,
-          shift_date,
-          starts_at,
-          ends_at,
-          template:shift_templates (
-            id,
-            title
-          )
-        )
-      `,
-      )
-      .eq("status", "pending")
-      .order("created_at", { ascending: false });
-
-    setNotifications((data as unknown as ShiftAssignmentDetail[]) ?? []);
+    const { data: pendingItems } = await fetchPendingNotifications();
+    setNotifications(pendingItems);
     setNotificationsLoading(false);
     await fetchWeekAssignments();
-  };
-
-  const sendAdminDropPush = async (message: string) => {
-    const { error } = await supabase.functions.invoke("send-admin-push", {
-      body: {
-        title: "Shift dropped",
-        body: message,
-        url: "/?view=notifications",
-      },
-    });
-    if (error) {
-      console.warn("Failed to send admin drop push:", error.message);
-      return error.message;
-    }
-    return null;
-  };
-
-  const sendVolunteerPush = async ({
-    userId,
-    title,
-    body,
-    url = "/?view=notifications",
-    notificationType,
-    shiftInstanceId,
-  }: {
-    userId: string;
-    title: string;
-    body: string;
-    url?: string;
-    notificationType?: NotificationSettingKey;
-    shiftInstanceId?: number;
-  }) => {
-    const { data, error } = await supabase.functions.invoke("send-push", {
-      body: {
-        user_id: userId,
-        title,
-        body,
-        url,
-        notification_type: notificationType,
-        shift_instance_id: shiftInstanceId,
-      },
-    });
-    if (error) {
-      console.warn("Failed to send volunteer push:", error.message);
-      return error.message;
-    }
-    if (data?.skipped) {
-      return "Volunteer has not enabled push notifications.";
-    }
-    if (typeof data?.sent === "number" && data.sent <= 0) {
-      return "Push notification was not delivered.";
-    }
-    return null;
-  };
-
-  const notifyLeadsOnShiftInstance = async ({
-    shiftInstanceId,
-    excludeVolunteerIds = [],
-    title,
-    body,
-    notificationType,
-  }: {
-    shiftInstanceId: number;
-    excludeVolunteerIds?: string[];
-    title: string;
-    body: string;
-    notificationType: NotificationSettingKey;
-  }) => {
-    const { data: leadAssignments, error: leadAssignmentsError } = await supabase
-      .from("shift_assignments")
-      .select(
-        `
-          volunteer_id,
-          assignment_role,
-          volunteer:profiles (
-            id,
-            role
-          )
-        `,
-      )
-      .eq("shift_instance_id", shiftInstanceId)
-      .eq("status", "active");
-
-    if (leadAssignmentsError) {
-      return `lead lookup failed: ${leadAssignmentsError.message}`;
-    }
-
-    const excluded = new Set(excludeVolunteerIds);
-    const leadIds = Array.from(
-      new Set(
-        ((leadAssignments as DropDayLeadAssignment[] | null) ?? [])
-          .filter(
-            (assignment) =>
-              !excluded.has(assignment.volunteer_id) &&
-              (isLeadAssignmentRole(assignment.assignment_role) ||
-                isLeadRole(getDropAssignmentVolunteerRole(assignment))),
-          )
-          .map((assignment) => assignment.volunteer_id),
-      ),
-    );
-
-    if (leadIds.length === 0) {
-      return null;
-    }
-
-    const failures: string[] = [];
-    for (const leadId of leadIds) {
-      const leadPushError = await sendVolunteerPush({
-        userId: leadId,
-        title,
-        body,
-        notificationType,
-        shiftInstanceId,
-      });
-      if (leadPushError) {
-        failures.push(leadPushError);
-      }
-    }
-
-    return failures.length > 0 ? `lead notification failed: ${failures.join(" | ")}` : null;
-  };
-
-  const notifyActiveMembersOnShiftInstance = async ({
-    shiftInstanceId,
-    excludeVolunteerIds = [],
-    title,
-    body,
-    notificationType,
-  }: {
-    shiftInstanceId: number;
-    excludeVolunteerIds?: string[];
-    title: string;
-    body: string;
-    notificationType: NotificationSettingKey;
-  }) => {
-    const { data: activeAssignments, error: activeAssignmentsError } = await supabase
-      .from("shift_assignments")
-      .select("volunteer_id")
-      .eq("shift_instance_id", shiftInstanceId)
-      .eq("status", "active");
-
-    if (activeAssignmentsError) {
-      return `member lookup failed: ${activeAssignmentsError.message}`;
-    }
-
-    const excluded = new Set(excludeVolunteerIds);
-    const memberIds = Array.from(
-      new Set(
-        ((activeAssignments as { volunteer_id: string }[] | null) ?? [])
-          .map((assignment) => assignment.volunteer_id)
-          .filter((volunteerId) => Boolean(volunteerId) && !excluded.has(volunteerId)),
-      ),
-    );
-
-    if (memberIds.length === 0) {
-      return null;
-    }
-
-    const failures: string[] = [];
-    for (const memberId of memberIds) {
-      const memberPushError = await sendVolunteerPush({
-        userId: memberId,
-        title,
-        body,
-        notificationType,
-        shiftInstanceId,
-      });
-      if (memberPushError) {
-        failures.push(memberPushError);
-      }
-    }
-
-    return failures.length > 0 ? `member notification failed: ${failures.join(" | ")}` : null;
   };
 
   const handleRemoveVolunteer = async () => {
@@ -3696,9 +3002,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const adminName =
       displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
+    const removeTargetLabel = (removeTarget.notes ?? "").split(" — ")[0]?.trim();
     const volunteerName =
       removeTarget.volunteer?.preferred_name ||
       removeTarget.volunteer?.full_name ||
+      removeTargetLabel ||
       "A volunteer";
     const pushError = await sendAdminDropPush(`${adminName} removed ${volunteerName} from a shift.`);
     if (pushError) {
@@ -3726,6 +3034,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         title: "Shift removed",
         body: `${adminName} removed you from ${shiftDate}, ${shiftTime}, ${shiftTitle}.`,
         notificationType: "shift_removed",
+        shiftInstanceId: removedShiftInstanceId ?? undefined,
       });
       if (volunteerPushError) {
         setAssignmentsMessage(`Volunteer removed, but push notification failed: ${volunteerPushError}`);
@@ -4145,10 +3454,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowWeekGlance(false);
     setShowMonthDayDetails(false);
     setShowAppointments(false);
-    setShowTakeShiftPrompt(false);
+    closeTakeShiftPrompt();
     setShowNotifications(false);
     setShowAssignVolunteer(false);
+    setAssignVolunteerSearchInput("");
     setAssignVolunteerSearch("");
+    setShowAssignOtherForm(false);
+    setAssignOtherName("");
+    setAssignOtherDetails("");
     setShowHelpfulLinks(false);
     setShowDropConfirm(false);
     setShowDropReason(false);
@@ -4165,20 +3478,32 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     <div className="calendar-shell">
       <header className="calendar-header">
         <div>
-          <p className="calendar-eyebrow">
-            Welcome,{" "}
-            {displayProfile?.preferred_name ||
-              displayProfile?.full_name ||
-              session.user.email ||
-              "Volunteer"}
-          </p>
+          <div className="calendar-eyebrow-row">
+            <p className="calendar-eyebrow">
+              Welcome,{" "}
+              {displayProfile?.preferred_name ||
+                displayProfile?.full_name ||
+                session.user.email ||
+                "Volunteer"}
+            </p>
+          </div>
           <div className="calendar-title-row">
             <h1 className="calendar-title">CKC Shift Calendar</h1>
             <img className="calendar-title-logo" src="/favicon.png" alt="CKC logo" />
           </div>
-          {calendarRangeMode === "month" ? null : <p className="calendar-subtitle">{rangeLabel}</p>}
         </div>
         <div className="calendar-actions">
+          <select
+            className={`month-jump-select range-mode-select ${isMobile ? "range-select-mobile" : ""}`}
+            value={calendarRangeMode}
+            onChange={(event) =>
+              setCalendarRangeMode(event.target.value as "week" | "month")
+            }
+            aria-label="Select calendar range"
+          >
+            <option value="week">Week</option>
+            <option value="month">Month</option>
+          </select>
           <button
             className={`account-button refresh-button jump-today-icon ${
               refreshing ? "refresh-spinning" : ""
@@ -4191,44 +3516,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           >
             {refreshing ? "↻" : "↻"}
           </button>
-          {isMobile ? (
-            <select
-              className="month-jump-select range-select-mobile"
-              value={calendarRangeMode}
-              onChange={(event) =>
-                setCalendarRangeMode(event.target.value as "week" | "month")
-              }
-              aria-label="Select calendar range"
-            >
-              <option value="week">Week</option>
-              <option value="month">Month</option>
-            </select>
-          ) : null}
-          {isMobile ? (
-            <div className="mobile-inline-nav">
-              <button
-                className="nav-button"
-                onClick={handlePrevRange}
-                disabled={calendarRangeMode === "week" && weekOffset === 0}
-                aria-label="Previous"
-                title="Previous"
-              >
-                ←
-              </button>
-              <button className="nav-button" onClick={handleTodayClick}>
-                Today
-              </button>
-              <button
-                className="nav-button"
-                onClick={handleNextRange}
-                disabled={calendarRangeMode === "week" && weekOffset >= maxWeekOffset}
-                aria-label="Next"
-                title="Next"
-              >
-                →
-              </button>
-            </div>
-          ) : null}
           <div className="menu-shell" ref={menuRef}>
             <button
               className="menu-button"
@@ -4248,7 +3535,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             {showMenu ? (
               <div className="menu-dropdown" role="menu">
                 <button
-                  className="menu-item"
+                  className="menu-item menu-item-single-line"
                   type="button"
                   role="menuitem"
                   onClick={() => {
@@ -4333,23 +3620,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         onTouchEnd={isMobile ? handleCalendarTouchEnd : undefined}
         onTouchCancel={isMobile ? handleCalendarTouchEnd : undefined}
       >
-        <div className="calendar-jump">
-          <div className="month-nav month-nav-left">
-            {!isMobile ? (
-              <>
-                <select
-                  className="month-jump-select"
-                  value={calendarRangeMode}
-                  onChange={(event) =>
-                    setCalendarRangeMode(event.target.value as "week" | "month")
-                  }
-                  aria-label="Select calendar range"
-                >
-                  <option value="week">Week</option>
-                  <option value="month">Month</option>
-                </select>
+        <div className="calendar-header">
+          <div>
+            <div className="calendar-title-with-month">
+              <h2 className="calendar-title">{calendarTitleLabel}</h2>
+              <div className="month-title-nav">
                 <button
-                  className="nav-button"
+                  className="month-title-nav-button"
                   onClick={handlePrevRange}
                   disabled={calendarRangeMode === "week" && weekOffset === 0}
                   aria-label="Previous"
@@ -4357,11 +3634,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 >
                   ←
                 </button>
-                <button className="nav-button" onClick={handleTodayClick}>
+                <button className="month-title-nav-button month-title-nav-today" onClick={handleTodayClick}>
                   Today
                 </button>
                 <button
-                  className="nav-button"
+                  className="month-title-nav-button"
                   onClick={handleNextRange}
                   disabled={calendarRangeMode === "week" && weekOffset >= maxWeekOffset}
                   aria-label="Next"
@@ -4369,14 +3646,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 >
                   →
                 </button>
-              </>
-            ) : null}
-          </div>
-        </div>
-        <div className="calendar-header">
-          <div>
-            <div className="calendar-title-with-month">
-              <h2 className="calendar-title">{calendarTitleLabel}</h2>
+              </div>
               {calendarRangeMode === "month" && isMobile ? (
                 <select
                   className="month-jump-select month-jump-inline month-jump-inline-mobile"
@@ -4384,11 +3654,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   onChange={(event) => handleMonthJump(event.target.value)}
                   aria-label="Jump to month"
                 >
-                  {monthJumpOptions.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
+                  {monthJumpOptions.map((option) => {
+                    const [year, month] = option.key.split("-").map((part) => Number(part));
+                    const optionDate = new Date(year, month - 1, 1);
+                    return (
+                      <option key={option.key} value={option.key}>
+                        {monthFormatter.format(optionDate)}
+                      </option>
+                    );
+                  })}
                 </select>
               ) : null}
             </div>
@@ -4410,13 +3684,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </select>
             ) : null}
             <button
-              className="account-button jump-today jump-today-icon jump-today-cat"
+              className="account-button jump-today jump-today-icon"
               type="button"
               onClick={handleTodayClick}
               aria-label="Jump to today"
               title="Jump to today"
             >
-              🐈
+              ↓
             </button>
             <div className="calendar-view-toggle" role="tablist" aria-label="Calendar view mode">
               <button
@@ -4443,8 +3717,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </button>
             </div>
             {isMobile && calendarRangeMode !== "month" ? (
-              <button className="account-button jump-today" type="button" onClick={handleToggleAllDays}>
-                {allVisibleDaysCollapsed ? "Expand All" : "Collapse All"}
+              <button
+                className="account-button jump-today"
+                type="button"
+                onClick={handleToggleAllDays}
+                aria-label={allVisibleDaysCollapsed ? "Expand all days" : "Collapse all days"}
+                title={allVisibleDaysCollapsed ? "Expand all" : "Collapse all"}
+              >
+                {allVisibleDaysCollapsed ? "▾▾" : "▴▴"}
               </button>
             ) : null}
           </div>
@@ -4860,7 +4140,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             <div className="modal-header">
               <div>
                 <p className="modal-eyebrow">Schedule</p>
-                <h3 className="modal-title">This week at a glance</h3>
+                <h3 className="modal-title week-glance-title">This week at a glance</h3>
                 <p className="modal-location">{rangeLabel}</p>
               </div>
               <div className="modal-header-actions">
@@ -5092,9 +4372,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             if (nextKind === "adoption") {
                               return { ...prev, kind: nextKind, color: APPOINTMENT_COLOR_ADOPTION };
                             }
+                            if (nextKind === "vax") {
+                              return { ...prev, kind: nextKind, color: APPOINTMENT_COLOR_VAX };
+                            }
                             const inheritedColor =
                               prev.color === APPOINTMENT_COLOR_FOSTER ||
-                              prev.color === APPOINTMENT_COLOR_ADOPTION
+                              prev.color === APPOINTMENT_COLOR_ADOPTION ||
+                              prev.color === APPOINTMENT_COLOR_VAX
                                 ? APPOINTMENT_COLOR_OTHER_DEFAULT
                                 : prev.color;
                             return { ...prev, kind: nextKind, color: inheritedColor };
@@ -5103,6 +4387,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       >
                         <option value="foster">Foster</option>
                         <option value="adoption">Adoption</option>
+                        <option value="vax">Vax</option>
                         <option value="other">Other</option>
                       </select>
                     </label>
@@ -5242,7 +4527,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       {showTakeShiftPrompt ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
-          <div className="modal-panel take-shift-panel">
+          <div className={`modal-panel take-shift-panel ${isTakeShiftClosing ? "is-closing" : ""}`}>
             <div className="modal-header">
               <div>
                 <p className="modal-eyebrow">Confirm</p>
@@ -5253,7 +4538,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               <button
                 className="modal-close"
                 type="button"
-                onClick={() => setShowTakeShiftPrompt(false)}
+                onClick={() => closeTakeShiftPrompt()}
               >
                 Close
               </button>
@@ -5271,7 +4556,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <button
                   className="nav-button"
                   type="button"
-                  onClick={() => setShowTakeShiftPrompt(false)}
+                  onClick={() => closeTakeShiftPrompt()}
                   disabled={takeShiftLoading}
                 >
                   No
@@ -5297,34 +4582,29 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       {showNotifications ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
-          <div className="modal-panel account-panel">
+          <div className="modal-panel account-panel notifications-panel">
             <div className="modal-header">
               <div>
-                <p className="modal-eyebrow">
-                  {displayProfile?.preferred_name ||
-                    displayProfile?.full_name ||
-                    session.user.email ||
-                    "Account"}
-                </p>
                 <h3 className="modal-title">Notifications</h3>
               </div>
-              <div className="modal-header-actions">
-                <button
-                  className="account-button"
-                  type="button"
-                  onClick={handleDeleteAllNotifications}
-                  disabled={notifications.length === 0}
-                >
-                  Delete all
-                </button>
-                <button
-                  className="modal-close"
-                  type="button"
-                  onClick={() => setShowNotifications(false)}
-                >
-                  Close
-                </button>
-              </div>
+              <button
+                className="modal-close notification-close-icon"
+                type="button"
+                aria-label="Close notifications"
+                onClick={() => setShowNotifications(false)}
+              >
+                X
+              </button>
+            </div>
+            <div className="notifications-toolbar">
+              <button
+                className="account-button notification-delete-action"
+                type="button"
+                onClick={handleDeleteAllNotifications}
+                disabled={notifications.length === 0}
+              >
+                Delete all
+              </button>
             </div>
             <div className="modal-body">
               {notificationsLoading ? (
@@ -5485,9 +4765,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 type="button"
                 onClick={() => {
                   setShowAssignVolunteer(false);
+                  setAssignVolunteerSearchInput("");
                   setAssignVolunteerSearch("");
                   setAssignShiftInstanceId(null);
                   setAssignMessage("");
+                  setShowAssignOtherForm(false);
+                  setAssignOtherName("");
+                  setAssignOtherDetails("");
                 }}
               >
                 Close
@@ -5507,10 +4791,52 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   className="form-input"
                   type="text"
                   placeholder="Type a name"
-                  value={assignVolunteerSearch}
-                  onChange={(event) => setAssignVolunteerSearch(event.target.value)}
+                  value={assignVolunteerSearchInput}
+                  onChange={(event) => setAssignVolunteerSearchInput(event.target.value)}
                 />
               </label>
+              <div className="modal-actions">
+                <button
+                  className="account-button"
+                  type="button"
+                  onClick={() => setShowAssignOtherForm((current) => !current)}
+                >
+                  {showAssignOtherForm ? "Cancel Add Other" : "Add Other"}
+                </button>
+              </div>
+              {showAssignOtherForm ? (
+                <div className="account-section">
+                  <label className="form-field">
+                    <span className="form-label">Other name</span>
+                    <input
+                      className="form-input"
+                      type="text"
+                      placeholder="Example: CSU Club Group"
+                      value={assignOtherName}
+                      onChange={(event) => setAssignOtherName(event.target.value)}
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span className="form-label">Details (optional)</span>
+                    <textarea
+                      className="form-input form-textarea"
+                      placeholder="Optional details"
+                      value={assignOtherDetails}
+                      onChange={(event) => setAssignOtherDetails(event.target.value)}
+                    />
+                  </label>
+                  <div className="modal-actions">
+                    <button
+                      className="account-button"
+                      type="button"
+                      disabled={assignOtherLoading}
+                      onClick={() => void handleAssignOther()}
+                    >
+                      {assignOtherLoading ? "Adding..." : "Save Other"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               {filteredAssignableVolunteers.length === 0 && !volunteersLoading ? (
                 <div className="empty-banner">No volunteers found.</div>
               ) : null}
@@ -5554,7 +4880,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ) : null}
       {showHelpfulLinks ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
-          <div className="modal-panel account-panel">
+          <div className="modal-panel account-panel helpful-modal">
             <div className="modal-header">
               <div>
                 <p className="modal-eyebrow">Resources</p>
@@ -5811,11 +5137,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       {showRemovePrompt ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
-          <div className="modal-panel take-shift-panel">
+          <div className="modal-panel take-shift-panel remove-volunteer-panel">
             <div className="modal-header">
               <div>
                 <p className="modal-eyebrow">Admin</p>
-                <h3 className="modal-title">Remove Volunteer?</h3>
+                <h3 className="modal-title">
+                  {removeTarget?.volunteer?.id ? "Remove Volunteer?" : "Remove Other Entry?"}
+                </h3>
               </div>
               <button
                 className="modal-close"
@@ -5830,7 +5158,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 Remove{" "}
                 {removeTarget?.volunteer?.preferred_name ||
                   removeTarget?.volunteer?.full_name ||
-                  "this volunteer"}{" "}
+                  (removeTarget?.notes ?? "").split(" — ")[0] ||
+                  "this entry"}{" "}
                 from this shift?
               </p>
               {removeMessage ? (
@@ -5851,7 +5180,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   onClick={handleRemoveVolunteer}
                   disabled={removeLoading}
                 >
-                  {removeLoading ? "Removing..." : "Remove"}
+                  {removeLoading ? "Removing..." : "Delete"}
                 </button>
               </div>
             </div>
@@ -5861,7 +5190,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       {showAssignmentNotes ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={handleModalBackdropClick}>
-          <div className="modal-panel take-shift-panel">
+          <div className="modal-panel take-shift-panel volunteer-note-panel">
             <div className="modal-header">
               <div>
                 <p className="modal-eyebrow">Admin</p>
@@ -6216,16 +5545,64 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <div className="error-banner">{volunteersMessage}</div>
               ) : null}
               {!selectedVolunteer ? (
-                <label className="form-field">
-                  <span className="form-label">Search volunteers</span>
-                  <input
-                    className="form-input"
-                    type="text"
-                    placeholder="Type a name"
-                    value={volunteerSearch}
-                    onChange={(event) => setVolunteerSearch(event.target.value)}
-                  />
-                </label>
+                <>
+                  <div className="volunteer-role-filters" role="tablist" aria-label="Volunteer role filters">
+                    <button
+                      className={`volunteer-role-filter ${
+                        volunteerRoleFilter === "All" ? "active" : ""
+                      }`}
+                      type="button"
+                      role="tab"
+                      aria-selected={volunteerRoleFilter === "All"}
+                      onClick={() => setVolunteerRoleFilter("All")}
+                    >
+                      All
+                    </button>
+                    <button
+                      className={`volunteer-role-filter ${
+                        volunteerRoleFilter === "Admin" ? "active role-admin" : ""
+                      }`}
+                      type="button"
+                      role="tab"
+                      aria-selected={volunteerRoleFilter === "Admin"}
+                      onClick={() => setVolunteerRoleFilter("Admin")}
+                    >
+                      Admin
+                    </button>
+                    <button
+                      className={`volunteer-role-filter ${
+                        volunteerRoleFilter === "Lead" ? "active role-lead" : ""
+                      }`}
+                      type="button"
+                      role="tab"
+                      aria-selected={volunteerRoleFilter === "Lead"}
+                      onClick={() => setVolunteerRoleFilter("Lead")}
+                    >
+                      Lead
+                    </button>
+                    <button
+                      className={`volunteer-role-filter ${
+                        volunteerRoleFilter === "Regular Volunteer" ? "active role-regular" : ""
+                      }`}
+                      type="button"
+                      role="tab"
+                      aria-selected={volunteerRoleFilter === "Regular Volunteer"}
+                      onClick={() => setVolunteerRoleFilter("Regular Volunteer")}
+                    >
+                      Reg Volunteers
+                    </button>
+                  </div>
+                  <label className="form-field">
+                    <span className="form-label">Search volunteers</span>
+                    <input
+                      className="form-input"
+                      type="text"
+                      placeholder="Type a name"
+                      value={volunteerSearchInput}
+                      onChange={(event) => setVolunteerSearchInput(event.target.value)}
+                    />
+                  </label>
+                </>
               ) : null}
               {filteredSortedVolunteers.length === 0 && !volunteersLoading && !selectedVolunteer ? (
                 <div className="empty-banner">No volunteers found.</div>
@@ -6292,7 +5669,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             </div>
             <div className="modal-body account-body">
               <div className="account-section">
-                <p className="account-section-title">Account info</p>
+                <div className="account-section-header">
+                  <p className="account-section-title">Account info</p>
+                  <button className="account-button" type="button" onClick={handleSignOut}>
+                    Log Out
+                  </button>
+                </div>
                 <div className="modal-row">
                   <span className="modal-label">Email</span>
                   <span>{session.user.email ?? "—"}</span>
@@ -6300,11 +5682,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <div className="modal-row">
                   <span className="modal-label">Created</span>
                   <span>{formatDateTime(session.user.created_at)}</span>
-                </div>
-                <div className="modal-row">
-                  <button className="account-button" type="button" onClick={handleSignOut}>
-                    Log Out
-                  </button>
                 </div>
               </div>
 
@@ -6317,29 +5694,27 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 </p>
                 <div className="modal-row">
                   <span className="modal-label">Status</span>
-                  <span>{notificationsEnabled ? "Enabled" : "Disabled"}</span>
+                  <span>{notificationStatusLabel}</span>
                 </div>
-                <div className="modal-row">
-                  <button
-                    className="account-button"
-                    type="button"
-                    onClick={handleEnableNotifications}
-                    disabled={notificationLoading || notificationsEnabled}
-                  >
-                    {notificationLoading && notificationAction === "enable"
-                      ? "Enabling..."
-                      : "Enable notifications"}
-                  </button>
-                  <button
-                    className="account-button"
-                    type="button"
-                    onClick={handleDisableNotifications}
-                    disabled={notificationLoading || !notificationsEnabled}
-                  >
-                    {notificationLoading && notificationAction === "disable"
-                      ? "Disabling..."
-                      : "Disable notifications"}
-                  </button>
+                <div className="modal-row notification-toggle-row">
+                  <span className="modal-label">Push notifications</span>
+                  <label className="notification-switch">
+                    <input
+                      className="notification-switch-input"
+                      type="checkbox"
+                      checked={notificationsEnabled}
+                      onChange={(event) => {
+                        void handleNotificationToggle(event.currentTarget.checked);
+                      }}
+                      disabled={notificationLoading}
+                      aria-label="Toggle push notifications"
+                    />
+                    <span className="notification-switch-track" aria-hidden="true">
+                      <span className="notification-switch-thumb" />
+                    </span>
+                  </label>
+                </div>
+                <div className="modal-row notification-controls-row">
                 </div>
                 {notificationMessage ? (
                   <div className="error-banner">{notificationMessage}</div>
@@ -6347,8 +5722,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </div>
 
               <div className="account-section">
-                <p className="account-section-title">Profile details</p>
-                <div className="modal-row">
+                <div className="account-section-header">
+                  <p className="account-section-title">Profile details</p>
                   <button
                     className="account-button"
                     type="button"
@@ -6356,7 +5731,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   >
                     {isEditingProfile ? "Cancel" : "Edit profile"}
                   </button>
-                  {isEditingProfile ? (
+                </div>
+                {isEditingProfile ? (
+                  <div className="modal-row">
+                    <span />
                     <button
                       className="account-button"
                       type="button"
@@ -6365,8 +5743,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     >
                       {profileSaveLoading ? "Saving..." : "Save"}
                     </button>
-                  ) : null}
-                </div>
+                  </div>
+                ) : null}
                 {profileSaveMessage ? (
                   <div className="error-banner">{profileSaveMessage}</div>
                 ) : null}

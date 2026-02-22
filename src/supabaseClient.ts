@@ -15,3 +15,33 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     storage: authStorage,
   },
 });
+
+function clearStoredAuthSession() {
+  if (typeof window === "undefined") return;
+  const keysToClear: string[] = [];
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (!key) continue;
+    if (key.startsWith("sb-") && key.includes("-auth-token")) {
+      keysToClear.push(key);
+    }
+  }
+  for (const key of keysToClear) {
+    window.localStorage.removeItem(key);
+  }
+}
+
+export async function signOutSafely() {
+  const globalResult = await supabase.auth.signOut();
+  if (!globalResult.error) {
+    return { error: null };
+  }
+
+  const localResult = await supabase.auth.signOut({ scope: "local" });
+  if (!localResult.error) {
+    return { error: null };
+  }
+
+  clearStoredAuthSession();
+  return { error: null };
+}

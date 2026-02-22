@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
-import { supabase } from "./supabaseClient";
+import { signOutSafely, supabase } from "./supabaseClient";
 import Auth from "./Auth";
 import AuthedApp from "./AuthedApp";
 import ProfileOnboarding from "./ProfileOnboarding";
+import NewUI from "./NewUI";
+import SplashScreen from "./components/SplashScreen";
 
 type ProfileRecord = {
   id: string;
@@ -42,7 +44,34 @@ function isProfileComplete(profile: ProfileRecord) {
   return true;
 }
 
-export default function App() {
+function isNewUiEnabled() {
+  if (typeof window === "undefined") {
+    return import.meta.env.VITE_ENABLE_NEW_UI === "true";
+  }
+
+  const envEnabled = import.meta.env.VITE_ENABLE_NEW_UI === "true";
+  const searchParams = new URLSearchParams(window.location.search);
+  const queryEnabled =
+    searchParams.get("new_ui") === "1" || searchParams.get("new_ui") === "true";
+  const storageEnabled = window.localStorage.getItem("feature:new-ui") === "1";
+  return envEnabled || queryEnabled || storageEnabled;
+}
+
+function canAccessNewUi(role: ProfileRecord["role"] | null | undefined) {
+  if (import.meta.env.VITE_ENABLE_NEW_UI_FOR_ALL_USERS === "true") {
+    return true;
+  }
+  return role === "Admin";
+}
+
+function hasAuthType(targetType: string) {
+  if (typeof window === "undefined") return false;
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  return searchParams.get("type") === targetType || hashParams.get("type") === targetType;
+}
+
+function MainApp() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
@@ -53,6 +82,7 @@ export default function App() {
   const routePath = typeof window !== "undefined" ? window.location.pathname : "/";
   const isSignupRoute = routePath === "/signup";
   const isCompleteProfileRoute = routePath === "/complete-profile";
+  const useNewUi = isNewUiEnabled();
 
   const goToCompleteProfile = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -63,27 +93,29 @@ export default function App() {
 
   useEffect(() => {
     let mounted = true;
-
-    const hasRecoveryType = () => {
-      if (typeof window === "undefined") return false;
-      const searchParams = new URLSearchParams(window.location.search);
-      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-      return (
-        searchParams.get("type") === "recovery" ||
-        hashParams.get("type") === "recovery"
-      );
-    };
+    const signupConfirmation = hasAuthType("signup");
 
     const isResetRoute =
       typeof window !== "undefined" && window.location.pathname === "/reset-password";
 
-    if (hasRecoveryType() || isResetRoute) {
+    if (hasAuthType("recovery") || isResetRoute) {
       setPasswordRecovery(true);
     }
 
-    supabase.auth.getSession().then(({ data }) => {
+    if (signupConfirmation && typeof window !== "undefined" && window.location.pathname !== "/signin") {
+      window.history.replaceState({}, "", "/signin");
+    }
+
+    supabase.auth.getSession().then(async ({ data }) => {
       if (!mounted) return;
-      setSession(data.session ?? null);
+
+      if (signupConfirmation && data.session) {
+        await signOutSafely();
+        if (!mounted) return;
+        setSession(null);
+      } else {
+        setSession(data.session ?? null);
+      }
       setLoading(false);
     });
 
@@ -92,6 +124,12 @@ export default function App() {
         // Avoid clearing the UI on transient auth refresh/visibility changes.
         if (event === "PASSWORD_RECOVERY") {
           setPasswordRecovery(true);
+        }
+        if (event === "SIGNED_IN" && signupConfirmation) {
+          void signOutSafely();
+          setSession(null);
+          setLoading(false);
+          return;
         }
         if (event === "SIGNED_OUT") {
           setSession(null);
@@ -205,5 +243,68 @@ export default function App() {
     );
   }
 
+  if (useNewUi && canAccessNewUi(profile?.role)) {
+    return <NewUI session={session} profile={profile} />;
+  }
+
   return <AuthedApp session={session} profile={profile} />;
+}
+
+export default function App() {
+  const [showSplash, setShowSplash] = useState(false);
+  const hadSessionOnBootRef = useRef(false);
+  const authReadyRef = useRef(false);
+  const splashTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const runSplash = () => {
+      setShowSplash(true);
+      if (splashTimerRef.current !== null) {
+        window.clearTimeout(splashTimerRef.current);
+      }
+      splashTimerRef.current = window.setTimeout(() => {
+        setShowSplash(false);
+        splashTimerRef.current = null;
+      }, 3400);
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      hadSessionOnBootRef.current = Boolean(data.session);
+      authReadyRef.current = true;
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (!authReadyRef.current) return;
+
+      if (event === "SIGNED_OUT") {
+        hadSessionOnBootRef.current = false;
+        setShowSplash(false);
+        if (splashTimerRef.current !== null) {
+          window.clearTimeout(splashTimerRef.current);
+          splashTimerRef.current = null;
+        }
+        return;
+      }
+
+      if (event === "SIGNED_IN") {
+        if (!hadSessionOnBootRef.current) {
+          runSplash();
+        }
+        hadSessionOnBootRef.current = true;
+      }
+    });
+
+    return () => {
+      sub.subscription.unsubscribe();
+      if (splashTimerRef.current !== null) {
+        window.clearTimeout(splashTimerRef.current);
+      }
+    };
+  }, []);
+
+  if (showSplash) {
+    return <SplashScreen />;
+  }
+
+  return <MainApp />;
 }
