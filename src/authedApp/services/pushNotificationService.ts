@@ -1,7 +1,7 @@
 import { supabase } from "../../supabaseClient";
 import type { NotificationSettingKey } from "../constants";
 import type { DropDayLeadAssignment } from "../types";
-import { getDropAssignmentVolunteerRole, isLeadAssignmentRole, isLeadRole } from "../utils";
+import { getDropAssignmentVolunteerRole, isAdminRole, isLeadAssignmentRole, isLeadRole } from "../utils";
 
 async function getFunctionAuthHeaders() {
   const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? "";
@@ -28,6 +28,22 @@ async function getFunctionAuthHeaders() {
 }
 
 export async function sendAdminDropPush(message: string) {
+  return sendAdminPush({
+    title: "Shift dropped",
+    body: message,
+    url: "/?view=notifications",
+  });
+}
+
+export async function sendAdminPush({
+  title,
+  body,
+  url = "/?view=notifications",
+}: {
+  title: string;
+  body: string;
+  url?: string;
+}) {
   const authHeaders = await getFunctionAuthHeaders();
   if (!authHeaders) {
     return "Unauthorized: missing session token. Please log in again.";
@@ -35,14 +51,10 @@ export async function sendAdminDropPush(message: string) {
 
   const { error } = await supabase.functions.invoke("send-admin-push", {
     headers: authHeaders,
-    body: {
-      title: "Shift dropped",
-      body: message,
-      url: "/?view=notifications",
-    },
+    body: { title, body, url },
   });
   if (error) {
-    console.warn("Failed to send admin drop push:", error.message);
+    console.warn("Failed to send admin push:", error.message);
     return error.message;
   }
   return null;
@@ -154,7 +166,8 @@ export async function notifyLeadsOnShiftInstance({
           (assignment) =>
             !excluded.has(assignment.volunteer_id) &&
             (isLeadAssignmentRole(assignment.assignment_role) ||
-              isLeadRole(getDropAssignmentVolunteerRole(assignment))),
+              isLeadRole(getDropAssignmentVolunteerRole(assignment)) ||
+              isAdminRole(getDropAssignmentVolunteerRole(assignment))),
         )
         .map((assignment) => assignment.volunteer_id),
     ),

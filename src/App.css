@@ -942,9 +942,19 @@
 
 .shift-block-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: flex-start;
   gap: 8px;
+}
+
+.shift-block-header-content {
+  flex: 1 1 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
 }
 
 .shift-block-header-clickable {
@@ -983,6 +993,116 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.shift-appointments-controls {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  column-gap: 6px;
+  align-items: center;
+  justify-content: start;
+  justify-self: start;
+  align-self: start;
+  width: max-content;
+  margin: 0;
+  padding: 0;
+  max-width: 100%;
+}
+
+.shift-appointments-group {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 6px !important;
+  width: max-content !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  margin-left: -7px !important;
+  padding: 0 !important;
+  align-self: flex-start !important;
+}
+
+.account-panel .form-label {
+  color: var(--ink-primary);
+}
+
+.account-panel .form-input,
+.account-panel .form-textarea,
+.account-panel select.form-input {
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--rose-400) 75%, #0000);
+  color: var(--ink-primary);
+}
+
+.account-panel .form-input::placeholder,
+.account-panel .form-textarea::placeholder {
+  color: color-mix(in srgb, var(--ink-muted) 82%, #fff 18%);
+}
+
+.shift-appointments-group .shift-appointments-toggle,
+.shift-appointments-group .shift-appointments-add {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  margin: 0 !important;
+}
+
+.shift-appointments-toggle,
+.shift-appointments-add {
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--rose-400) 85%, #0000);
+  background: var(--rose-50);
+  color: var(--ink-primary);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.shift-appointments-toggle {
+  font-size: 0.72rem;
+  height: 28px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.shift-appointments-add {
+  font-size: 1rem;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  padding: 0;
+}
+
+.shift-appointments-toggle:hover,
+.shift-appointments-add:hover {
+  border-color: var(--rose-400);
+}
+
+.shift-appointments-add:hover {
+  color: var(--ink-primary);
+}
+
+.shift-appointment-add-button {
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--rose-400) 85%, #0000);
+  background: var(--rose-50);
+  color: var(--ink-primary);
+  font-size: 1rem;
+  font-weight: 700;
+  width: 28px;
+  height: 28px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shift-appointment-add-button:hover {
+  border-color: var(--rose-400);
 }
 
 .shift-block-meta {
@@ -1365,6 +1485,22 @@
   color: #9a5d3e;
 }
 
+.modal-panel .appointment-form .form-label {
+  color: var(--ink-primary);
+  font-family: "Avenir Next", "Helvetica Neue", "Segoe UI", sans-serif;
+}
+
+.modal-panel .appointment-form .form-input {
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--rose-400) 75%, #0000);
+  color: var(--ink-primary);
+  font-family: "Avenir Next", "Helvetica Neue", "Segoe UI", sans-serif;
+}
+
+.modal-panel .appointment-form .form-input::placeholder {
+  color: color-mix(in srgb, var(--ink-muted) 82%, #fff 18%);
+}
+
 .notification-delete-action {
   background: transparent;
   border: 0;
@@ -1687,6 +1823,11 @@
   border-color: rgba(255, 214, 80, 0.7);
 }
 
+.capacity-slot.other {
+  background: rgba(168, 85, 247, 0.24);
+  border-color: rgba(168, 85, 247, 0.66);
+}
+
 .capacity-slot:disabled {
   cursor: not-allowed;
   opacity: 0.95;
@@ -2001,6 +2142,42 @@
 .volunteers-list {
   display: grid;
   gap: 12px;
+}
+
+.volunteer-role-filters {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.volunteer-role-filter {
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--rose-400) 80%, #0000);
+  background: var(--rose-100);
+  color: var(--ink-primary);
+  height: 30px;
+  padding: 0 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.volunteer-role-filter.active {
+  background: var(--rose-50);
+}
+
+.volunteer-role-filter.active.role-admin {
+  border-color: color-mix(in srgb, #ff7ab8 65%, var(--rose-400) 35%);
+  color: #b63a72;
+}
+
+.volunteer-role-filter.active.role-lead {
+  border-color: color-mix(in srgb, #6ea8ff 70%, var(--rose-400) 30%);
+  color: #2e5ca8;
+}
+
+.volunteer-role-filter.active.role-regular {
+  border-color: color-mix(in srgb, #67b96f 70%, var(--rose-400) 30%);
+  color: #2c7a48;
 }
 
 .volunteer-row {
@@ -2640,6 +2817,24 @@
     height: 24px;
     padding: 0 8px;
     font-size: 0.68rem;
+  }
+
+  .shift-appointments-toggle {
+    height: 24px;
+    padding: 0 8px;
+    font-size: 0.68rem;
+  }
+
+  .shift-appointment-add-button {
+    width: 24px;
+    height: 24px;
+    font-size: 0.9rem;
+  }
+
+  .shift-appointments-add {
+    width: 22px;
+    height: 22px;
+    font-size: 0.82rem;
   }
 }
 

@@ -11,6 +11,7 @@ import { supabase } from "./supabaseClient";
 import {
   APPOINTMENT_COLOR_ADOPTION,
   APPOINTMENT_COLOR_FOSTER,
+  APPOINTMENT_COLOR_VAX,
   APPOINTMENT_COLOR_OTHER_DEFAULT,
   dayFormatter,
   monthFormatter,
@@ -35,6 +36,7 @@ import {
 import {
   notifyActiveMembersOnShiftInstance,
   notifyLeadsOnShiftInstance,
+  sendAdminPush,
   sendAdminDropPush,
   sendVolunteerPush,
 } from "./authedApp/services/pushNotificationService";
@@ -121,6 +123,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [assignShiftInstanceId, setAssignShiftInstanceId] = useState<number | null>(null);
   const [assignLoading, setAssignLoading] = useState(false);
   const [assignMessage, setAssignMessage] = useState("");
+  const [showAssignOtherForm, setShowAssignOtherForm] = useState(false);
+  const [assignOtherName, setAssignOtherName] = useState("");
+  const [assignOtherDetails, setAssignOtherDetails] = useState("");
+  const [assignOtherLoading, setAssignOtherLoading] = useState(false);
   const [showDenyPrompt, setShowDenyPrompt] = useState(false);
   const [denyReason, setDenyReason] = useState("");
   const [denyTargetId, setDenyTargetId] = useState<string | null>(null);
@@ -147,7 +153,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [volunteersLoading, setVolunteersLoading] = useState(false);
   const [volunteersMessage, setVolunteersMessage] = useState("");
   const [volunteers, setVolunteers] = useState<VolunteerRow[]>([]);
+  const [volunteerSearchInput, setVolunteerSearchInput] = useState("");
   const [volunteerSearch, setVolunteerSearch] = useState("");
+  const [volunteerRoleFilter, setVolunteerRoleFilter] = useState<
+    "All" | "Admin" | "Lead" | "Regular Volunteer"
+  >("All");
+  const [assignVolunteerSearchInput, setAssignVolunteerSearchInput] = useState("");
   const [assignVolunteerSearch, setAssignVolunteerSearch] = useState("");
   const [selectedVolunteer, setSelectedVolunteer] = useState<VolunteerRow | null>(null);
   const [volunteerRecurring, setVolunteerRecurring] = useState<RecurringAssignment[]>([]);
@@ -1439,13 +1450,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [volunteers]);
   const filteredSortedVolunteers = useMemo(() => {
     const query = volunteerSearch.trim().toLowerCase();
-    if (!query) return sortedVolunteers;
     return sortedVolunteers.filter((volunteer) => {
+      if (volunteerRoleFilter !== "All" && volunteer.role !== volunteerRoleFilter) return false;
+      if (!query) return true;
       const fullName = (volunteer.full_name ?? "").toLowerCase();
       const preferredName = (volunteer.preferred_name ?? "").toLowerCase();
       return fullName.includes(query) || preferredName.includes(query);
     });
-  }, [sortedVolunteers, volunteerSearch]);
+  }, [sortedVolunteers, volunteerRoleFilter, volunteerSearch]);
   const filteredAssignableVolunteers = useMemo(() => {
     const query = assignVolunteerSearch.trim().toLowerCase();
     if (!query) return sortedVolunteers;
@@ -1455,6 +1467,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return fullName.includes(query) || preferredName.includes(query);
     });
   }, [sortedVolunteers, assignVolunteerSearch]);
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      setVolunteerSearch(volunteerSearchInput);
+    }, 120);
+    return () => window.clearTimeout(timerId);
+  }, [volunteerSearchInput]);
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      setAssignVolunteerSearch(assignVolunteerSearchInput);
+    }, 120);
+    return () => window.clearTimeout(timerId);
+  }, [assignVolunteerSearchInput]);
 
   useEffect(() => {
     setNotificationCount(notifications.length);
@@ -1784,6 +1810,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return leftCreated.localeCompare(rightCreated);
     });
     const filledAssignments = sortedAssignments.filter((assignment) => Boolean(assignment.volunteer?.id));
+    const otherAssignments = sortedAssignments.filter(
+      (assignment) =>
+        !assignment.volunteer?.id &&
+        assignment.status !== "pending" &&
+        Boolean((assignment.notes ?? "").trim()),
+    );
     const leadAssignment =
       filledAssignments.find(
         (assignment) =>
@@ -1794,7 +1826,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const regularAssignments = leadAssignment
       ? filledAssignments.filter((assignment) => assignment !== leadAssignment)
       : filledAssignments;
-    const slotAssignments: Array<ShiftAssignmentDetail | null> = [leadAssignment, ...regularAssignments].slice(0, 8);
+    const slotAssignments: Array<ShiftAssignmentDetail | null> = [
+      leadAssignment,
+      ...regularAssignments,
+      ...otherAssignments,
+    ].slice(0, 8);
     while (slotAssignments.length < 6) {
       slotAssignments.push(null);
     }
@@ -1826,12 +1862,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               : undefined
           }
         >
-          <div>
+          <div className="shift-block-header-content">
             <div className="shift-block-title-row">
               <p className="shift-block-title">{shift.title}</p>
-              {isMobile && calendarViewMode === "volunteers" ? (
+            </div>
+            {calendarViewMode === "volunteers" ? (
+              <div className="shift-appointments-group">
                 <button
-                  className={`shift-appointments-button ${
+                  className={`shift-appointments-toggle ${
                     mobileAppointmentsShiftId === shift.instanceId ? "shift-appointments-open" : ""
                   }`}
                   type="button"
@@ -1844,8 +1882,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 >
                   Appointments {appointmentsForShift.length}
                 </button>
-              ) : null}
-            </div>
+                {canModifyAppointments ? (
+                  <button
+                    className="shift-appointments-add"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleOpenAppointments(shift);
+                    }}
+                    aria-label={`Add appointment for ${shift.title}`}
+                    title="Add appointment"
+                  >
+                    +
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <p className="shift-block-meta">
               {hasTimes ? `${timeFormatter.format(shift.start)}–${timeFormatter.format(shift.end)}` : "—"}
             </p>
@@ -1856,7 +1908,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         </div>
         {calendarViewMode === "volunteers" ? (
           <div className="shift-assignment-list">
-            {isMobile && mobileAppointmentsShiftId === shift.instanceId ? (
+            {mobileAppointmentsShiftId === shift.instanceId ? (
               <div className="shift-appointments-inline">
                 {appointmentsForShift.length === 0 ? (
                   <p className="shift-appointment-empty">No appointments</p>
@@ -1899,6 +1951,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             {slotAssignments.map((assignment, index) => {
               const name = assignment?.volunteer?.preferred_name || assignment?.volunteer?.full_name || null;
               const hasVolunteer = Boolean(assignment?.volunteer?.id);
+              const hasOtherLabel = Boolean(!hasVolunteer && (assignment?.notes ?? "").trim());
               const isLeadCoverageSlot = index === 0 && !hasVolunteer;
               const canClaimLeadCoverage = profile?.role === "Lead" || profile?.role === "Admin";
               const isVolunteerPastLocked = profile?.role !== "Admin" && isPastShiftDay;
@@ -1906,6 +1959,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 !assignment || !assignment.volunteer?.id
                   ? index === 0
                     ? "needs-lead"
+                    : hasOtherLabel
+                      ? "other"
                     : "none"
                   : assignment.status === "pending"
                     ? "pending"
@@ -1933,8 +1988,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
                     if (!assignment || !hasVolunteer) {
                       if (profile?.role === "Admin") {
+                        if (assignment && hasOtherLabel) {
+                          setRemoveTarget(assignment);
+                          setRemoveMessage("");
+                          setShowRemovePrompt(true);
+                          return;
+                        }
                         setAssignMessage("");
+                        setAssignVolunteerSearchInput("");
                         setAssignVolunteerSearch("");
+                        setShowAssignOtherForm(false);
+                        setAssignOtherName("");
+                        setAssignOtherDetails("");
                         setAssignShiftInstanceId(resolvedInstanceId);
                         setShowAssignVolunteer(true);
                       } else {
@@ -1978,6 +2043,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 >
                   {assignment?.status === "pending" ? (
                     "Pending"
+                  ) : assignment && hasOtherLabel ? (
+                    <div className="capacity-slot-content">
+                      <span className="capacity-slot-name">{assignment.notes}</span>
+                    </div>
                   ) : assignment && hasVolunteer ? (
                     <div className="capacity-slot-content">
                       <span className="capacity-slot-name">{name ?? "No Volunteer Assigned"}</span>
@@ -2017,7 +2086,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
                   if (profile?.role === "Admin") {
                     setAssignMessage("");
+                    setAssignVolunteerSearchInput("");
                     setAssignVolunteerSearch("");
+                    setShowAssignOtherForm(false);
+                    setAssignOtherName("");
+                    setAssignOtherDetails("");
                     setAssignShiftInstanceId(resolvedInstanceId);
                     setShowAssignVolunteer(true);
                     return;
@@ -2485,6 +2558,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
     const startIso = toShiftDateTimeIso(appointmentsShift, appointmentForm.starts_at);
+    const isNewAppointment = !appointmentForm.id;
 
     setAppointmentSaving(true);
     setAppointmentsMessage("");
@@ -2502,6 +2576,38 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setAppointmentsMessage(error);
       setAppointmentSaving(false);
       return;
+    }
+
+    if (isNewAppointment) {
+      const kindLabel =
+        appointmentForm.kind === "foster"
+          ? "Foster"
+          : appointmentForm.kind === "adoption"
+            ? "Adoption"
+            : appointmentForm.kind === "vax"
+              ? "Vax"
+              : "Other";
+      const leadNotifyError = await notifyLeadsOnShiftInstance({
+        shiftInstanceId: appointmentsShiftInstanceId,
+        excludeVolunteerIds: [session.user.id],
+        title: "New appointment",
+        body: `${kindLabel}: ${appointmentForm.title.trim()} was added to ${appointmentsShift.title}.`,
+        notificationType: "shift_added",
+      });
+      if (leadNotifyError) {
+        setAppointmentsMessage(`Appointment saved, but ${leadNotifyError}`);
+      }
+      const adminNotifyError = await sendAdminPush({
+        title: "New appointment",
+        body: `${kindLabel}: ${appointmentForm.title.trim()} was added to ${appointmentsShift.title}.`,
+      });
+      if (adminNotifyError) {
+        setAppointmentsMessage((previous) =>
+          previous
+            ? `${previous} | admin notification failed: ${adminNotifyError}`
+            : `Appointment saved, but admin notification failed: ${adminNotifyError}`,
+        );
+      }
     }
 
     setAppointmentForm({
@@ -2530,6 +2636,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         setAppointmentsMessage("Only admins can delete appointments.");
         return;
       }
+      const deletedAppointment =
+        selectedShiftAppointments.find((appointment) => appointment.id === appointmentId) ?? null;
       setAppointmentDeleteId(appointmentId);
       setAppointmentsMessage("");
       const { error } = await deleteAppointmentById(appointmentId);
@@ -2548,10 +2656,38 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           starts_at: "",
         });
       }
+      if (appointmentsShiftInstanceId) {
+        const appointmentTitle = (deletedAppointment?.title ?? "An appointment").trim();
+        const shiftTitle = appointmentsShift?.title ?? "the shift";
+        const leadNotifyError = await notifyLeadsOnShiftInstance({
+          shiftInstanceId: appointmentsShiftInstanceId,
+          excludeVolunteerIds: [session.user.id],
+          title: "Appointment deleted",
+          body: `${appointmentTitle} was deleted from ${shiftTitle}.`,
+          notificationType: "shift_removed",
+        });
+        const adminNotifyError = await sendAdminPush({
+          title: "Appointment deleted",
+          body: `${appointmentTitle} was deleted from ${shiftTitle}.`,
+        });
+        const notificationErrors = [leadNotifyError, adminNotifyError && `admin notification failed: ${adminNotifyError}`]
+          .filter((value): value is string => Boolean(value));
+        if (notificationErrors.length > 0) {
+          setAppointmentsMessage(`Appointment deleted, but ${notificationErrors.join(" | ")}`);
+        }
+      }
       setAppointmentDeleteId(null);
       await fetchWeekAppointments();
     },
-    [appointmentForm.id, canModifyAppointments, fetchWeekAppointments],
+    [
+      appointmentForm.id,
+      appointmentsShift,
+      appointmentsShiftInstanceId,
+      canModifyAppointments,
+      fetchWeekAppointments,
+      selectedShiftAppointments,
+      session.user.id,
+    ],
   );
 
   const toggleAppointmentExpanded = useCallback((appointmentId: string) => {
@@ -2600,8 +2736,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     setShowAssignVolunteer(false);
+    setAssignVolunteerSearchInput("");
     setAssignVolunteerSearch("");
     setAssignShiftInstanceId(null);
+    setShowAssignOtherForm(false);
+    setAssignOtherName("");
+    setAssignOtherDetails("");
 
     const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
     const volunteerName = volunteer.preferred_name || volunteer.full_name || "A volunteer";
@@ -2661,6 +2801,75 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     await fetchWeekAssignments();
     setAssignLoading(false);
   };
+
+  const handleAssignOther = useCallback(async () => {
+    if (!assignShiftInstanceId) {
+      setAssignMessage("Shift instance not found.");
+      return;
+    }
+    const label = assignOtherName.trim();
+    if (!label) {
+      setAssignMessage("Please enter a name for Other.");
+      return;
+    }
+
+    setAssignOtherLoading(true);
+    setAssignMessage("");
+    const details = assignOtherDetails.trim();
+    const notes = details ? `${label} — ${details}` : label;
+    const { error } = await supabase.from("shift_assignments").insert({
+      shift_instance_id: assignShiftInstanceId,
+      volunteer_id: null,
+      status: "active",
+      assignment_role: "regular",
+      notes,
+      dropped_at: null,
+      dropped_reason: null,
+    });
+
+    if (error) {
+      setAssignMessage(error);
+      setAssignOtherLoading(false);
+      return;
+    }
+
+    const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
+    const shiftTitle = assignedShift?.title ?? "Shift";
+    const leadNotifyError = await notifyLeadsOnShiftInstance({
+      shiftInstanceId: assignShiftInstanceId,
+      excludeVolunteerIds: [session.user.id],
+      title: "Shift updated",
+      body: `Other: ${label} was added to ${shiftTitle}.`,
+      notificationType: "shift_added",
+    });
+    const adminNotifyError = await sendAdminPush({
+      title: "Shift updated",
+      body: `Other: ${label} was added to ${shiftTitle}.`,
+    });
+
+    const notificationErrors = [
+      leadNotifyError,
+      adminNotifyError ? `admin notification failed: ${adminNotifyError}` : null,
+    ].filter((value): value is string => Boolean(value));
+
+    setAssignOtherName("");
+    setAssignOtherDetails("");
+    setShowAssignOtherForm(false);
+    setAssignOtherLoading(false);
+    setAssignMessage(
+      notificationErrors.length > 0
+        ? `Added Other, but ${notificationErrors.join(" | ")}`
+        : "Added Other to this shift.",
+    );
+    await fetchWeekAssignments();
+  }, [
+    assignOtherDetails,
+    assignOtherName,
+    assignShiftInstanceId,
+    fetchWeekAssignments,
+    instanceShifts,
+    session.user.id,
+  ]);
 
   const handleNotificationDecision = async (
     assignmentId: string,
@@ -2790,9 +2999,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const adminName =
       displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
+    const removeTargetLabel = (removeTarget.notes ?? "").split(" — ")[0]?.trim();
     const volunteerName =
       removeTarget.volunteer?.preferred_name ||
       removeTarget.volunteer?.full_name ||
+      removeTargetLabel ||
       "A volunteer";
     const pushError = await sendAdminDropPush(`${adminName} removed ${volunteerName} from a shift.`);
     if (pushError) {
@@ -3243,7 +3454,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     closeTakeShiftPrompt();
     setShowNotifications(false);
     setShowAssignVolunteer(false);
+    setAssignVolunteerSearchInput("");
     setAssignVolunteerSearch("");
+    setShowAssignOtherForm(false);
+    setAssignOtherName("");
+    setAssignOtherDetails("");
     setShowHelpfulLinks(false);
     setShowDropConfirm(false);
     setShowDropReason(false);
@@ -4154,9 +4369,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             if (nextKind === "adoption") {
                               return { ...prev, kind: nextKind, color: APPOINTMENT_COLOR_ADOPTION };
                             }
+                            if (nextKind === "vax") {
+                              return { ...prev, kind: nextKind, color: APPOINTMENT_COLOR_VAX };
+                            }
                             const inheritedColor =
                               prev.color === APPOINTMENT_COLOR_FOSTER ||
-                              prev.color === APPOINTMENT_COLOR_ADOPTION
+                              prev.color === APPOINTMENT_COLOR_ADOPTION ||
+                              prev.color === APPOINTMENT_COLOR_VAX
                                 ? APPOINTMENT_COLOR_OTHER_DEFAULT
                                 : prev.color;
                             return { ...prev, kind: nextKind, color: inheritedColor };
@@ -4165,6 +4384,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       >
                         <option value="foster">Foster</option>
                         <option value="adoption">Adoption</option>
+                        <option value="vax">Vax</option>
                         <option value="other">Other</option>
                       </select>
                     </label>
@@ -4542,9 +4762,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 type="button"
                 onClick={() => {
                   setShowAssignVolunteer(false);
+                  setAssignVolunteerSearchInput("");
                   setAssignVolunteerSearch("");
                   setAssignShiftInstanceId(null);
                   setAssignMessage("");
+                  setShowAssignOtherForm(false);
+                  setAssignOtherName("");
+                  setAssignOtherDetails("");
                 }}
               >
                 Close
@@ -4564,10 +4788,52 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   className="form-input"
                   type="text"
                   placeholder="Type a name"
-                  value={assignVolunteerSearch}
-                  onChange={(event) => setAssignVolunteerSearch(event.target.value)}
+                  value={assignVolunteerSearchInput}
+                  onChange={(event) => setAssignVolunteerSearchInput(event.target.value)}
                 />
               </label>
+              <div className="modal-actions">
+                <button
+                  className="account-button"
+                  type="button"
+                  onClick={() => setShowAssignOtherForm((current) => !current)}
+                >
+                  {showAssignOtherForm ? "Cancel Add Other" : "Add Other"}
+                </button>
+              </div>
+              {showAssignOtherForm ? (
+                <div className="account-section">
+                  <label className="form-field">
+                    <span className="form-label">Other name</span>
+                    <input
+                      className="form-input"
+                      type="text"
+                      placeholder="Example: CSU Club Group"
+                      value={assignOtherName}
+                      onChange={(event) => setAssignOtherName(event.target.value)}
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span className="form-label">Details (optional)</span>
+                    <textarea
+                      className="form-input form-textarea"
+                      placeholder="Optional details"
+                      value={assignOtherDetails}
+                      onChange={(event) => setAssignOtherDetails(event.target.value)}
+                    />
+                  </label>
+                  <div className="modal-actions">
+                    <button
+                      className="account-button"
+                      type="button"
+                      disabled={assignOtherLoading}
+                      onClick={() => void handleAssignOther()}
+                    >
+                      {assignOtherLoading ? "Adding..." : "Save Other"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               {filteredAssignableVolunteers.length === 0 && !volunteersLoading ? (
                 <div className="empty-banner">No volunteers found.</div>
               ) : null}
@@ -4872,7 +5138,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             <div className="modal-header">
               <div>
                 <p className="modal-eyebrow">Admin</p>
-                <h3 className="modal-title">Remove Volunteer?</h3>
+                <h3 className="modal-title">
+                  {removeTarget?.volunteer?.id ? "Remove Volunteer?" : "Remove Other Entry?"}
+                </h3>
               </div>
               <button
                 className="modal-close"
@@ -4887,7 +5155,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 Remove{" "}
                 {removeTarget?.volunteer?.preferred_name ||
                   removeTarget?.volunteer?.full_name ||
-                  "this volunteer"}{" "}
+                  (removeTarget?.notes ?? "").split(" — ")[0] ||
+                  "this entry"}{" "}
                 from this shift?
               </p>
               {removeMessage ? (
@@ -4908,7 +5177,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   onClick={handleRemoveVolunteer}
                   disabled={removeLoading}
                 >
-                  {removeLoading ? "Removing..." : "Remove"}
+                  {removeLoading ? "Removing..." : "Delete"}
                 </button>
               </div>
             </div>
@@ -5273,16 +5542,64 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <div className="error-banner">{volunteersMessage}</div>
               ) : null}
               {!selectedVolunteer ? (
-                <label className="form-field">
-                  <span className="form-label">Search volunteers</span>
-                  <input
-                    className="form-input"
-                    type="text"
-                    placeholder="Type a name"
-                    value={volunteerSearch}
-                    onChange={(event) => setVolunteerSearch(event.target.value)}
-                  />
-                </label>
+                <>
+                  <div className="volunteer-role-filters" role="tablist" aria-label="Volunteer role filters">
+                    <button
+                      className={`volunteer-role-filter ${
+                        volunteerRoleFilter === "All" ? "active" : ""
+                      }`}
+                      type="button"
+                      role="tab"
+                      aria-selected={volunteerRoleFilter === "All"}
+                      onClick={() => setVolunteerRoleFilter("All")}
+                    >
+                      All
+                    </button>
+                    <button
+                      className={`volunteer-role-filter ${
+                        volunteerRoleFilter === "Admin" ? "active role-admin" : ""
+                      }`}
+                      type="button"
+                      role="tab"
+                      aria-selected={volunteerRoleFilter === "Admin"}
+                      onClick={() => setVolunteerRoleFilter("Admin")}
+                    >
+                      Admin
+                    </button>
+                    <button
+                      className={`volunteer-role-filter ${
+                        volunteerRoleFilter === "Lead" ? "active role-lead" : ""
+                      }`}
+                      type="button"
+                      role="tab"
+                      aria-selected={volunteerRoleFilter === "Lead"}
+                      onClick={() => setVolunteerRoleFilter("Lead")}
+                    >
+                      Lead
+                    </button>
+                    <button
+                      className={`volunteer-role-filter ${
+                        volunteerRoleFilter === "Regular Volunteer" ? "active role-regular" : ""
+                      }`}
+                      type="button"
+                      role="tab"
+                      aria-selected={volunteerRoleFilter === "Regular Volunteer"}
+                      onClick={() => setVolunteerRoleFilter("Regular Volunteer")}
+                    >
+                      Reg Volunteers
+                    </button>
+                  </div>
+                  <label className="form-field">
+                    <span className="form-label">Search volunteers</span>
+                    <input
+                      className="form-input"
+                      type="text"
+                      placeholder="Type a name"
+                      value={volunteerSearchInput}
+                      onChange={(event) => setVolunteerSearchInput(event.target.value)}
+                    />
+                  </label>
+                </>
               ) : null}
               {filteredSortedVolunteers.length === 0 && !volunteersLoading && !selectedVolunteer ? (
                 <div className="empty-banner">No volunteers found.</div>

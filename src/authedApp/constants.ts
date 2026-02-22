@@ -36,6 +36,7 @@ export type NotificationSettingKey = (typeof NOTIFICATION_SETTING_KEYS)[number];
 
 export const APPOINTMENT_COLOR_FOSTER = "#22c55e";
 export const APPOINTMENT_COLOR_ADOPTION = "#a855f7";
+export const APPOINTMENT_COLOR_VAX = "#ec4899";
 export const APPOINTMENT_COLOR_OTHER_DEFAULT = "#f97316";
 
 export const SELF_DROP_REASON_PREFIX = "__self_drop__:";
