@@ -64,6 +64,13 @@ function canAccessNewUi(role: ProfileRecord["role"] | null | undefined) {
   return role === "Admin";
 }
 
+function hasAuthType(targetType: string) {
+  if (typeof window === "undefined") return false;
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  return searchParams.get("type") === targetType || hashParams.get("type") === targetType;
+}
+
 function MainApp() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
@@ -86,27 +93,29 @@ function MainApp() {
 
   useEffect(() => {
     let mounted = true;
-
-    const hasRecoveryType = () => {
-      if (typeof window === "undefined") return false;
-      const searchParams = new URLSearchParams(window.location.search);
-      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-      return (
-        searchParams.get("type") === "recovery" ||
-        hashParams.get("type") === "recovery"
-      );
-    };
+    const signupConfirmation = hasAuthType("signup");
 
     const isResetRoute =
       typeof window !== "undefined" && window.location.pathname === "/reset-password";
 
-    if (hasRecoveryType() || isResetRoute) {
+    if (hasAuthType("recovery") || isResetRoute) {
       setPasswordRecovery(true);
     }
 
-    supabase.auth.getSession().then(({ data }) => {
+    if (signupConfirmation && typeof window !== "undefined" && window.location.pathname !== "/signin") {
+      window.history.replaceState({}, "", "/signin");
+    }
+
+    supabase.auth.getSession().then(async ({ data }) => {
       if (!mounted) return;
-      setSession(data.session ?? null);
+
+      if (signupConfirmation && data.session) {
+        await supabase.auth.signOut();
+        if (!mounted) return;
+        setSession(null);
+      } else {
+        setSession(data.session ?? null);
+      }
       setLoading(false);
     });
 
@@ -115,6 +124,12 @@ function MainApp() {
         // Avoid clearing the UI on transient auth refresh/visibility changes.
         if (event === "PASSWORD_RECOVERY") {
           setPasswordRecovery(true);
+        }
+        if (event === "SIGNED_IN" && signupConfirmation) {
+          void supabase.auth.signOut();
+          setSession(null);
+          setLoading(false);
+          return;
         }
         if (event === "SIGNED_OUT") {
           setSession(null);

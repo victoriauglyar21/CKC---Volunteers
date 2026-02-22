@@ -123,12 +123,19 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
           email,
           password,
           options: {
-            emailRedirectTo: `${normalizedSiteUrl}/complete-profile`,
+            emailRedirectTo: `${normalizedSiteUrl}/signin`,
           },
         });
         if (error) return setMsg(mapSignupError(error));
         if (data.session) {
           await supabase.auth.signOut();
+        }
+        setIsSignup(false);
+        setPassword("");
+        setSignupConfirmPassword("");
+        setAccessCode("");
+        if (typeof window !== "undefined" && window.location.pathname !== "/signin") {
+          window.history.replaceState({}, "", "/signin");
         }
         return setMsg(
           "Check your email (and spam) for the confirmation link. Add us to your contacts so future messages land in inbox.",
