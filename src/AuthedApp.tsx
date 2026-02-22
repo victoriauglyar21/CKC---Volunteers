@@ -100,6 +100,8 @@ import {
 } from "./authedApp/utils";
 
 export default function AuthedApp({ session, profile }: AuthedAppProps) {
+  const calendarDebugEnabled =
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugCalendar") === "1";
   const [today, setToday] = useState(() => startOfDay(new Date()));
   const [templates, setTemplates] = useState<ShiftTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -694,10 +696,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    const { data, error } = await supabase
-      .from("shift_assignments")
-      .select(
-        `
+    const assignmentSelect = `
         id,
         shift_instance_id,
         volunteer_id,
@@ -722,24 +721,38 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             title
           )
         )
-      `,
-      )
-      .in("shift_instance_id", instanceIds)
-      .in("status", ["active", "pending"])
-      .order("created_at", { ascending: true });
-    if (error || !data) {
-      setWeekAssignments({});
-      return;
+      `;
+    const pageSize = 1000;
+    let from = 0;
+    const allAssignments: ShiftAssignmentDetail[] = [];
+    while (true) {
+      const { data, error } = await supabase
+        .from("shift_assignments")
+        .select(assignmentSelect)
+        .in("shift_instance_id", instanceIds)
+        .in("status", ["active", "pending"])
+        .order("created_at", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error || !data) {
+        setWeekAssignments({});
+        return;
+      }
+      allAssignments.push(...(data as unknown as ShiftAssignmentDetail[]));
+      if (data.length < pageSize) break;
+      from += pageSize;
     }
 
     const map: Record<number, ShiftAssignmentDetail[]> = {};
-    (data as unknown as ShiftAssignmentDetail[]).forEach((rawAssignment) => {
+    let droppedAssignments = 0;
+    allAssignments.forEach((rawAssignment) => {
       const rawShiftInstanceId =
         (rawAssignment as ShiftAssignmentDetail & { shift_instance_id?: number | null }).shift_instance_id ?? null;
       const fallbackVolunteerId =
         (rawAssignment as ShiftAssignmentDetail & { volunteer_id?: string | null }).volunteer_id ?? null;
       const normalizedVolunteer = Array.isArray((rawAssignment as { volunteer?: unknown }).volunteer)
-        ? ((rawAssignment as { volunteer?: ShiftAssignmentDetail["volunteer"][] }).volunteer?.[0] ?? null)
+        ? ((((rawAssignment as { volunteer?: unknown }).volunteer ?? null) as unknown as Array<
+            ShiftAssignmentDetail["volunteer"]
+          >)?.[0] ?? null)
         : rawAssignment.volunteer;
       const normalizedAssignment = {
         ...rawAssignment,
@@ -754,8 +767,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               }
             : null),
         shift_instance: Array.isArray((rawAssignment as { shift_instance?: unknown }).shift_instance)
-          ? ((rawAssignment as { shift_instance?: ShiftAssignmentDetail["shift_instance"][] }).shift_instance?.[0] ??
-            null)
+          ? ((((rawAssignment as { shift_instance?: unknown }).shift_instance ?? null) as unknown as Array<
+              ShiftAssignmentDetail["shift_instance"]
+            >)?.[0] ?? null)
           : rawAssignment.shift_instance,
       } as ShiftAssignmentDetail;
 
@@ -775,13 +789,35 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           targetInstanceId = visibleShiftKeys.get(`${templateId}-${dayKey}`) ?? null;
         }
       }
-      if (!targetInstanceId) return;
+      if (!targetInstanceId) {
+        droppedAssignments += 1;
+        return;
+      }
       if (!map[targetInstanceId]) map[targetInstanceId] = [];
       map[targetInstanceId].push(normalizedAssignment);
     });
 
+    if (calendarDebugEnabled) {
+      const mappedCount = Object.values(map).reduce((sum, items) => sum + items.length, 0);
+      // Temporary runtime diagnostics for assignment visibility mismatches.
+      console.log("[calendar-debug] fetchWeekAssignments", {
+        visibleShiftCount: instanceShifts.length,
+        realVisibleInstanceIds,
+        eligibleInstanceIds: instanceIds,
+        fetchedAssignments: allAssignments.length,
+        mappedAssignments: mappedCount,
+        droppedAssignments,
+        sampleAssignments: (allAssignments as Array<Record<string, unknown>>).slice(0, 5).map((item) => ({
+          id: item.id,
+          shift_instance_id: item.shift_instance_id,
+          volunteer_id: item.volunteer_id,
+          status: item.status,
+        })),
+      });
+    }
+
     setWeekAssignments(map);
-  }, [instanceShifts]);
+  }, [instanceShifts, calendarDebugEnabled]);
 
   const fetchWeekAppointments = useCallback(async () => {
     if (instanceShifts.length === 0) {
@@ -3163,9 +3199,29 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       );
 
     if (error) {
+      if (calendarDebugEnabled) {
+        console.log("[calendar-debug] handleAssignVolunteer upsert error", {
+          assignShiftInstanceId,
+          volunteerId,
+          error: error.message,
+        });
+      }
       setAssignMessage(error.message);
       setAssignLoading(false);
       return;
+    }
+
+    if (calendarDebugEnabled) {
+      console.log("[calendar-debug] handleAssignVolunteer upsert success", {
+        assignShiftInstanceId,
+        volunteerId,
+        visibleShiftForInstance: instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId)
+          ? {
+              instanceId: assignShiftInstanceId,
+              shift: instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId)?.title,
+            }
+          : null,
+      });
     }
 
     setShowAssignVolunteer(false);
@@ -3261,7 +3317,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     });
 
     if (error) {
-      setAssignMessage(error);
+      setAssignMessage(error.message);
       setAssignOtherLoading(false);
       return;
     }
