@@ -2193,7 +2193,7 @@ html.profile-onboarding-active,
 body.profile-onboarding-active,
 #root.profile-onboarding-active,
 body.profile-onboarding-active #root {
-  background: #ffffff !important;
+  background: #BE9B7B !important;
   color: #111111 !important;
 }
 
@@ -2202,14 +2202,14 @@ body.profile-onboarding-active #root {
   padding: 48px 20px 64px;
   display: grid;
   place-items: center;
-  background: #ffffff !important;
+  background: #BE9B7B !important;
   color: #111111 !important;
 }
 
 .onboarding-card {
   width: min(920px, 100%);
   background: #ffffff;
-  border: 1px solid color-mix(in srgb, var(--rose-400) 52%, #ffffff);
+  border: 1px solid #BE9B7B;
   border-radius: 24px;
   padding: 28px;
   display: grid;
@@ -2264,7 +2264,7 @@ body.profile-onboarding-active #root {
 
 .form-input {
   border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--rose-400) 45%, #ffffff);
+  border: 1px solid #BE9B7B;
   background: #ffffff;
   padding: 10px 12px;
   color: #111111 !important;
@@ -2272,8 +2272,8 @@ body.profile-onboarding-active #root {
 }
 
 .form-input:focus {
-  outline: 2px solid rgba(125, 207, 255, 0.6);
-  border-color: transparent;
+  outline: 2px solid #BE9B7B;
+  border-color: #BE9B7B;
 }
 
 .form-textarea {
