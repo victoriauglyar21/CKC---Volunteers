@@ -637,7 +637,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    const instanceIds = instanceShifts.map((shift) => shift.instanceId);
+    const visibleShiftDays = instanceShifts.map((shift) => startOfDay(shift.start));
+    const rangeStart = visibleShiftDays.reduce((earliest, day) =>
+      day.getTime() < earliest.getTime() ? day : earliest,
+    );
+    const rangeEndInclusive = visibleShiftDays.reduce((latest, day) =>
+      day.getTime() > latest.getTime() ? day : latest,
+    );
+    const rangeEndExclusive = addDays(rangeEndInclusive, 1);
+    const rangeStartDate = getDateKey(rangeStart);
+    const rangeEndDate = getDateKey(rangeEndExclusive);
     const { data, error } = await supabase
       .from("shift_assignments")
       .select(
@@ -666,8 +675,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         )
       `,
       )
-      .in("shift_instance_id", instanceIds)
       .in("status", ["active", "pending"])
+      .or(
+        `starts_at.gte.${rangeStart.toISOString()},starts_at.lt.${rangeEndExclusive.toISOString()},shift_date.gte.${rangeStartDate},shift_date.lt.${rangeEndDate}`,
+        { foreignTable: "shift_instances" },
+      )
       .order("created_at", { ascending: true });
 
     if (error || !data) {
@@ -675,12 +687,34 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
+    const visibleInstanceIds = new Set(instanceShifts.map((shift) => shift.instanceId));
+    const visibleShiftKeys = new Map<string, number>();
+    instanceShifts.forEach((shift) => {
+      if (!shift.templateId) return;
+      visibleShiftKeys.set(`${shift.templateId}-${getDateKey(shift.start)}`, shift.instanceId);
+    });
+
     const map: Record<number, ShiftAssignmentDetail[]> = {};
     (data as unknown as ShiftAssignmentDetail[]).forEach((assignment) => {
-      const instanceId = assignment.shift_instance?.id;
-      if (!instanceId) return;
-      if (!map[instanceId]) map[instanceId] = [];
-      map[instanceId].push(assignment);
+      const shiftInstance = assignment.shift_instance;
+      const exactInstanceId = shiftInstance?.id ?? null;
+      let targetInstanceId: number | null = null;
+
+      if (exactInstanceId && visibleInstanceIds.has(exactInstanceId)) {
+        targetInstanceId = exactInstanceId;
+      } else {
+        const templateId = shiftInstance?.template?.id ?? null;
+        const dateKey =
+          shiftInstance?.shift_date ??
+          (shiftInstance?.starts_at ? getDateKey(new Date(shiftInstance.starts_at)) : null);
+        if (templateId && dateKey) {
+          targetInstanceId = visibleShiftKeys.get(`${templateId}-${dateKey}`) ?? null;
+        }
+      }
+
+      if (!targetInstanceId) return;
+      if (!map[targetInstanceId]) map[targetInstanceId] = [];
+      map[targetInstanceId].push(assignment);
     });
 
     setWeekAssignments(map);
@@ -1041,7 +1075,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           : parseDateOnly(dateValue)
         : null;
       if (!anchor || !candidate || Number.isNaN(candidate.getTime())) return false;
-      const dayDiff = diffInDays(startOfDay(candidate), startOfDay(anchor));
+      const dayDiff = diffInDays(startOfDay(anchor), startOfDay(candidate));
       if (dayDiff < 0) return false;
       return Math.floor(dayDiff / 7) % intervalWeeks === 0;
     },
@@ -1086,44 +1120,63 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
+    const allowedDays = recurringDays;
+    const repeatIntervalWeeks = Number(recurringForm.repeatEveryWeeks) === 2 ? 2 : 1;
+    const targetDateKeys: string[] = [];
+    let cursor = parseDateOnly(rangeStart);
+    const endCursor = parseDateOnly(rangeEnd);
+    while (cursor && endCursor && cursor.getTime() <= endCursor.getTime()) {
+      const dayKey = getDateKey(cursor);
+      const dayCode = getDayCode(dayKey);
+      const matchesDay = allowedDays.length === 0 || (dayCode ? allowedDays.includes(dayCode) : false);
+      if (
+        matchesDay &&
+        matchesRecurringWeek(dayKey, recurringForm.startsOn, repeatIntervalWeeks)
+      ) {
+        targetDateKeys.push(dayKey);
+      }
+      cursor = addDays(cursor, 1);
+    }
+
     let instancesForRange = instances ?? [];
     const selectedTemplate = templates.find((template) => template.id === recurringForm.templateId);
-    if (selectedTemplate) {
-      const existingKeys = new Set(
-        instancesForRange
-          .map((instance) => {
-            if (instance.shift_date) return instance.shift_date;
-            if (!instance.starts_at) return null;
-            const parsed = new Date(instance.starts_at);
-            return Number.isNaN(parsed.getTime()) ? null : getDateKey(parsed);
-          })
-          .filter((value): value is string => Boolean(value)),
-      );
+    if (selectedTemplate && targetDateKeys.length > 0) {
+      const targetDateKeySet = new Set(targetDateKeys);
+      const existingByDay = new Map<string, { id: number; shift_date: string | null; starts_at: string | null }>();
+      instancesForRange.forEach((instance) => {
+        const dayKey = instance.shift_date
+          ? instance.shift_date
+          : instance.starts_at
+            ? (() => {
+                const parsed = new Date(instance.starts_at);
+                return Number.isNaN(parsed.getTime()) ? null : getDateKey(parsed);
+              })()
+            : null;
+        if (!dayKey || !targetDateKeySet.has(dayKey) || existingByDay.has(dayKey)) return;
+        existingByDay.set(dayKey, instance);
+      });
+
       const rowsToInsert: {
         template_id: string;
         shift_date: string;
         starts_at: string;
         ends_at: string;
       }[] = [];
-      let cursor = parseDateOnly(rangeStart);
-      const endCursor = parseDateOnly(rangeEnd);
-      while (cursor && endCursor && cursor.getTime() <= endCursor.getTime()) {
-        const dayKey = getDateKey(cursor);
-        if (!existingKeys.has(dayKey)) {
-          const startsAt = toIsoForDateAndTime(cursor, resolveTemplateStartTime(selectedTemplate));
-          const endsAt = toIsoForDateAndTime(cursor, resolveTemplateEndTime(selectedTemplate));
-          if (startsAt && endsAt) {
-            rowsToInsert.push({
-              template_id: recurringForm.templateId,
-              shift_date: dayKey,
-              starts_at: startsAt,
-              ends_at: endsAt,
-            });
-            existingKeys.add(dayKey);
-          }
-        }
-        cursor = addDays(cursor, 1);
-      }
+
+      targetDateKeys.forEach((dayKey) => {
+        if (existingByDay.has(dayKey)) return;
+        const dayDate = parseDateOnly(dayKey);
+        if (!dayDate) return;
+        const startsAt = toIsoForDateAndTime(dayDate, resolveTemplateStartTime(selectedTemplate));
+        const endsAt = toIsoForDateAndTime(dayDate, resolveTemplateEndTime(selectedTemplate));
+        if (!startsAt || !endsAt) return;
+        rowsToInsert.push({
+          template_id: recurringForm.templateId,
+          shift_date: dayKey,
+          starts_at: startsAt,
+          ends_at: endsAt,
+        });
+      });
 
       if (rowsToInsert.length > 0) {
         const { data: insertedInstances, error: insertInstanceError } = await supabase
@@ -1131,28 +1184,48 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           .insert(rowsToInsert)
           .select("id, shift_date, starts_at");
         if (insertInstanceError) {
-          setRecurringMessage(insertInstanceError.message);
-          setRecurringSaving(false);
-          return;
+          const looksLikeDuplicate =
+            insertInstanceError.code === "23505" || /duplicate|unique/i.test(insertInstanceError.message);
+          if (!looksLikeDuplicate) {
+            setRecurringMessage(insertInstanceError.message);
+            setRecurringSaving(false);
+            return;
+          }
         }
-        instancesForRange = [...instancesForRange, ...(insertedInstances ?? [])];
+        if (insertedInstances && insertedInstances.length > 0) {
+          instancesForRange = [...instancesForRange, ...insertedInstances];
+        }
       }
     }
 
-    const allowedDays = recurringDays;
-    const repeatIntervalWeeks = Number(recurringForm.repeatEveryWeeks) === 2 ? 2 : 1;
-    const filteredInstances =
-      allowedDays.length > 0
-        ? instancesForRange.filter((instance) => {
-            const dayCode = getDayCode(instance.shift_date ?? instance.starts_at ?? undefined);
-            if (!dayCode || !allowedDays.includes(dayCode)) return false;
-            return matchesRecurringWeek(
-              instance.shift_date ?? instance.starts_at ?? undefined,
-              recurringForm.startsOn,
-              repeatIntervalWeeks,
-            );
-          })
-        : instancesForRange;
+    const targetDateKeySet = new Set(targetDateKeys);
+    if (targetDateKeys.length > 0) {
+      const { data: targetInstances, error: targetInstancesError } = await supabase
+        .from("shift_instances")
+        .select("id, shift_date, starts_at")
+        .eq("template_id", recurringForm.templateId)
+        .in("shift_date", targetDateKeys);
+      if (targetInstancesError) {
+        setRecurringMessage(targetInstancesError.message);
+        setRecurringSaving(false);
+        return;
+      }
+      if (targetInstances) {
+        instancesForRange = targetInstances;
+      }
+    }
+
+    const filteredInstances = instancesForRange.filter((instance) => {
+      const dayKey = instance.shift_date
+        ? instance.shift_date
+        : instance.starts_at
+          ? (() => {
+              const parsed = new Date(instance.starts_at);
+              return Number.isNaN(parsed.getTime()) ? null : getDateKey(parsed);
+            })()
+          : null;
+      return Boolean(dayKey && targetDateKeySet.has(dayKey));
+    });
 
     if (recurringEditId) {
       const targetRecurring = volunteerRecurring.find((item) => item.id === recurringEditId);
