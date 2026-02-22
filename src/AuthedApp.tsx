@@ -1087,7 +1087,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     let instancesForRange = instances ?? [];
-    const selectedTemplate = templateMap[recurringForm.templateId];
+    const selectedTemplate = templates.find((template) => template.id === recurringForm.templateId);
     if (selectedTemplate) {
       const existingKeys = new Set(
         instancesForRange
@@ -1298,7 +1298,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     recurringForm,
     recurringDays,
     today,
-    templateMap,
+    templates,
     fetchVolunteerRecurring,
     fetchMyShifts,
     fetchWeekAssignments,
