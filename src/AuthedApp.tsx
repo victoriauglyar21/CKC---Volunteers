@@ -4910,12 +4910,26 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       request.volunteer?.full_name ||
                       "Volunteer";
                     const shiftInstance = request.shift_instance;
+                    const fallbackNotificationShift =
+                      shiftInstance?.id != null
+                        ? instanceShifts.find((shift) => shift.instanceId === shiftInstance.id)
+                        : null;
+                    const notificationShiftLabel = formatShortShiftRequestLabel(
+                      shiftInstance?.starts_at || shiftInstance?.shift_date
+                        ? shiftInstance
+                        : fallbackNotificationShift
+                          ? {
+                              starts_at: fallbackNotificationShift.start.toISOString(),
+                              title: fallbackNotificationShift.title,
+                            }
+                          : null,
+                    );
                     const startsAt = shiftInstance?.starts_at ?? shiftInstance?.shift_date ?? "";
                     const endsAt = shiftInstance?.ends_at ?? "";
                     const shiftTitle = shiftInstance?.template?.title ?? "Shift";
                     const timeLine =
                       request.status === "pending"
-                        ? formatShortShiftRequestLabel(shiftInstance)
+                        ? notificationShiftLabel
                         : `${formatDateTime(startsAt)}${
                             endsAt ? ` — ${formatDateTime(endsAt)}` : ""
                           } · ${shiftTitle}`;
@@ -4943,7 +4957,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                               {isLatest ? <span className="notification-tag">Latest</span> : null}
                               <p className="notification-meta">{timeLine}</p>
                               <p className="notification-name">
-                                {volunteerName} Dropped ({formatShortShiftRequestLabel(shiftInstance)})
+                                {volunteerName} Dropped ({notificationShiftLabel})
                               </p>
                               {readableDropReason ? (
                                 <p className="notification-reason">{readableDropReason}</p>
@@ -4971,7 +4985,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             {isLatest ? <span className="notification-tag">Latest</span> : null}
                             <p className="notification-meta">{timeLine}</p>
                             <p className="notification-name">
-                              {volunteerName} Requested to Join ({formatShortShiftRequestLabel(shiftInstance)})
+                              {volunteerName} Requested to Join ({notificationShiftLabel})
                             </p>
                           </div>
                           <div className="notification-actions">
