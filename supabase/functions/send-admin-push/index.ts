@@ -10,12 +10,43 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const NOTIFICATION_ACTION_SECRET = Deno.env.get("NOTIFICATION_ACTION_SECRET") ?? "";
 const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY") ?? "";
 const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY") ?? "";
 
 const hasConfig = Boolean(
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY,
 );
+
+function toBase64Url(input: string | Uint8Array) {
+  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
+  const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function buildNotificationActionToken(payload: {
+  action: "approve_pending_shift_request";
+  assignmentId: number;
+  exp: number;
+}) {
+  if (!NOTIFICATION_ACTION_SECRET) return null;
+  const encodedPayload = toBase64Url(JSON.stringify(payload));
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(NOTIFICATION_ACTION_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signatureBuffer = await crypto.subtle.sign(
+    "HMAC",
+    cryptoKey,
+    new TextEncoder().encode(encodedPayload),
+  );
+  const signature = toBase64Url(new Uint8Array(signatureBuffer));
+  return `${encodedPayload}.${signature}`;
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -51,10 +82,32 @@ serve(async (req) => {
     return new Response("Unauthorized", { status: 401, headers: corsHeaders });
   }
 
-  const { title, body, url } = await req.json();
+  const payload = await req.json();
+  const { title, body, url, actions, data } = payload ?? {};
   if (!title || !body || !url) {
     return new Response("Invalid payload", { status: 400, headers: corsHeaders });
   }
+  const notificationActions = Array.isArray(actions)
+    ? actions
+        .filter(
+          (actionItem): actionItem is { action: string; title: string } =>
+            Boolean(
+              actionItem &&
+                typeof actionItem === "object" &&
+                typeof actionItem.action === "string" &&
+                typeof actionItem.title === "string",
+            ),
+        )
+        .slice(0, 2)
+    : [];
+  const notificationData =
+    data && typeof data === "object" && !Array.isArray(data) ? { ...(data as Record<string, unknown>) } : {};
+  const pendingAssignmentId =
+    typeof notificationData.assignment_id === "string" && Number.isInteger(Number(notificationData.assignment_id))
+      ? Number(notificationData.assignment_id)
+      : typeof notificationData.assignment_id === "number" && Number.isInteger(notificationData.assignment_id)
+        ? notificationData.assignment_id
+        : null;
 
   const { data: admins, error: adminsError } = await supabaseAdmin
     .from("profiles")
@@ -85,6 +138,21 @@ serve(async (req) => {
   const sendResults = await Promise.all(
     (subs ?? []).map(async (sub) => {
       try {
+        const payloadData: Record<string, unknown> = { url, ...notificationData };
+        if (pendingAssignmentId && NOTIFICATION_ACTION_SECRET) {
+          const approveToken = await buildNotificationActionToken({
+            action: "approve_pending_shift_request",
+            assignmentId: pendingAssignmentId,
+            exp: Date.now() + 10 * 60 * 1000,
+          });
+          if (approveToken) {
+            payloadData.approve_action_token = approveToken;
+            payloadData.approve_action_endpoint = `${SUPABASE_URL}/functions/v1/notification-action`;
+            if (SUPABASE_ANON_KEY) {
+              payloadData.approve_action_apikey = SUPABASE_ANON_KEY;
+            }
+          }
+        }
         await webpush.sendNotification(
           {
             endpoint: sub.endpoint,
@@ -99,6 +167,8 @@ serve(async (req) => {
             url,
             icon: "/pwa-192.png",
             badge: "/pwa-192.png",
+            ...(notificationActions.length > 0 ? { actions: notificationActions } : {}),
+            data: payloadData,
           }),
         );
         return { ok: true };

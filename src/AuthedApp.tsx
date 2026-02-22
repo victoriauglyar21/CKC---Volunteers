@@ -229,6 +229,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [notificationAction, setNotificationAction] = useState<"enable" | "disable" | "test" | null>(
     null,
   );
+  const [pendingNotificationUrlAction, setPendingNotificationUrlAction] = useState<{
+    action: "approve" | "deny";
+    assignmentId: string;
+  } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const scrollYRef = useRef(0);
@@ -2322,7 +2326,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const assignmentRole = profile?.role === "Lead" ? "lead" : "regular";
     const nextStatus = takeShiftMode === "join" ? "active" : "pending";
 
-    const { error } = await supabase
+    const { data: savedAssignments, error } = await supabase
       .from("shift_assignments")
       .upsert(
         {
@@ -2334,7 +2338,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           dropped_reason: null,
         },
         { onConflict: "shift_instance_id,volunteer_id" },
-      );
+      )
+      .select("id");
 
     if (error) {
       setTakeShiftMessage(error.message);
@@ -2352,14 +2357,38 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         session.user.email ||
         "A volunteer";
       const requestedShift = instanceShifts.find((shift) => shift.instanceId === activeShiftInstanceId);
+      const requestedAssignmentId = Array.isArray(savedAssignments)
+        ? (savedAssignments[0]?.id ?? null)
+        : null;
+      const requestNotificationsUrl = "/?view=notifications";
+      const approveActionUrl = requestedAssignmentId
+        ? `/?view=notifications&notificationAction=approve&assignmentId=${requestedAssignmentId}`
+        : requestNotificationsUrl;
+      const denyActionUrl = requestedAssignmentId
+        ? `/?view=notifications&notificationAction=deny&assignmentId=${requestedAssignmentId}`
+        : requestNotificationsUrl;
       await supabase.functions.invoke("send-admin-push", {
         body: {
           title: "Shift request",
-          body: `${volunteerName} requested to join ${formatShortShiftRequestLabel({
+          body: `${volunteerName} Requested to Join (${formatShortShiftRequestLabel({
             starts_at: requestedShift?.start?.toISOString(),
             title: requestedShift?.title,
-          })}.`,
-          url: "/?view=notifications",
+          })})`,
+          url: requestNotificationsUrl,
+          actions: requestedAssignmentId
+            ? [
+                { action: "approve-request", title: "Approve" },
+                { action: "deny-request", title: "Deny" },
+              ]
+            : undefined,
+          data: requestedAssignmentId
+            ? {
+                notification_kind: "pending_shift_request",
+                assignment_id: String(requestedAssignmentId),
+                approve_url: approveActionUrl,
+                deny_url: denyActionUrl,
+              }
+            : undefined,
         },
       });
     } else if (nextStatus === "active" && profile?.role === "Regular Volunteer") {
@@ -3268,9 +3297,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const actorName =
       displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "A volunteer";
     const reasonText = dropReason.trim();
+    const droppedShiftLabel = formatShortShiftRequestLabel(targetAssignment?.shift_instance);
     const pushMessage = reasonText
-      ? `${actorName} dropped a shift. Reason: ${reasonText}`
-      : `${actorName} dropped a shift.`;
+      ? `${actorName} Dropped (${droppedShiftLabel}). Reason: ${reasonText}`
+      : `${actorName} Dropped (${droppedShiftLabel})`;
     const pushError = await sendAdminDropPush(pushMessage);
     const isVolunteerDrop = profile?.role !== "Admin";
     if (isVolunteerDrop && targetShiftInstanceId) {
@@ -3307,7 +3337,37 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (params.get("view") !== "notifications") return;
     setShowNotifications(true);
     setShowMenu(false);
+    const notificationActionParam = params.get("notificationAction");
+    const assignmentIdParam = params.get("assignmentId");
+    if (
+      assignmentIdParam &&
+      (notificationActionParam === "approve" || notificationActionParam === "deny")
+    ) {
+      setPendingNotificationUrlAction({
+        action: notificationActionParam,
+        assignmentId: assignmentIdParam,
+      });
+      params.delete("notificationAction");
+      params.delete("assignmentId");
+      const nextQuery = params.toString();
+      const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
+      window.history.replaceState(null, "", nextUrl);
+    }
   }, []);
+
+  useEffect(() => {
+    if (!pendingNotificationUrlAction) return;
+    if (!showNotifications) return;
+    if (!isPrimaryAdminAccount) {
+      setPendingNotificationUrlAction(null);
+      return;
+    }
+    void handleNotificationDecision(
+      pendingNotificationUrlAction.assignmentId,
+      pendingNotificationUrlAction.action,
+    );
+    setPendingNotificationUrlAction(null);
+  }, [pendingNotificationUrlAction, showNotifications, isPrimaryAdminAccount]);
 
   // Removed focus refresh to avoid reloading view on tab switch.
 
@@ -3916,7 +3976,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             const isOutsideMonth =
               calendarRangeMode === "month" && cell.date.getMonth() !== baseDate.getMonth();
             if (calendarRangeMode === "month" && isMobile && isOutsideMonth) {
-              return null;
+              return (
+                <div
+                  key={`${monthLabel}-${dateKey}`}
+                  className="day-cell outside"
+                  aria-hidden="true"
+                />
+              );
             }
             const isPastDay = startOfDay(cell.date).getTime() < todayStartMs;
             const isCollapsed =
@@ -4827,7 +4893,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                               {isLatest ? <span className="notification-tag">Latest</span> : null}
                               <p className="notification-meta">{timeLine}</p>
                               <p className="notification-name">
-                                {volunteerName} dropped a shift
+                                {volunteerName} Dropped ({formatShortShiftRequestLabel(shiftInstance)})
                               </p>
                               {readableDropReason ? (
                                 <p className="notification-reason">{readableDropReason}</p>
@@ -4853,7 +4919,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           <div className="notification-info">
                             {isLatest ? <span className="notification-tag">Latest</span> : null}
                             <p className="notification-meta">{timeLine}</p>
-                            <p className="notification-name">{volunteerName} request to join</p>
+                            <p className="notification-name">
+                              {volunteerName} Requested to Join ({formatShortShiftRequestLabel(shiftInstance)})
+                            </p>
                           </div>
                           <div className="notification-actions">
                             <button

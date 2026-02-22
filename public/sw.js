@@ -7,11 +7,14 @@ self.addEventListener("push", (event) => {
   }
 
   const title = payload.title || "Notification";
+  const payloadData =
+    payload.data && typeof payload.data === "object" && !Array.isArray(payload.data) ? payload.data : {};
   const options = {
     body: payload.body || "",
     icon: payload.icon || "/pwa-192.png",
     badge: payload.badge || "/pwa-192.png",
-    data: { url: payload.url || "/" },
+    actions: Array.isArray(payload.actions) ? payload.actions.slice(0, 2) : undefined,
+    data: { url: payload.url || "/", ...payloadData },
   };
 
   event.waitUntil(
@@ -36,20 +39,75 @@ self.addEventListener("push", (event) => {
   );
 });
 
+async function openNotificationUrl(targetUrl) {
+  const safeUrl = targetUrl || "/";
+  const clientsArr = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  for (const client of clientsArr) {
+    if (client.url === safeUrl && "focus" in client) {
+      return client.focus();
+    }
+  }
+  if (self.clients.openWindow) {
+    return self.clients.openWindow(safeUrl);
+  }
+  return null;
+}
+
+async function approveRequestFromNotification(data) {
+  const endpoint = typeof data?.approve_action_endpoint === "string" ? data.approve_action_endpoint : "";
+  const token = typeof data?.approve_action_token === "string" ? data.approve_action_token : "";
+  const apikey = typeof data?.approve_action_apikey === "string" ? data.approve_action_apikey : "";
+  if (!endpoint || !token) {
+    return false;
+  }
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apikey ? { apikey } : {}),
+      },
+      body: JSON.stringify({ token }),
+    });
+
+    if (!response.ok) {
+      return false;
+    }
+
+    await self.registration.showNotification("Shift request approved", {
+      body: "Approved from notification.",
+      icon: "/pwa-192.png",
+      badge: "/pwa-192.png",
+      data: { url: data?.url || "/?view=notifications" },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const targetUrl = event.notification?.data?.url || "/";
-  event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientsArr) => {
-      for (const client of clientsArr) {
-        if (client.url === targetUrl && "focus" in client) {
-          return client.focus();
+  const data = event.notification?.data || {};
+  const targetUrl = data.url || "/";
+
+  if (event.action === "approve-request") {
+    event.waitUntil(
+      (async () => {
+        const approved = await approveRequestFromNotification(data);
+        if (!approved) {
+          await openNotificationUrl(data.approve_url || targetUrl);
         }
-      }
-      if (self.clients.openWindow) {
-        return self.clients.openWindow(targetUrl);
-      }
-      return null;
-    }),
-  );
+      })(),
+    );
+    return;
+  }
+
+  if (event.action === "deny-request") {
+    event.waitUntil(openNotificationUrl(data.deny_url || targetUrl));
+    return;
+  }
+
+  event.waitUntil(openNotificationUrl(targetUrl));
 });

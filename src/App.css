@@ -2500,6 +2500,15 @@
   will-change: transform, opacity;
 }
 
+.take-shift-panel .modal-text,
+.take-shift-panel .modal-eyebrow,
+.take-shift-panel .modal-title,
+.take-shift-panel .nav-button,
+.take-shift-panel .account-button,
+.take-shift-panel .modal-close {
+  color: var(--ink-primary);
+}
+
 .take-shift-panel.is-closing {
   animation: take-shift-slide-down 340ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
