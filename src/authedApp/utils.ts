@@ -454,6 +454,8 @@ export function resolveTemplateStartTime(template: ShiftTemplate) {
     const parsed = candidate.match(/(\d{1,2}):(\d{2})/);
     if (parsed) return `${parsed[1].padStart(2, "0")}:${parsed[2]}`;
   }
+  if (/evening/i.test(template.title)) return "17:00";
+  if (/morning/i.test(template.title)) return "09:00";
   return "09:00";
 }
 
@@ -469,6 +471,8 @@ export function resolveTemplateEndTime(template: ShiftTemplate) {
     const parsed = candidate.match(/(\d{1,2}):(\d{2})/);
     if (parsed) return `${parsed[1].padStart(2, "0")}:${parsed[2]}`;
   }
+  if (/evening/i.test(template.title)) return "19:00";
+  if (/morning/i.test(template.title)) return "11:00";
   return "11:00";
 }
 
