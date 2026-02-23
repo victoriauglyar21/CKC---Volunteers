@@ -180,8 +180,12 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
   const [volunteerRoleFilter, setVolunteerRoleFilter] = useState<
     "All" | "Admin" | "Lead" | "Regular Volunteer"
   >("All");
+  const [assignVolunteerRoleFilter, setAssignVolunteerRoleFilter] = useState<
+    "All" | "Admin" | "Lead" | "Regular Volunteer"
+  >("All");
   const [assignVolunteerSearchInput, setAssignVolunteerSearchInput] = useState("");
   const [assignVolunteerSearch, setAssignVolunteerSearch] = useState("");
+  const [volunteerRecurringStatusById, setVolunteerRecurringStatusById] = useState<Record<string, boolean>>({});
   const [selectedVolunteer, setSelectedVolunteer] = useState<VolunteerRow | null>(null);
   const [volunteerRecurring, setVolunteerRecurring] = useState<RecurringAssignment[]>([]);
   const [recurringLoading, setRecurringLoading] = useState(false);
@@ -278,6 +282,7 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
   const takeShiftCloseTimerRef = useRef<number | null>(null);
   const baseDocumentTitleRef = useRef<string>("CKC Volunteers");
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
+  const canSeeVolunteerRecurringFlag = isAdminRole(displayProfile?.role);
   const prefersReducedMotion = useReducedMotion();
   const [notificationDeletingIds, setNotificationDeletingIds] = useState<Set<string>>(new Set());
   const [hasLoadedInitialShiftInstances, setHasLoadedInitialShiftInstances] = useState(false);
@@ -697,7 +702,6 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
         );
 
       if (matchingInstancesError) {
-        setWeekAssignments({});
         return;
       }
 
@@ -757,7 +761,6 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
         .order("created_at", { ascending: true })
         .range(from, from + pageSize - 1);
       if (error || !data) {
-        setWeekAssignments({});
         return;
       }
       allAssignments.push(...(data as unknown as ShiftAssignmentDetail[]));
@@ -835,7 +838,6 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
     const { data, error } = await fetchWeekAppointmentsByInstanceIds(instanceIds);
 
     if (error) {
-      setAppointmentsByShift({});
       setAppointmentsLoading(false);
       return;
     }
@@ -972,12 +974,21 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
 
     if (error || !data) {
       setVolunteers([]);
+      setVolunteerRecurringStatusById({});
       setVolunteersMessage(error?.message ?? "Unable to load volunteers.");
       setVolunteersLoading(false);
       return;
     }
 
     setVolunteers(data as unknown as VolunteerRow[]);
+    const { data: recurringRows } = await supabase.from("recurring_assignments").select("volunteer_id");
+    const recurringStatusMap: Record<string, boolean> = {};
+    (recurringRows ?? []).forEach((row) => {
+      const volunteerId = (row as { volunteer_id?: string | null }).volunteer_id;
+      if (!volunteerId) return;
+      recurringStatusMap[volunteerId] = true;
+    });
+    setVolunteerRecurringStatusById(recurringStatusMap);
     setVolunteersLoading(false);
   }, []);
 
@@ -1850,13 +1861,16 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
   }, [sortedVolunteers, volunteerRoleFilter, volunteerSearch]);
   const filteredAssignableVolunteers = useMemo(() => {
     const query = assignVolunteerSearch.trim().toLowerCase();
-    if (!query) return sortedVolunteers;
     return sortedVolunteers.filter((volunteer) => {
+      if (assignVolunteerRoleFilter !== "All" && volunteer.role !== assignVolunteerRoleFilter) {
+        return false;
+      }
+      if (!query) return true;
       const fullName = (volunteer.full_name ?? "").toLowerCase();
       const preferredName = (volunteer.preferred_name ?? "").toLowerCase();
       return fullName.includes(query) || preferredName.includes(query);
     });
-  }, [sortedVolunteers, assignVolunteerSearch]);
+  }, [sortedVolunteers, assignVolunteerRoleFilter, assignVolunteerSearch]);
 
   useEffect(() => {
     const timerId = window.setTimeout(() => {
@@ -2068,6 +2082,37 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
         : title.includes("evening")
           ? "PM shift"
           : "shift";
+      return `${dateLabel}, ${shiftPeriod}`;
+    },
+    [],
+  );
+  const formatJoinRequestNotificationLabel = useCallback(
+    (shift: {
+      starts_at?: string | null;
+      shift_date?: string | null;
+      template?: { title?: string | null } | null;
+      title?: string | null;
+    } | null | undefined) => {
+      if (!shift) return "Upcoming shift";
+      const parsedDate = shift.starts_at
+        ? new Date(shift.starts_at)
+        : shift.shift_date
+          ? parseDateOnly(shift.shift_date)
+          : null;
+      const dateLabel =
+        parsedDate && !Number.isNaN(parsedDate.getTime())
+          ? parsedDate.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              weekday: "long",
+            })
+          : "Upcoming";
+      const title = (shift.template?.title ?? shift.title ?? "").toLowerCase();
+      const shiftPeriod = title.includes("morning")
+        ? "AM"
+        : title.includes("evening")
+          ? "PM"
+          : "Shift";
       return `${dateLabel}, ${shiftPeriod}`;
     },
     [],
@@ -4195,8 +4240,13 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
 
   const runLiveRefresh = useCallback(async () => {
     if (liveRefreshInFlightRef.current) return;
+    if (showMenu || showInfoMenu) return;
     liveRefreshInFlightRef.current = true;
     try {
+      if (showNotifications) {
+        await fetchNotifications();
+        return;
+      }
       await Promise.all([
         fetchWeekAssignments(),
         fetchWeekAppointments(),
@@ -4207,7 +4257,16 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
     } finally {
       liveRefreshInFlightRef.current = false;
     }
-  }, [fetchWeekAssignments, fetchWeekAppointments, fetchPersonalAssignments, fetchMyShifts, fetchNotifications]);
+  }, [
+    fetchWeekAssignments,
+    fetchWeekAppointments,
+    fetchPersonalAssignments,
+    fetchMyShifts,
+    fetchNotifications,
+    showMenu,
+    showInfoMenu,
+    showNotifications,
+  ]);
 
   useEffect(() => {
     const handleVisibleRefresh = () => {
@@ -4280,17 +4339,26 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
   const notificationsInitialLoading = notificationsLoading && !hasLoadedNotifications && notifications.length === 0;
   const notificationsSyncing = notificationsLoading && hasLoadedNotifications;
 
-    const renderNotificationCard = (
+  const renderNotificationCard = (
     request: ShiftAssignmentDetail,
     index: number,
     isLatest: boolean,
     content: ReactNode,
     actions?: ReactNode,
+    options?: {
+      mobileSwipeMode?: "delete" | "decision";
+      hideCornerDelete?: boolean;
+    },
   ) => {
-    const swipeOffset = Math.min(0, notificationSwipeOffsets[request.id] ?? 0);
+    const mobileSwipeMode = options?.mobileSwipeMode ?? "delete";
+    const hideCornerDelete = options?.hideCornerDelete ?? false;
+    const rawSwipeOffset = notificationSwipeOffsets[request.id] ?? 0;
+    const swipeOffset = mobileSwipeMode === "decision" ? rawSwipeOffset : Math.min(0, rawSwipeOffset);
+    const swipeDirection = swipeOffset > 0 ? "approve" : "deny";
+    const swipeDistance = Math.max(0, Math.abs(swipeOffset) - 8);
     const swipeReveal = notificationDeletingIds.has(request.id)
       ? 1
-      : Math.max(0, Math.min(1, Math.abs(swipeOffset) / 96));
+      : Math.max(0, Math.min(1, swipeDistance / 108));
 
     return (
     <motion.div
@@ -4318,20 +4386,53 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
         style={{
           opacity: isMobile ? swipeReveal : 0,
           transform: `scaleX(${isMobile ? swipeReveal : 0})`,
+          transformOrigin:
+            mobileSwipeMode === "decision"
+              ? swipeOffset >= 0
+                ? "left center"
+                : "right center"
+              : "right center",
+          justifyContent:
+            mobileSwipeMode === "decision" && swipeOffset > 0 ? "flex-start" : "flex-end",
+          background:
+            mobileSwipeMode === "decision" && swipeOffset > 0
+              ? "color-mix(in srgb, #59bf76 22%, transparent)"
+              : undefined,
+          borderColor:
+            mobileSwipeMode === "decision" && swipeOffset > 0
+              ? "color-mix(in srgb, #59bf76 28%, transparent)"
+              : undefined,
         }}
       >
-        <span className="notification-swipe-delete-label">Delete</span>
+        <span className="notification-swipe-delete-label">
+          {mobileSwipeMode === "decision" ? (swipeDirection === "approve" ? "Approve" : "Deny") : "Delete"}
+        </span>
       </div>
       <motion.div
         drag={isMobile ? "x" : false}
         dragDirectionLock
-        dragElastic={0.18}
+        dragElastic={mobileSwipeMode === "decision" ? 0.16 : 0.12}
         dragMomentum={false}
-        dragConstraints={isMobile ? { left: -136, right: 0 } : { left: 0, right: 0 }}
+        dragSnapToOrigin
+        dragTransition={
+          prefersReducedMotion
+            ? { bounceStiffness: 1000, bounceDamping: 1000 }
+            : { bounceStiffness: 520, bounceDamping: 26, power: 0.12, timeConstant: 180 }
+        }
+        dragConstraints={
+          isMobile
+            ? mobileSwipeMode === "decision"
+              ? { left: -136, right: 136 }
+              : { left: -136, right: 0 }
+            : { left: 0, right: 0 }
+        }
         whileDrag={prefersReducedMotion ? undefined : { scale: 0.995 }}
         onDrag={(_, info) => {
           if (!isMobile) return;
-          const nextOffset = Math.min(0, info.offset.x);
+          const nextOffset =
+            mobileSwipeMode === "decision"
+              ? Math.max(-136, Math.min(136, info.offset.x))
+              : Math.min(0, info.offset.x);
           setNotificationSwipeOffsets((prev) => {
             if ((prev[request.id] ?? 0) === nextOffset) return prev;
             return { ...prev, [request.id]: nextOffset };
@@ -4340,21 +4441,44 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
         onDragEnd={(_, info) => {
           if (!isMobile) return;
           if (notificationDeletingIds.has(request.id)) return;
-          const passedThreshold = info.offset.x < -88 || info.velocity.x < -680;
+          const passedLeft = info.offset.x < -112;
+          const passedRight = info.offset.x > 112;
           setNotificationSwipeOffsets((prev) => {
             if (!(request.id in prev)) return prev;
             const next = { ...prev };
-            delete next[request.id];
+            next[request.id] = 0;
             return next;
           });
-          if (!passedThreshold) return;
+          if (mobileSwipeMode === "decision") {
+            if (passedLeft) {
+              setNotificationSwipeOffsets((prev) => {
+                if (!(request.id in prev)) return prev;
+                const next = { ...prev };
+                delete next[request.id];
+                return next;
+              });
+              void handleNotificationDecision(request.id, "deny");
+              return;
+            }
+            if (passedRight) {
+              setNotificationSwipeOffsets((prev) => {
+                if (!(request.id in prev)) return prev;
+                const next = { ...prev };
+                delete next[request.id];
+                return next;
+              });
+              void handleNotificationDecision(request.id, "approve");
+            }
+            return;
+          }
+          if (!passedLeft) return;
           void handleDismissNotification(request, index);
         }}
         className={`notification-card-shell ${notificationDeletingIds.has(request.id) ? "is-deleting" : ""}`}
       >
         <div
           id={`notification-${request.id}`}
-          className={`notification-card ${isLatest ? "latest" : ""}`}
+          className={`notification-card ${isLatest ? "latest" : ""} ${hideCornerDelete ? "" : "with-corner-delete"}`}
           role="button"
           tabIndex={0}
           onClick={() => jumpToNotificationShift(request)}
@@ -4365,19 +4489,21 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
             }
           }}
         >
-          <button
-            className="notification-corner-delete-button"
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              void handleDismissNotification(request, index);
-            }}
-            disabled={notificationDeletingIds.has(request.id)}
-            aria-label="Delete notification"
-            title="Delete notification"
-          >
-            Delete
-          </button>
+          {!hideCornerDelete ? (
+            <button
+              className="notification-corner-delete-button"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleDismissNotification(request, index);
+              }}
+              disabled={notificationDeletingIds.has(request.id)}
+              aria-label="Delete notification"
+              title="Delete notification"
+            >
+              Delete
+            </button>
+          ) : null}
           <div className="notification-info">{content}</div>
           {actions ? <div className="notification-actions">{actions}</div> : null}
         </div>
@@ -5623,6 +5749,12 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
                       request.volunteer?.preferred_name ||
                       request.volunteer?.full_name ||
                       "Volunteer";
+                    const volunteerNameClass =
+                      request.volunteer?.role === "Admin"
+                        ? "volunteer-name volunteer-name-admin"
+                        : request.volunteer?.role === "Lead"
+                          ? "volunteer-name volunteer-name-lead"
+                          : "volunteer-name volunteer-name-regular";
                     const shiftInstance = request.shift_instance;
                     const fallbackNotificationShiftFromQuery =
                       (shiftInstance?.id ?? request.shift_instance_id ?? null) != null
@@ -5638,6 +5770,18 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
                           )
                         : null);
                     const notificationShiftLabel = formatShortShiftRequestLabel(
+                      shiftInstance?.starts_at || shiftInstance?.shift_date
+                        ? shiftInstance
+                        : fallbackNotificationShiftFromQuery
+                          ? fallbackNotificationShiftFromQuery
+                          : fallbackNotificationShiftFromCalendar
+                          ? {
+                              starts_at: fallbackNotificationShiftFromCalendar.start.toISOString(),
+                              title: fallbackNotificationShiftFromCalendar.title,
+                            }
+                          : null,
+                    );
+                    const joinRequestNotificationLabel = formatJoinRequestNotificationLabel(
                       shiftInstance?.starts_at || shiftInstance?.shift_date
                         ? shiftInstance
                         : fallbackNotificationShiftFromQuery
@@ -5671,7 +5815,8 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
                             {isLatest ? <span className="notification-tag">Latest</span> : null}
                             <p className="notification-meta">{timeLine}</p>
                             <p className="notification-name">
-                              {volunteerName} Dropped ({notificationShiftLabel})
+                              <span className={volunteerNameClass}>{volunteerName}</span> Dropped (
+                              {notificationShiftLabel})
                             </p>
                             {readableDropReason ? (
                               <p className="notification-reason">{readableDropReason}</p>
@@ -5685,33 +5830,39 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
                         isLatest,
                         <>
                           {isLatest ? <span className="notification-tag">Latest</span> : null}
-                          <p className="notification-meta">{timeLine}</p>
                           <p className="notification-name">
-                            {volunteerName} Requested to Join ({notificationShiftLabel})
+                            <span className={volunteerNameClass}>{volunteerName}</span> Requested to join:
                           </p>
+                          <p className="notification-meta">{joinRequestNotificationLabel}</p>
                         </>,
-                        <>
-                          <button
-                            className="nav-button"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleNotificationDecision(request.id, "deny");
-                            }}
-                          >
-                            Deny
-                          </button>
-                          <button
-                            className="account-button"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleNotificationDecision(request.id, "approve");
-                            }}
-                          >
-                            Approve
-                          </button>
-                        </>,
+                        isMobile ? null : (
+                          <>
+                            <button
+                              className="nav-button"
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleNotificationDecision(request.id, "deny");
+                              }}
+                            >
+                              Deny
+                            </button>
+                            <button
+                              className="account-button"
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleNotificationDecision(request.id, "approve");
+                              }}
+                            >
+                              Approve
+                            </button>
+                          </>
+                        ),
+                        {
+                          mobileSwipeMode: "decision",
+                          hideCornerDelete: isMobile,
+                        },
                       );
                     }
 
@@ -5781,6 +5932,52 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
               {volunteersMessage ? (
                 <div className="error-banner">{volunteersMessage}</div>
               ) : null}
+              <div className="volunteer-role-filters" role="tablist" aria-label="Assignable volunteer role filters">
+                <button
+                  className={`volunteer-role-filter ${
+                    assignVolunteerRoleFilter === "All" ? "active" : ""
+                  }`}
+                  type="button"
+                  role="tab"
+                  aria-selected={assignVolunteerRoleFilter === "All"}
+                  onClick={() => setAssignVolunteerRoleFilter("All")}
+                >
+                  All
+                </button>
+                <button
+                  className={`volunteer-role-filter ${
+                    assignVolunteerRoleFilter === "Admin" ? "active role-admin" : ""
+                  }`}
+                  type="button"
+                  role="tab"
+                  aria-selected={assignVolunteerRoleFilter === "Admin"}
+                  onClick={() => setAssignVolunteerRoleFilter("Admin")}
+                >
+                  Admin
+                </button>
+                <button
+                  className={`volunteer-role-filter ${
+                    assignVolunteerRoleFilter === "Lead" ? "active role-lead" : ""
+                  }`}
+                  type="button"
+                  role="tab"
+                  aria-selected={assignVolunteerRoleFilter === "Lead"}
+                  onClick={() => setAssignVolunteerRoleFilter("Lead")}
+                >
+                  Lead
+                </button>
+                <button
+                  className={`volunteer-role-filter ${
+                    assignVolunteerRoleFilter === "Regular Volunteer" ? "active role-regular" : ""
+                  }`}
+                  type="button"
+                  role="tab"
+                  aria-selected={assignVolunteerRoleFilter === "Regular Volunteer"}
+                  onClick={() => setAssignVolunteerRoleFilter("Regular Volunteer")}
+                >
+                  Reg Volunteers
+                </button>
+              </div>
               <label className="form-field">
                 <span className="form-label">Search volunteers</span>
                 <input
@@ -6654,6 +6851,9 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
                         <div className="volunteer-main">
                           <p className={nameClass}>{name}</p>
                           <p className="volunteer-meta">{roleLabel}</p>
+                          {canSeeVolunteerRecurringFlag && volunteerRecurringStatusById[volunteer.id] ? (
+                            <p className="volunteer-meta volunteer-recurring-flag">Has Weekly Shifts</p>
+                          ) : null}
                         </div>
                         <span className="volunteer-joined">
                           Joined {formatDate(volunteer.joined_at)}

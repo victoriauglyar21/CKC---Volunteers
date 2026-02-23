@@ -2347,7 +2347,7 @@ html[data-theme="dark"] .capacity-slot-extra {
   opacity: 0;
   transform: scaleX(0);
   transform-origin: right center;
-  transition: opacity 120ms ease;
+  transition: opacity 120ms ease, transform 120ms ease;
   pointer-events: none;
 }
 
@@ -2466,6 +2466,12 @@ html[data-theme="dark"] .capacity-slot-extra {
   color: rgba(255, 255, 255, 0.7);
 }
 
+.volunteer-recurring-flag {
+  margin-top: 2px;
+  font-size: 0.78rem;
+  color: color-mix(in srgb, var(--ink-muted) 88%, #ffffff 12%);
+}
+
 .volunteer-joined {
   font-size: 0.8rem;
   color: rgba(255, 255, 255, 0.7);
@@ -2553,7 +2559,6 @@ html[data-theme="dark"] .capacity-slot-extra {
   position: relative;
   border-radius: 16px;
   padding: 12px 14px;
-  padding-right: 66px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
   display: flex;
@@ -2561,6 +2566,10 @@ html[data-theme="dark"] .capacity-slot-extra {
   gap: 12px;
   align-items: flex-start;
   cursor: pointer;
+}
+
+.notification-card.with-corner-delete {
+  padding-right: 66px;
 }
 
 .notification-card:focus-visible {
