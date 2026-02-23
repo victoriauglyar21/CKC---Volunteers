@@ -91,6 +91,7 @@ function MainApp() {
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [profileMissing, setProfileMissing] = useState(false);
+  const [authedAppInitialReady, setAuthedAppInitialReady] = useState(false);
   const [showAppLoader, setShowAppLoader] = useState(true);
   const loaderShownAtRef = useRef<number>(Date.now());
   const loaderHideTimerRef = useRef<number | null>(null);
@@ -98,6 +99,7 @@ function MainApp() {
   const isSignupRoute = routePath === "/signup";
   const isCompleteProfileRoute = routePath === "/complete-profile";
   const useNewUi = isNewUiEnabled();
+  const hasUsableProfile = Boolean(profile);
 
   const goToCompleteProfile = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -221,7 +223,33 @@ function MainApp() {
     };
   }, [goToCompleteProfile, isCompleteProfileRoute, isSignupRoute, session]);
 
-  const shouldShowAppLoader = loading || (!!session && profileLoading && !profile);
+  useEffect(() => {
+    setAuthedAppInitialReady(false);
+  }, [session?.user?.id]);
+
+  const willRenderNewUi =
+    !loading &&
+    !passwordRecovery &&
+    !!session &&
+    !profileMissing &&
+    (hasUsableProfile || !profileLoading) &&
+    !needsOnboarding &&
+    useNewUi &&
+    canAccessNewUi(profile?.role);
+
+  const willRenderAuthedApp =
+    !loading &&
+    !passwordRecovery &&
+    !!session &&
+    !profileMissing &&
+    (hasUsableProfile || !profileLoading) &&
+    !needsOnboarding &&
+    !willRenderNewUi;
+
+  const shouldShowAppLoader =
+    loading ||
+    (!!session && profileLoading && !profile) ||
+    (willRenderAuthedApp && !authedAppInitialReady);
 
   useEffect(() => {
     if (loaderHideTimerRef.current !== null) {
@@ -276,7 +304,7 @@ function MainApp() {
     content = <div style={{ padding: 16 }}>Oops Profile Not Found</div>;
   }
 
-  if (!loading && !passwordRecovery && session && !profileMissing && !profileLoading && needsOnboarding) {
+  if (!loading && !passwordRecovery && session && !profileMissing && needsOnboarding) {
     content = (
       <ProfileOnboarding
         userId={session.user.id}
@@ -297,7 +325,7 @@ function MainApp() {
     !passwordRecovery &&
     session &&
     !profileMissing &&
-    !profileLoading &&
+    (hasUsableProfile || !profileLoading) &&
     !needsOnboarding &&
     useNewUi &&
     canAccessNewUi(profile?.role)
@@ -310,11 +338,17 @@ function MainApp() {
     !passwordRecovery &&
     session &&
     !profileMissing &&
-    !profileLoading &&
+    (hasUsableProfile || !profileLoading) &&
     !needsOnboarding &&
     !content
   ) {
-    content = <AuthedApp session={session} profile={profile} />;
+    content = (
+      <AuthedApp
+        session={session}
+        profile={profile}
+        onInitialCalendarReady={() => setAuthedAppInitialReady(true)}
+      />
+    );
   }
 
   return (

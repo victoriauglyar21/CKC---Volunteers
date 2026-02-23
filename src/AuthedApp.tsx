@@ -101,7 +101,7 @@ import {
   urlBase64ToUint8Array,
 } from "./authedApp/utils";
 
-export default function AuthedApp({ session, profile }: AuthedAppProps) {
+export default function AuthedApp({ session, profile, onInitialCalendarReady }: AuthedAppProps) {
   const [today, setToday] = useState(() => startOfDay(new Date()));
   const [templates, setTemplates] = useState<ShiftTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -134,6 +134,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [dismissedNotificationTokens, setDismissedNotificationTokens] = useState<Set<string>>(new Set());
   const [hasLoadedNotifications, setHasLoadedNotifications] = useState(false);
   const [notificationCount, setNotificationCount] = useState(0);
+  const [notificationSwipeOffsets, setNotificationSwipeOffsets] = useState<Record<string, number>>({});
   const [showAssignVolunteer, setShowAssignVolunteer] = useState(false);
   const [assignShiftInstanceId, setAssignShiftInstanceId] = useState<number | null>(null);
   const [assignLoading, setAssignLoading] = useState(false);
@@ -279,6 +280,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
   const prefersReducedMotion = useReducedMotion();
   const [notificationDeletingIds, setNotificationDeletingIds] = useState<Set<string>>(new Set());
+  const [hasLoadedInitialShiftInstances, setHasLoadedInitialShiftInstances] = useState(false);
+  const initialCalendarReadySentRef = useRef(false);
   const notificationsEnabled = displayProfile?.notification_pref === "push_and_email";
   const notificationPermission =
     typeof window !== "undefined" && "Notification" in window
@@ -390,6 +393,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     let mounted = true;
 
     const fetchShiftInstances = async () => {
+      const markInitialShiftInstancesLoaded = () => {
+        setHasLoadedInitialShiftInstances(true);
+      };
       const rangeAnchorDate =
         calendarRangeMode === "month"
           ? addMonths(today, monthOffset)
@@ -414,6 +420,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
       if (visibleDates.length === 0) {
         setInstanceShifts([]);
+        markInitialShiftInstancesLoaded();
         return;
       }
       const rangeStart = visibleDates[0];
@@ -499,6 +506,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       if (error || !data) {
         setInstanceShifts([]);
+        markInitialShiftInstancesLoaded();
         return;
       }
 
@@ -557,6 +565,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           return left.title.localeCompare(right.title);
         }),
       );
+      markInitialShiftInstancesLoaded();
     };
 
     fetchShiftInstances();
@@ -565,6 +574,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       mounted = false;
     };
   }, [today, weekOffset, monthOffset, calendarRangeMode, templates, shiftInstancesRefreshToken]);
+
+  useEffect(() => {
+    if (initialCalendarReadySentRef.current) return;
+    if (loading) return;
+    if (!hasLoadedInitialShiftInstances) return;
+    initialCalendarReadySentRef.current = true;
+    onInitialCalendarReady?.();
+  }, [hasLoadedInitialShiftInstances, loading, onInitialCalendarReady]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 600px)");
@@ -1744,6 +1761,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       if (notificationDeletingIds.has(item.id)) return;
       setNotificationsMessage("");
       setNotificationDeletingIds((prev) => new Set(prev).add(item.id));
+      setNotificationSwipeOffsets((prev) => {
+        if (!(item.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
       setNotifications((prev) => prev.filter((notification) => notification.id !== item.id));
 
       try {
@@ -4257,13 +4280,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const notificationsInitialLoading = notificationsLoading && !hasLoadedNotifications && notifications.length === 0;
   const notificationsSyncing = notificationsLoading && hasLoadedNotifications;
 
-  const renderNotificationCard = (
+    const renderNotificationCard = (
     request: ShiftAssignmentDetail,
     index: number,
     isLatest: boolean,
     content: ReactNode,
     actions?: ReactNode,
-  ) => (
+  ) => {
+    const swipeOffset = Math.min(0, notificationSwipeOffsets[request.id] ?? 0);
+    const swipeReveal = notificationDeletingIds.has(request.id)
+      ? 1
+      : Math.max(0, Math.min(1, Math.abs(swipeOffset) / 96));
+
+    return (
     <motion.div
       key={request.id}
       layout={prefersReducedMotion ? false : "position"}
@@ -4283,7 +4312,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       transition={{ duration: 0.18, ease: "easeOut" }}
       className="notification-list-item"
     >
-      <div className="notification-swipe-delete-bg" aria-hidden="true">
+      <div
+        className="notification-swipe-delete-bg"
+        aria-hidden="true"
+        style={{
+          opacity: isMobile ? swipeReveal : 0,
+          transform: `scaleX(${isMobile ? swipeReveal : 0})`,
+        }}
+      >
         <span className="notification-swipe-delete-label">Delete</span>
       </div>
       <motion.div
@@ -4293,10 +4329,24 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         dragMomentum={false}
         dragConstraints={isMobile ? { left: -136, right: 0 } : { left: 0, right: 0 }}
         whileDrag={prefersReducedMotion ? undefined : { scale: 0.995 }}
+        onDrag={(_, info) => {
+          if (!isMobile) return;
+          const nextOffset = Math.min(0, info.offset.x);
+          setNotificationSwipeOffsets((prev) => {
+            if ((prev[request.id] ?? 0) === nextOffset) return prev;
+            return { ...prev, [request.id]: nextOffset };
+          });
+        }}
         onDragEnd={(_, info) => {
           if (!isMobile) return;
           if (notificationDeletingIds.has(request.id)) return;
           const passedThreshold = info.offset.x < -88 || info.velocity.x < -680;
+          setNotificationSwipeOffsets((prev) => {
+            if (!(request.id in prev)) return prev;
+            const next = { ...prev };
+            delete next[request.id];
+            return next;
+          });
           if (!passedThreshold) return;
           void handleDismissNotification(request, index);
         }}
@@ -4315,27 +4365,26 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             }
           }}
         >
+          <button
+            className="notification-corner-delete-button"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleDismissNotification(request, index);
+            }}
+            disabled={notificationDeletingIds.has(request.id)}
+            aria-label="Delete notification"
+            title="Delete notification"
+          >
+            Delete
+          </button>
           <div className="notification-info">{content}</div>
-          <div className="notification-actions">
-            {actions}
-            <button
-              className="notification-dismiss-button"
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                void handleDismissNotification(request, index);
-              }}
-              disabled={notificationDeletingIds.has(request.id)}
-              aria-label="Delete notification"
-              title="Delete notification"
-            >
-              Delete
-            </button>
-          </div>
+          {actions ? <div className="notification-actions">{actions}</div> : null}
         </div>
       </motion.div>
     </motion.div>
-  );
+    );
+  };
 
   return (
     <div className="calendar-shell">

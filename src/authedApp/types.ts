@@ -177,4 +177,5 @@ export type ShiftInstanceRow = {
 export type AuthedAppProps = {
   session: Session;
   profile: ProfileRecord | null;
+  onInitialCalendarReady?: () => void;
 };
