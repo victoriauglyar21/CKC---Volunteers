@@ -1,6 +1,13 @@
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
-create extension if not exists vault;
+do $$
+begin
+  create extension if not exists vault;
+exception
+  when sqlstate '0A000' then
+    raise notice 'vault extension is not available in this environment; skipping vault-backed reminder setup';
+end;
+$$;
 
 create or replace function public.invoke_shift_reminder_job()
 returns void
@@ -13,6 +20,11 @@ declare
   function_key text;
   request_id bigint;
 begin
+  if not exists (select 1 from pg_extension where extname = 'vault') then
+    raise notice 'vault extension is not installed; skipping shift reminder invocation';
+    return;
+  end if;
+
   select ds.decrypted_secret
   into function_url
   from vault.decrypted_secrets ds
@@ -60,6 +72,14 @@ begin
   from cron.job
   where jobname = 'shift-reminders-every-5m'
   limit 1;
+
+  if not exists (select 1 from pg_extension where extname = 'vault') then
+    if existing_job_id is not null then
+      perform cron.unschedule(existing_job_id);
+    end if;
+    raise notice 'vault extension is not installed; skipping cron schedule for shift reminders';
+    return;
+  end if;
 
   if existing_job_id is not null then
     perform cron.unschedule(existing_job_id);
