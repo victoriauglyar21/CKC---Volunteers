@@ -2176,6 +2176,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const renderInteractiveShiftBlock = (shift: ShiftInstance, keyPrefix = "") => {
     const hasTimes = Boolean(shift.start && shift.end);
     const isPastShiftDay = startOfDay(shift.start).getTime() < todayStartMs;
+    const templateCapacity = shift.templateId ? templateMap[shift.templateId]?.capacity ?? null : null;
+    const visibleSlotCount = Math.max(8, templateCapacity ?? 8);
     const assignmentList = weekAssignments[shift.instanceId] ?? [];
     const sortedAssignments = assignmentList.slice().sort((left, right) => {
       const rankFor = (assignment: ShiftAssignmentDetail) => {
@@ -2214,7 +2216,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ...regularAssignments,
       ...otherAssignments,
     ];
-    while (slotAssignments.length < 6) {
+    while (slotAssignments.length < visibleSlotCount) {
       slotAssignments.push(null);
     }
     const canAddExtraVolunteer = true;
@@ -2487,13 +2489,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   const alreadyOnShift = assignmentList.some(
                     (slot) => slot.volunteer?.id === session.user.id && slot.status !== "dropped",
                   );
+                  setTakeShiftMode("request");
                   if (alreadyOnShift) {
                     setTakeShiftMessage("You are already on this shift!");
                     openTakeShiftPrompt();
                     return;
                   }
                   setTakeShiftMessage("");
-                  setTakeShiftMode("request");
                   openTakeShiftPrompt();
                 }}
               >
