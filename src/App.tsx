@@ -8,6 +8,16 @@ import ProfileOnboarding from "./ProfileOnboarding";
 import NewUI from "./NewUI";
 import SplashScreen from "./components/SplashScreen";
 
+type ThemeMode = "light" | "dark";
+const THEME_STORAGE_KEY = "ui-theme";
+
+function getInitialTheme(): ThemeMode {
+  if (typeof window === "undefined") return "light";
+  const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  if (savedTheme === "light" || savedTheme === "dark") return savedTheme;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 type ProfileRecord = {
   id: string;
   role: "Regular Volunteer" | "Lead" | "Admin";
@@ -251,10 +261,18 @@ function MainApp() {
 }
 
 export default function App() {
+  const [theme, setTheme] = useState<ThemeMode>(() => getInitialTheme());
   const [showSplash, setShowSplash] = useState(false);
   const hadSessionOnBootRef = useRef(false);
   const authReadyRef = useRef(false);
   const splashTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = theme;
+    root.classList.toggle("dark", theme === "dark");
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
 
   useEffect(() => {
     const runSplash = () => {
@@ -306,5 +324,21 @@ export default function App() {
     return <SplashScreen />;
   }
 
-  return <MainApp />;
+  return (
+    <>
+      <button
+        className="theme-toggle"
+        type="button"
+        onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
+        aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+        title={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+      >
+        <span className="theme-toggle-icon" aria-hidden="true">
+          {theme === "light" ? "☾" : "☀"}
+        </span>
+        <span className="theme-toggle-label">{theme === "light" ? "Dark" : "Light"}</span>
+      </button>
+      <MainApp />
+    </>
+  );
 }
