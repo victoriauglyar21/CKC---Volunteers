@@ -27,10 +27,11 @@ html[data-theme="dark"] {
 }
 
 .theme-toggle {
-  position: fixed;
+  position: absolute;
   top: 12px;
   right: 12px;
-  z-index: 2000;
+  margin: 0;
+  z-index: 20;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--rose-400) 78%, #0000);
   background: color-mix(in srgb, var(--rose-50) 92%, rgba(255, 255, 255, 0.08));
@@ -328,6 +329,100 @@ html[data-theme="dark"] {
 .menu-item-single-line {
   white-space: nowrap !important;
   min-width: max-content;
+}
+
+.menu-item-theme-toggle {
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 220px;
+}
+
+.menu-item-subtoggle {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.menu-item-label {
+  white-space: nowrap;
+}
+
+.menu-item-caret {
+  display: inline-block;
+  transition: transform 0.2s ease;
+}
+
+.menu-item-caret.open {
+  transform: rotate(180deg);
+}
+
+.menu-submenu {
+  display: grid;
+  gap: 6px;
+  margin-top: -2px;
+  padding-left: 8px;
+  border-left: 1px solid color-mix(in srgb, var(--rose-400) 55%, #0000);
+}
+
+.menu-item-sub {
+  min-height: 40px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  padding-left: 12px;
+}
+
+.menu-theme-toggle-track {
+  width: 92px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--rose-400) 85%, #0000);
+  background: var(--rose-50);
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  padding: 2px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.menu-theme-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 44px;
+  height: 22px;
+  border-radius: 999px;
+  background: #fff8f2;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
+  transform: translateX(0);
+  transition: transform 0.2s ease;
+}
+
+.menu-theme-toggle-option {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--ink-muted);
+  user-select: none;
+  transition: color 0.2s ease;
+}
+
+.menu-theme-toggle-option.active {
+  color: #1f2430;
+}
+
+.menu-theme-toggle-track.is-on {
+  background: rgba(80, 200, 120, 0.34);
+  border-color: rgba(80, 200, 120, 0.8);
+}
+
+.menu-theme-toggle-track.is-on .menu-theme-toggle-thumb {
+  transform: translateX(44px);
 }
 
 .week-glance-title {
@@ -804,6 +899,14 @@ html[data-theme="dark"] {
 
 .weekday-today {
   color: #b9693c;
+}
+
+html[data-theme="dark"] .weekday {
+  color: #ffffff;
+}
+
+html[data-theme="dark"] .weekday-today {
+  color: #cfe6ff;
 }
 
 .day-cell {
@@ -2212,6 +2315,74 @@ html[data-theme="dark"] .capacity-slot-extra {
   gap: 12px;
 }
 
+.notification-list-item {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  min-height: 0;
+}
+
+.notification-card-shell {
+  position: relative;
+  z-index: 1;
+  touch-action: pan-y;
+  will-change: transform, opacity;
+}
+
+.notification-card-shell.is-deleting {
+  pointer-events: none;
+}
+
+.notification-swipe-delete-bg {
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 14px;
+  background: color-mix(in srgb, #cf3030 78%, #8b1212 22%);
+  border: 1px solid color-mix(in srgb, #f09595 45%, transparent);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.notification-swipe-delete-label {
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-size: 0.85rem;
+  user-select: none;
+}
+
+.notifications-skeletons {
+  display: grid;
+  gap: 12px;
+}
+
+.notification-skeleton {
+  height: 84px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--rose-400) 40%, transparent);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--rose-100) 86%, transparent) 0%,
+      color-mix(in srgb, #ffffff 26%, var(--rose-100) 74%) 45%,
+      color-mix(in srgb, var(--rose-100) 86%, transparent) 100%
+    );
+  background-size: 240% 100%;
+  animation: notification-skeleton-shimmer 1.15s ease-in-out infinite;
+}
+
+@keyframes notification-skeleton-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
 .volunteers-list {
   display: grid;
   gap: 12px;
@@ -2445,6 +2616,44 @@ html[data-theme="dark"] .capacity-slot-extra {
 .notification-actions {
   display: flex;
   gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.notification-dismiss-button {
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--rose-400) 78%, transparent);
+  background: color-mix(in srgb, var(--rose-50) 82%, #fff 18%);
+  color: var(--ink-primary);
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease,
+    opacity 140ms ease;
+}
+
+.notification-dismiss-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--rose-50) 68%, #fff 32%);
+  border-color: color-mix(in srgb, var(--rose-400) 92%, transparent);
+}
+
+.notification-dismiss-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.notification-dismiss-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--rose-400) 55%, #ffffff 45%);
+  outline-offset: 2px;
+}
+
+.notification-dismiss-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .notification-actions .nav-button,
@@ -2458,6 +2667,16 @@ html[data-theme="dark"] .capacity-slot-extra {
   align-items: center;
   justify-content: center;
   font-size: 0.9rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notification-skeleton {
+    animation: none;
+  }
+
+  .notification-card-shell {
+    will-change: auto;
+  }
 }
 
 .helpful-links {
@@ -2923,6 +3142,16 @@ html[data-theme="dark"] .capacity-slot-extra {
     width: 22px;
     height: 22px;
     font-size: 0.82rem;
+  }
+}
+
+@media (max-width: 600px) {
+  html[data-theme="dark"] .calendar-grid.month-mode .weekday {
+    color: #ffffff !important;
+  }
+
+  html[data-theme="dark"] .day-weekday {
+    color: #ffffff !important;
   }
 }
 

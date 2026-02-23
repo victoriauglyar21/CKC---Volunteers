@@ -5,8 +5,10 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
   type TouchEvent as ReactTouchEvent,
 } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { signOutSafely, supabase } from "./supabaseClient";
 import {
   APPOINTMENT_COLOR_ADOPTION,
@@ -258,19 +260,25 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [shiftInstancesRefreshToken, setShiftInstancesRefreshToken] = useState(0);
   const scrollYRef = useRef(0);
   const liveRefreshInFlightRef = useRef(false);
+  const initialTodayScrollDoneRef = useRef(false);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const swipeTriggeredRef = useRef(false);
   const todayCellRef = useRef<HTMLDivElement | null>(null);
   const todayKey = getDateKey(today);
   const [showMenu, setShowMenu] = useState(false);
+  const [showInfoMenu, setShowInfoMenu] = useState(false);
+  const [menuThemeMode, setMenuThemeMode] = useState<"light" | "dark">(() => {
+    if (typeof document === "undefined") return "light";
+    return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+  });
   const [showHelpfulLinks, setShowHelpfulLinks] = useState(false);
   const [showFloatingViewToggle, setShowFloatingViewToggle] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const takeShiftCloseTimerRef = useRef<number | null>(null);
-  const baseDocumentTitleRef = useRef<string>(
-    typeof document !== "undefined" ? document.title : "CKC Shift Calendar",
-  );
+  const baseDocumentTitleRef = useRef<string>("CKC Volunteers");
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
+  const prefersReducedMotion = useReducedMotion();
+  const [notificationDeletingIds, setNotificationDeletingIds] = useState<Set<string>>(new Set());
   const notificationsEnabled = displayProfile?.notification_pref === "push_and_email";
   const notificationPermission =
     typeof window !== "undefined" && "Notification" in window
@@ -1635,7 +1643,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [fetchWeekAssignments, fetchMyShifts, fetchPersonalAssignments]);
 
   const fetchNotifications = useCallback(async () => {
-    setNotificationsLoading(!hasLoadedNotifications);
+    setNotificationsLoading(true);
     setNotificationsMessage("");
     const { items, error } = await fetchNotificationsData({
       sessionUserId: session.user.id,
@@ -1731,6 +1739,41 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setNotificationCount(0);
   }, [notifications, dismissedNotificationTokens, persistDismissedTokens]);
 
+  const handleDismissNotification = useCallback(
+    async (item: ShiftAssignmentDetail, indexHint?: number) => {
+      if (notificationDeletingIds.has(item.id)) return;
+      setNotificationsMessage("");
+      setNotificationDeletingIds((prev) => new Set(prev).add(item.id));
+      setNotifications((prev) => prev.filter((notification) => notification.id !== item.id));
+
+      try {
+        // Keep UI responsive and let exit animation begin before persisting dismissal.
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        const next = new Set(dismissedNotificationTokens);
+        next.add(getNotificationDismissToken(item));
+        persistDismissedTokens(next);
+      } catch (error) {
+        setNotifications((prev) => {
+          if (prev.some((notification) => notification.id === item.id)) return prev;
+          const insertAt = Math.max(0, Math.min(indexHint ?? prev.length, prev.length));
+          const next = prev.slice();
+          next.splice(insertAt, 0, item);
+          return next;
+        });
+        setNotificationsMessage(
+          error instanceof Error ? error.message : "Unable to delete notification. Restored.",
+        );
+      } finally {
+        setNotificationDeletingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(item.id);
+          return next;
+        });
+      }
+    },
+    [dismissedNotificationTokens, notificationDeletingIds, persistDismissedTokens],
+  );
+
   useEffect(() => {
     const storageKey = `weekOffset:${session.user.id}`;
     const stored = localStorage.getItem(storageKey);
@@ -1812,10 +1855,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   useEffect(() => {
     if (typeof document !== "undefined") {
-      document.title =
-        notificationCount > 0
-          ? `(${notificationCount}) ${baseDocumentTitleRef.current}`
-          : baseDocumentTitleRef.current;
+      const canonicalBase = "CKC Volunteers";
+      const strippedCurrent = document.title.replace(/^(\(\d+\)\s*)+/, "").trim();
+      const base =
+        strippedCurrent === canonicalBase || strippedCurrent.length === 0
+          ? canonicalBase
+          : canonicalBase;
+      baseDocumentTitleRef.current = base;
+      document.title = notificationCount > 0 ? `(${notificationCount}) ${base}` : base;
     }
 
     const nav = navigator as Navigator & {
@@ -3814,6 +3861,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       if (!menuRef.current) return;
       if (menuRef.current.contains(event.target as Node)) return;
       setShowMenu(false);
+      setShowInfoMenu(false);
     };
     document.addEventListener("click", handleClick);
     return () => {
@@ -3821,20 +3869,66 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     };
   }, [showMenu]);
 
-  const scrollToDateKey = (dateKey: string, attempt = 0) => {
+  const getTodayShiftScrollPreference = () => {
+    const hour = new Date().getHours();
+    if (hour < 9) return "morning" as const;
+    if (hour >= 11) return "evening" as const;
+    return null;
+  };
+
+  const scrollDayCardToShiftSection = (
+    dayCard: HTMLDivElement,
+    preference: "morning" | "evening",
+  ) => {
+    const shiftBlocks = Array.from(dayCard.querySelectorAll<HTMLDivElement>(".shift-block"));
+    if (shiftBlocks.length === 0) return;
+
+    const blockWithTitle = (pattern: RegExp) =>
+      shiftBlocks.find((block) => {
+        const title = block.querySelector(".shift-block-title")?.textContent ?? "";
+        return pattern.test(title);
+      }) ?? null;
+
+    const targetBlock =
+      preference === "morning"
+        ? blockWithTitle(/morning/i) ?? shiftBlocks[0]
+        : blockWithTitle(/evening/i) ?? shiftBlocks[shiftBlocks.length - 1];
+
+    if (!targetBlock) return;
+    const topOffset = isMobile ? 104 : 132;
+    const nextTop = Math.max(0, window.scrollY + targetBlock.getBoundingClientRect().top - topOffset);
+    window.scrollTo({ top: nextTop, behavior: "smooth" });
+  };
+
+  const scrollToDateKey = (
+    dateKey: string,
+    attempt = 0,
+    options?: { focusShiftSection?: "morning" | "evening" | null },
+  ) => {
     const target = document.getElementById(`day-${dateKey}`) as HTMLDivElement | null;
     if (!target) {
       if (attempt < 12) {
-        window.setTimeout(() => scrollToDateKey(dateKey, attempt + 1), 80);
+        window.setTimeout(() => scrollToDateKey(dateKey, attempt + 1, options), 80);
       }
       return;
     }
 
     target.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
+    if (options?.focusShiftSection) {
+      window.setTimeout(() => {
+        scrollDayCardToShiftSection(target, options.focusShiftSection);
+      }, 140);
+    }
   };
 
   const jumpToNotificationShift = (item: ShiftAssignmentDetail) => {
-    const shift = item.shift_instance;
+    const shift =
+      item.shift_instance ??
+      (() => {
+        const rawId = item.shift_instance_id ?? null;
+        if (!Number.isInteger(rawId)) return null;
+        return notificationShiftFallbacks[Number(rawId)] ?? null;
+      })();
     if (!shift) return;
     let targetDate: Date | null = null;
     if (shift.starts_at) {
@@ -3856,6 +3950,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const targetKey = getDateKey(targetDate);
 
     setShowNotifications(false);
+    setCalendarRangeMode("week");
     setWeekOffset(clampedOffset);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -3870,13 +3965,37 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (calendarRangeMode === "week" && weekOffset !== 0) return;
     if (calendarRangeMode === "month" && monthOffset !== 0) return;
     const targetKey = getDateKey(startOfDay(new Date()));
+    const shiftSectionPreference = getTodayShiftScrollPreference();
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        scrollToDateKey(targetKey);
-        window.setTimeout(() => scrollToDateKey(targetKey), 200);
+        scrollToDateKey(targetKey, 0, { focusShiftSection: shiftSectionPreference });
+        window.setTimeout(
+          () => scrollToDateKey(targetKey, 0, { focusShiftSection: shiftSectionPreference }),
+          200,
+        );
       });
     });
   }, [todayJumpToken, weekOffset, monthOffset, calendarRangeMode, todayKey]);
+
+  useEffect(() => {
+    if (initialTodayScrollDoneRef.current) return;
+    if (loading) return;
+    if (calendarRangeMode !== "week" || weekOffset !== 0) return;
+
+    initialTodayScrollDoneRef.current = true;
+    const targetKey = getDateKey(startOfDay(new Date()));
+    const shiftSectionPreference = getTodayShiftScrollPreference();
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollToDateKey(targetKey, 0, { focusShiftSection: shiftSectionPreference });
+        window.setTimeout(
+          () => scrollToDateKey(targetKey, 0, { focusShiftSection: shiftSectionPreference }),
+          200,
+        );
+      });
+    });
+  }, [calendarRangeMode, weekOffset, loading]);
 
   const handleTodayClick = () => {
     const now = startOfDay(new Date());
@@ -3886,11 +4005,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setWeekOffset(0);
     setMonthOffset(0);
     setTodayJumpToken((value) => value + 1);
+    const shiftSectionPreference = getTodayShiftScrollPreference();
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        scrollToDateKey(nowKey);
-        window.setTimeout(() => scrollToDateKey(nowKey), 200);
+        scrollToDateKey(nowKey, 0, { focusShiftSection: shiftSectionPreference });
+        window.setTimeout(
+          () => scrollToDateKey(nowKey, 0, { focusShiftSection: shiftSectionPreference }),
+          200,
+        );
       });
     });
   };
@@ -4116,6 +4239,104 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowAddRecurring(false);
   };
 
+  const getCurrentThemeMode = () => {
+    if (typeof document === "undefined") return "light" as const;
+    return document.documentElement.dataset.theme === "dark" ? ("dark" as const) : ("light" as const);
+  };
+
+  const handleToggleTheme = () => {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    const root = document.documentElement;
+    const nextTheme = getCurrentThemeMode() === "dark" ? "light" : "dark";
+    root.dataset.theme = nextTheme;
+    root.classList.toggle("dark", nextTheme === "dark");
+    window.localStorage.setItem("ui-theme", nextTheme);
+    setMenuThemeMode(nextTheme);
+  };
+  const isDarkTheme = menuThemeMode === "dark";
+  const notificationsInitialLoading = notificationsLoading && !hasLoadedNotifications && notifications.length === 0;
+  const notificationsSyncing = notificationsLoading && hasLoadedNotifications;
+
+  const renderNotificationCard = (
+    request: ShiftAssignmentDetail,
+    index: number,
+    isLatest: boolean,
+    content: ReactNode,
+    actions?: ReactNode,
+  ) => (
+    <motion.div
+      key={request.id}
+      layout={prefersReducedMotion ? false : "position"}
+      initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={
+        prefersReducedMotion
+          ? { opacity: 0 }
+          : {
+              opacity: 0,
+              x: -60,
+              height: 0,
+              marginTop: 0,
+              marginBottom: 0,
+            }
+      }
+      transition={{ duration: 0.18, ease: "easeOut" }}
+      className="notification-list-item"
+    >
+      <div className="notification-swipe-delete-bg" aria-hidden="true">
+        <span className="notification-swipe-delete-label">Delete</span>
+      </div>
+      <motion.div
+        drag={isMobile ? "x" : false}
+        dragDirectionLock
+        dragElastic={0.18}
+        dragMomentum={false}
+        dragConstraints={isMobile ? { left: -136, right: 0 } : { left: 0, right: 0 }}
+        whileDrag={prefersReducedMotion ? undefined : { scale: 0.995 }}
+        onDragEnd={(_, info) => {
+          if (!isMobile) return;
+          if (notificationDeletingIds.has(request.id)) return;
+          const passedThreshold = info.offset.x < -88 || info.velocity.x < -680;
+          if (!passedThreshold) return;
+          void handleDismissNotification(request, index);
+        }}
+        className={`notification-card-shell ${notificationDeletingIds.has(request.id) ? "is-deleting" : ""}`}
+      >
+        <div
+          id={`notification-${request.id}`}
+          className={`notification-card ${isLatest ? "latest" : ""}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => jumpToNotificationShift(request)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              jumpToNotificationShift(request);
+            }
+          }}
+        >
+          <div className="notification-info">{content}</div>
+          <div className="notification-actions">
+            {actions}
+            <button
+              className="notification-dismiss-button"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleDismissNotification(request, index);
+              }}
+              disabled={notificationDeletingIds.has(request.id)}
+              aria-label="Delete notification"
+              title="Delete notification"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+
   return (
     <div className="calendar-shell">
       <header className="calendar-header">
@@ -4146,17 +4367,37 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             <option value="week">Week</option>
             <option value="month">Month</option>
           </select>
+          {!isMobile ? (
+            <button
+              className={`account-button refresh-button jump-today-icon ${
+                refreshing ? "refresh-spinning" : ""
+              }`}
+              type="button"
+              onClick={handleRefreshClick}
+              disabled={refreshing}
+              title="Refresh shifts and notifications"
+              aria-label="Refresh shifts and notifications"
+            >
+              {refreshing ? "↻" : "↻"}
+            </button>
+          ) : null}
           <button
-            className={`account-button refresh-button jump-today-icon ${
-              refreshing ? "refresh-spinning" : ""
-            }`}
+            className="account-button notification-button"
             type="button"
-            onClick={handleRefreshClick}
-            disabled={refreshing}
-            title="Refresh shifts and notifications"
-            aria-label="Refresh shifts and notifications"
+            onClick={() => {
+              setShowMenu(false);
+              setShowInfoMenu(false);
+              setShowNotifications(true);
+            }}
+            aria-label="Open notifications"
+            title="Notifications"
           >
-            {refreshing ? "↻" : "↻"}
+            🔔
+            {notificationCount > 0 ? (
+              <span className="notification-badge">
+                {notificationCount > 9 ? "9+" : notificationCount}
+              </span>
+            ) : null}
           </button>
           <div className="menu-shell" ref={menuRef}>
             <button
@@ -4168,79 +4409,106 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               onClick={() => setShowMenu((value) => !value)}
             >
               ⋯
-              {notificationCount > 0 ? (
-                <span className="notification-badge">
-                  {notificationCount > 9 ? "9+" : notificationCount}
-                </span>
-              ) : null}
             </button>
             {showMenu ? (
               <div className="menu-dropdown" role="menu">
                 <button
-                  className="menu-item menu-item-single-line"
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setShowMenu(false);
-                    setShowWeekGlance(true);
-                  }}
-                >
-                  This week at a glance
-                </button>
-                <button
                   className="menu-item"
                   type="button"
                   role="menuitem"
                   onClick={() => {
                     setShowMenu(false);
-                    setShowHelpfulLinks(true);
-                  }}
-                >
-                  Resources
-                </button>
-                <button
-                  className="menu-item"
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setShowMenu(false);
-                    setShowMyShifts(true);
-                  }}
-                >
-                  My shifts
-                </button>
-                <button
-                  className="menu-item"
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setShowMenu(false);
-                    setShowNotifications(true);
-                  }}
-                >
-                  Notifications
-                </button>
-                <button
-                  className="menu-item"
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setShowMenu(false);
-                    setShowVolunteers(true);
-                  }}
-                >
-                  All volunteers
-                </button>
-                <button
-                  className="menu-item"
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setShowMenu(false);
+                    setShowInfoMenu(false);
                     setShowProfile(true);
                   }}
                 >
-                  My profile
+                  My Profile
+                </button>
+                <button
+                  className="menu-item"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setShowInfoMenu(false);
+                    setShowVolunteers(true);
+                  }}
+                >
+                  All Volunteers
+                </button>
+                <button
+                  className="menu-item menu-item-subtoggle"
+                  type="button"
+                  role="menuitem"
+                  aria-expanded={showInfoMenu}
+                  onClick={() => setShowInfoMenu((value) => !value)}
+                >
+                  <span className="menu-item-label">Info</span>
+                  <span className={`menu-item-caret ${showInfoMenu ? "open" : ""}`} aria-hidden="true">
+                    ▾
+                  </span>
+                </button>
+                {showInfoMenu ? (
+                  <div className="menu-submenu" role="group" aria-label="Info">
+                    <button
+                      className="menu-item menu-item-sub"
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowMenu(false);
+                        setShowInfoMenu(false);
+                        setShowMyShifts(true);
+                      }}
+                    >
+                      My Shifts
+                    </button>
+                    <button
+                      className="menu-item menu-item-sub menu-item-single-line"
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowMenu(false);
+                        setShowInfoMenu(false);
+                        setShowWeekGlance(true);
+                      }}
+                    >
+                      This week at a glance
+                    </button>
+                    <button
+                      className="menu-item menu-item-sub"
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowMenu(false);
+                        setShowInfoMenu(false);
+                        setShowHelpfulLinks(true);
+                      }}
+                    >
+                      Resources
+                    </button>
+                  </div>
+                ) : null}
+                <button
+                  className="menu-item menu-item-theme-toggle"
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={isDarkTheme}
+                  onClick={handleToggleTheme}
+                >
+                  <span className="menu-item-label">Theme</span>
+                  <span className={`menu-theme-toggle-track ${isDarkTheme ? "is-on" : ""}`} aria-hidden="true">
+                    <span className="menu-theme-toggle-thumb" />
+                    <span
+                      className={`menu-theme-toggle-option ${!isDarkTheme ? "active" : ""}`}
+                    >
+                      Light
+                    </span>
+                    <span
+                      className={`menu-theme-toggle-option ${isDarkTheme ? "active" : ""}`}
+                    >
+                      Dark
+                    </span>
+                  </span>
                 </button>
               </div>
             ) : null}
@@ -4359,15 +4627,29 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </button>
             </div>
             {isMobile && calendarRangeMode !== "month" ? (
-              <button
-                className="account-button jump-today"
-                type="button"
-                onClick={handleToggleAllDays}
-                aria-label={allVisibleDaysCollapsed ? "Expand all days" : "Collapse all days"}
-                title={allVisibleDaysCollapsed ? "Expand all" : "Collapse all"}
-              >
-                {allVisibleDaysCollapsed ? "▾▾" : "▴▴"}
-              </button>
+              <>
+                <button
+                  className={`account-button refresh-button jump-today-icon ${
+                    refreshing ? "refresh-spinning" : ""
+                  }`}
+                  type="button"
+                  onClick={handleRefreshClick}
+                  disabled={refreshing}
+                  title="Refresh shifts and notifications"
+                  aria-label="Refresh shifts and notifications"
+                >
+                  {refreshing ? "↻" : "↻"}
+                </button>
+                <button
+                  className="account-button jump-today"
+                  type="button"
+                  onClick={handleToggleAllDays}
+                  aria-label={allVisibleDaysCollapsed ? "Expand all days" : "Collapse all days"}
+                  title={allVisibleDaysCollapsed ? "Expand all" : "Collapse all"}
+                >
+                  {allVisibleDaysCollapsed ? "▾▾" : "▴▴"}
+                </button>
+              </>
             ) : null}
           </div>
         </div>
@@ -5249,6 +5531,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             <div className="modal-header">
               <div>
                 <h3 className="modal-title">Notifications</h3>
+                {notificationsSyncing ? <p className="modal-eyebrow">Syncing...</p> : null}
               </div>
               <button
                 className="modal-close notification-close-icon"
@@ -5270,19 +5553,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </button>
             </div>
             <div className="modal-body">
-              {notificationsLoading ? (
-                <div className="loading-banner">
-                  {notifications.length > 0 ? "Refreshing notifications..." : "Loading notifications..."}
+              {notificationsInitialLoading ? (
+                <div className="notifications-skeletons" aria-hidden="true">
+                  <div className="notification-skeleton" />
+                  <div className="notification-skeleton" />
+                  <div className="notification-skeleton" />
                 </div>
               ) : null}
               {notificationsMessage ? (
                 <div className="error-banner">{notificationsMessage}</div>
               ) : null}
-              {notifications.length === 0 && !notificationsLoading ? (
+              {notifications.length === 0 && !notificationsInitialLoading ? (
                 <div className="empty-banner">Nothing Here!</div>
               ) : null}
               {notifications.length > 0 ? (
-                <div className="notifications-list">
+                <motion.div className="notifications-list" layout={prefersReducedMotion ? false : "position"}>
+                  <AnimatePresence initial={false}>
                   {notifications.map((request, index) => {
                     const volunteerName =
                       request.volunteer?.preferred_name ||
@@ -5328,79 +5614,55 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
                     if (isPrimaryAdminAccount) {
                       if (request.status === "dropped") {
-                        return (
-                          <div
-                            key={request.id}
-                            id={`notification-${request.id}`}
-                            className={`notification-card ${isLatest ? "latest" : ""}`}
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => jumpToNotificationShift(request)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" || event.key === " ") {
-                                event.preventDefault();
-                                jumpToNotificationShift(request);
-                              }
-                            }}
-                          >
-                            <div className="notification-info">
-                              {isLatest ? <span className="notification-tag">Latest</span> : null}
-                              <p className="notification-meta">{timeLine}</p>
-                              <p className="notification-name">
-                                {volunteerName} Dropped ({notificationShiftLabel})
-                              </p>
-                              {readableDropReason ? (
-                                <p className="notification-reason">{readableDropReason}</p>
-                              ) : null}
-                            </div>
-                          </div>
-                        );
-                      }
-                      return (
-                        <div
-                          key={request.id}
-                          id={`notification-${request.id}`}
-                          className={`notification-card ${isLatest ? "latest" : ""}`}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => jumpToNotificationShift(request)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              jumpToNotificationShift(request);
-                            }
-                          }}
-                        >
-                          <div className="notification-info">
+                        return renderNotificationCard(
+                          request,
+                          index,
+                          isLatest,
+                          <>
                             {isLatest ? <span className="notification-tag">Latest</span> : null}
                             <p className="notification-meta">{timeLine}</p>
                             <p className="notification-name">
-                              {volunteerName} Requested to Join ({notificationShiftLabel})
+                              {volunteerName} Dropped ({notificationShiftLabel})
                             </p>
-                          </div>
-                          <div className="notification-actions">
-                            <button
-                              className="nav-button"
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void handleNotificationDecision(request.id, "deny");
-                              }}
-                            >
-                              Deny
-                            </button>
-                            <button
-                              className="account-button"
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void handleNotificationDecision(request.id, "approve");
-                              }}
-                            >
-                              Approve
-                            </button>
-                          </div>
-                        </div>
+                            {readableDropReason ? (
+                              <p className="notification-reason">{readableDropReason}</p>
+                            ) : null}
+                          </>,
+                        );
+                      }
+                      return renderNotificationCard(
+                        request,
+                        index,
+                        isLatest,
+                        <>
+                          {isLatest ? <span className="notification-tag">Latest</span> : null}
+                          <p className="notification-meta">{timeLine}</p>
+                          <p className="notification-name">
+                            {volunteerName} Requested to Join ({notificationShiftLabel})
+                          </p>
+                        </>,
+                        <>
+                          <button
+                            className="nav-button"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleNotificationDecision(request.id, "deny");
+                            }}
+                          >
+                            Deny
+                          </button>
+                          <button
+                            className="account-button"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleNotificationDecision(request.id, "approve");
+                            }}
+                          >
+                            Approve
+                          </button>
+                        </>,
                       );
                     }
 
@@ -5413,36 +5675,25 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             ? `You left ${shiftTitle}`
                           : `Shift Denied · ${shiftTitle}`;
 
-                    return (
-                      <div
-                        key={request.id}
-                        id={`notification-${request.id}`}
-                        className={`notification-card ${isLatest ? "latest" : ""}`}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => jumpToNotificationShift(request)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            jumpToNotificationShift(request);
-                          }
-                        }}
-                      >
-                        <div className="notification-info">
-                          {isLatest ? <span className="notification-tag">Latest</span> : null}
-                          <p className="notification-meta">{timeLine}</p>
-                          <p className="notification-name">{statusLabel}</p>
-                          {request.status === "dropped" &&
-                          readableDropReason &&
-                          request.dropped_reason !== "Removed by admin" &&
-                          !isSelfDropReason(request.dropped_reason) ? (
-                            <p className="notification-reason">{readableDropReason}</p>
-                          ) : null}
-                        </div>
-                      </div>
+                    return renderNotificationCard(
+                      request,
+                      index,
+                      isLatest,
+                      <>
+                        {isLatest ? <span className="notification-tag">Latest</span> : null}
+                        <p className="notification-meta">{timeLine}</p>
+                        <p className="notification-name">{statusLabel}</p>
+                        {request.status === "dropped" &&
+                        readableDropReason &&
+                        request.dropped_reason !== "Removed by admin" &&
+                        !isSelfDropReason(request.dropped_reason) ? (
+                          <p className="notification-reason">{readableDropReason}</p>
+                        ) : null}
+                      </>,
                     );
                   })}
-                </div>
+                  </AnimatePresence>
+                </motion.div>
               ) : null}
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import "./App.css";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
 import { signOutSafely, supabase } from "./supabaseClient";
@@ -7,6 +7,7 @@ import AuthedApp from "./AuthedApp";
 import ProfileOnboarding from "./ProfileOnboarding";
 import NewUI from "./NewUI";
 import SplashScreen from "./components/SplashScreen";
+import AppLoader from "./components/AppLoader";
 
 type ThemeMode = "light" | "dark";
 const THEME_STORAGE_KEY = "ui-theme";
@@ -82,6 +83,7 @@ function hasAuthType(targetType: string) {
 }
 
 function MainApp() {
+  const MIN_LOADER_VISIBLE_MS = 850;
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
@@ -89,6 +91,9 @@ function MainApp() {
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [profileMissing, setProfileMissing] = useState(false);
+  const [showAppLoader, setShowAppLoader] = useState(true);
+  const loaderShownAtRef = useRef<number>(Date.now());
+  const loaderHideTimerRef = useRef<number | null>(null);
   const routePath = typeof window !== "undefined" ? window.location.pathname : "/";
   const isSignupRoute = routePath === "/signup";
   const isCompleteProfileRoute = routePath === "/complete-profile";
@@ -216,10 +221,44 @@ function MainApp() {
     };
   }, [goToCompleteProfile, isCompleteProfileRoute, isSignupRoute, session]);
 
-  if (loading) return <div style={{ padding: 16 }}>Loading…</div>;
+  const shouldShowAppLoader = loading || (!!session && profileLoading && !profile);
 
-  if (passwordRecovery) {
-    return (
+  useEffect(() => {
+    if (loaderHideTimerRef.current !== null) {
+      window.clearTimeout(loaderHideTimerRef.current);
+      loaderHideTimerRef.current = null;
+    }
+
+    if (shouldShowAppLoader) {
+      loaderShownAtRef.current = Date.now();
+      setShowAppLoader(true);
+      return;
+    }
+
+    const elapsed = Date.now() - loaderShownAtRef.current;
+    const remaining = Math.max(0, MIN_LOADER_VISIBLE_MS - elapsed);
+    if (remaining === 0) {
+      setShowAppLoader(false);
+      return;
+    }
+
+    loaderHideTimerRef.current = window.setTimeout(() => {
+      setShowAppLoader(false);
+      loaderHideTimerRef.current = null;
+    }, remaining);
+
+    return () => {
+      if (loaderHideTimerRef.current !== null) {
+        window.clearTimeout(loaderHideTimerRef.current);
+        loaderHideTimerRef.current = null;
+      }
+    };
+  }, [shouldShowAppLoader]);
+
+  let content: ReactNode = null;
+
+  if (!loading && passwordRecovery) {
+    content = (
       <Auth
         resetOnly
         onResetDone={() => {
@@ -229,16 +268,16 @@ function MainApp() {
     );
   }
 
-  if (!session) return <Auth defaultMode={isSignupRoute ? "signup" : "signin"} />;
-
-  if (profileMissing && !profileLoading) {
-    return <div style={{ padding: 16 }}>Oops Profile Not Found</div>;
+  if (!loading && !passwordRecovery && !session) {
+    content = <Auth defaultMode={isSignupRoute ? "signup" : "signin"} />;
   }
 
-  if (profileLoading && !profile) return <div style={{ padding: 16 }}>Loading profile...</div>;
+  if (!loading && !passwordRecovery && session && profileMissing && !profileLoading) {
+    content = <div style={{ padding: 16 }}>Oops Profile Not Found</div>;
+  }
 
-  if (needsOnboarding) {
-    return (
+  if (!loading && !passwordRecovery && session && !profileMissing && !profileLoading && needsOnboarding) {
+    content = (
       <ProfileOnboarding
         userId={session.user.id}
         initialProfile={profile}
@@ -253,11 +292,37 @@ function MainApp() {
     );
   }
 
-  if (useNewUi && canAccessNewUi(profile?.role)) {
-    return <NewUI session={session} profile={profile} />;
+  if (
+    !loading &&
+    !passwordRecovery &&
+    session &&
+    !profileMissing &&
+    !profileLoading &&
+    !needsOnboarding &&
+    useNewUi &&
+    canAccessNewUi(profile?.role)
+  ) {
+    content = <NewUI session={session} profile={profile} />;
   }
 
-  return <AuthedApp session={session} profile={profile} />;
+  if (
+    !loading &&
+    !passwordRecovery &&
+    session &&
+    !profileMissing &&
+    !profileLoading &&
+    !needsOnboarding &&
+    !content
+  ) {
+    content = <AuthedApp session={session} profile={profile} />;
+  }
+
+  return (
+    <>
+      {content}
+      <AppLoader visible={showAppLoader} />
+    </>
+  );
 }
 
 export default function App() {
@@ -324,21 +389,5 @@ export default function App() {
     return <SplashScreen />;
   }
 
-  return (
-    <>
-      <button
-        className="theme-toggle"
-        type="button"
-        onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
-        aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
-        title={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
-      >
-        <span className="theme-toggle-icon" aria-hidden="true">
-          {theme === "light" ? "☾" : "☀"}
-        </span>
-        <span className="theme-toggle-label">{theme === "light" ? "Dark" : "Light"}</span>
-      </button>
-      <MainApp />
-    </>
-  );
+  return <MainApp />;
 }

@@ -1,0 +1,122 @@
+.app-loader-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 20px;
+  background: var(--app-page-bg);
+  color: var(--ink-primary, var(--app-page-text));
+}
+
+.app-loader-stage {
+  position: relative;
+  width: 100vw;
+  max-width: 100%;
+  overflow: hidden;
+  height: clamp(64px, 12vw, 92px);
+  display: flex;
+  align-items: center;
+}
+
+.app-loader-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  transform: translateY(16px);
+  background: color-mix(in srgb, var(--rose-300, #d7c1b5) 55%, transparent);
+}
+
+.app-loader-cat-runner {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-6px);
+  width: 0;
+}
+
+.app-loader-cat {
+  display: grid;
+  place-items: center;
+}
+
+.app-loader-cat-emoji {
+  display: block;
+  font-size: clamp(2rem, 5.8vw, 3rem);
+  line-height: 1;
+  transform: scaleX(-1);
+  filter:
+    grayscale(1)
+    saturate(0)
+    brightness(0)
+    contrast(2)
+    drop-shadow(0 2px 6px rgba(0, 0, 0, 0.22))
+    drop-shadow(0 0 1px color-mix(in srgb, #ffffff 22%, transparent));
+  user-select: none;
+}
+
+.app-loader-text {
+  margin: 0;
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 2px;
+  min-height: 1.6em;
+  color: var(--ink-primary, var(--app-page-text));
+  font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
+  font-weight: 700;
+  font-size: clamp(0.95rem, 2.8vw, 1.05rem);
+  letter-spacing: 0.01em;
+  text-align: center;
+}
+
+.app-loader-dots {
+  display: inline-block;
+  width: 1.35em;
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+
+.app-loader-dots::after {
+  content: "...";
+  display: inline-block;
+  width: 0;
+  animation: app-loader-dots 1s steps(4, end) infinite;
+}
+
+@keyframes app-loader-dots {
+  0% {
+    width: 0;
+  }
+  100% {
+    width: 1.05em;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-loader-overlay {
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .app-loader-stage {
+    height: 68px;
+  }
+
+  .app-loader-track {
+    transform: translateY(12px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-loader-dots::after {
+    animation: none;
+    width: 1.05em;
+  }
+}
