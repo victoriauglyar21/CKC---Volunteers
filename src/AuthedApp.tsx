@@ -34,7 +34,6 @@ import {
   denyNotificationAssignment,
   fetchAssignmentById,
   fetchNotificationsData,
-  fetchPendingNotifications,
 } from "./authedApp/services/notificationService";
 import {
   notifyActiveMembersOnShiftInstance,
@@ -1808,6 +1807,30 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
     [dismissedNotificationTokens, notificationDeletingIds, persistDismissedTokens],
   );
 
+  const removeNotificationFromList = useCallback((notificationId: string) => {
+    setNotificationSwipeOffsets((prev) => {
+      if (!(notificationId in prev)) return prev;
+      const next = { ...prev };
+      delete next[notificationId];
+      return next;
+    });
+    setNotificationDeletingIds((prev) => {
+      if (prev.has(notificationId)) return prev;
+      const next = new Set(prev);
+      next.add(notificationId);
+      return next;
+    });
+    setNotifications((prev) => prev.filter((notification) => notification.id !== notificationId));
+    window.setTimeout(() => {
+      setNotificationDeletingIds((prev) => {
+        if (!prev.has(notificationId)) return prev;
+        const next = new Set(prev);
+        next.delete(notificationId);
+        return next;
+      });
+    }, 260);
+  }, []);
+
   useEffect(() => {
     const storageKey = `weekOffset:${session.user.id}`;
     const stored = localStorage.getItem(storageKey);
@@ -3506,8 +3529,7 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
       setNotificationsMessage(`Approved, but ${approvalNotificationErrors.join(" | ")}`);
     }
 
-    const { data: pendingItems } = await fetchPendingNotifications();
-    setNotifications(pendingItems);
+    removeNotificationFromList(assignmentId);
     setNotificationsLoading(false);
     await fetchWeekAssignments();
   };
@@ -3537,8 +3559,7 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
     setDenyTargetId(null);
     setDenyReason("");
 
-    const { data: pendingItems } = await fetchPendingNotifications();
-    setNotifications(pendingItems);
+    removeNotificationFromList(denyTargetId);
     setNotificationsLoading(false);
     await fetchWeekAssignments();
   };
@@ -4352,18 +4373,20 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
   ) => {
     const mobileSwipeMode = options?.mobileSwipeMode ?? "delete";
     const hideCornerDelete = options?.hideCornerDelete ?? false;
+    const actionThreshold = mobileSwipeMode === "decision" ? 96 : 92;
     const rawSwipeOffset = notificationSwipeOffsets[request.id] ?? 0;
     const swipeOffset = mobileSwipeMode === "decision" ? rawSwipeOffset : Math.min(0, rawSwipeOffset);
     const swipeDirection = swipeOffset > 0 ? "approve" : "deny";
     const swipeDistance = Math.max(0, Math.abs(swipeOffset) - 8);
+    const swipeCommitReady = Math.abs(swipeOffset) >= actionThreshold;
     const swipeReveal = notificationDeletingIds.has(request.id)
       ? 1
-      : Math.max(0, Math.min(1, swipeDistance / 108));
+      : Math.max(0, Math.min(1, swipeDistance / actionThreshold));
 
     return (
     <motion.div
       key={request.id}
-      layout={prefersReducedMotion ? false : "position"}
+      layout={prefersReducedMotion ? false : true}
       initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={
@@ -4372,12 +4395,23 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
           : {
               opacity: 0,
               x: -60,
+              y: -6,
               height: 0,
               marginTop: 0,
               marginBottom: 0,
             }
       }
-      transition={{ duration: 0.18, ease: "easeOut" }}
+      transition={
+        prefersReducedMotion
+          ? { duration: 0.12 }
+          : {
+              layout: { type: "spring", stiffness: 420, damping: 34, mass: 0.75 },
+              opacity: { duration: 0.16, ease: "easeOut" },
+              x: { duration: 0.16, ease: "easeOut" },
+              y: { duration: 0.16, ease: "easeOut" },
+              height: { duration: 0.2, ease: "easeOut" },
+            }
+      }
       className="notification-list-item"
     >
       <div
@@ -4396,12 +4430,18 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
             mobileSwipeMode === "decision" && swipeOffset > 0 ? "flex-start" : "flex-end",
           background:
             mobileSwipeMode === "decision" && swipeOffset > 0
-              ? "color-mix(in srgb, #59bf76 22%, transparent)"
+              ? swipeCommitReady
+                ? "color-mix(in srgb, #59bf76 34%, transparent)"
+                : "color-mix(in srgb, #59bf76 22%, transparent)"
               : undefined,
           borderColor:
             mobileSwipeMode === "decision" && swipeOffset > 0
-              ? "color-mix(in srgb, #59bf76 28%, transparent)"
+              ? swipeCommitReady
+                ? "color-mix(in srgb, #59bf76 44%, transparent)"
+                : "color-mix(in srgb, #59bf76 28%, transparent)"
               : undefined,
+          boxShadow: swipeCommitReady ? "inset 0 0 0 1px color-mix(in srgb, currentColor 20%, transparent)" : "none",
+          transition: "opacity 120ms ease, transform 120ms ease, background-color 120ms ease, border-color 120ms ease",
         }}
       >
         <span className="notification-swipe-delete-label">
@@ -4426,29 +4466,52 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
               : { left: -136, right: 0 }
             : { left: 0, right: 0 }
         }
-        whileDrag={prefersReducedMotion ? undefined : { scale: 0.995 }}
+        whileDrag={
+          prefersReducedMotion
+            ? undefined
+            : {
+                scale: swipeCommitReady ? 0.99 : 0.995,
+                boxShadow: swipeCommitReady
+                  ? "0 12px 28px rgba(0, 0, 0, 0.14)"
+                  : "0 8px 18px rgba(0, 0, 0, 0.08)",
+              }
+        }
+        animate={
+          prefersReducedMotion
+            ? undefined
+            : {
+                scale: swipeCommitReady ? 0.995 : 1,
+                boxShadow: swipeCommitReady
+                  ? "0 10px 24px rgba(0, 0, 0, 0.12)"
+                  : "0 0 0 rgba(0, 0, 0, 0)",
+              }
+        }
+        transition={
+          prefersReducedMotion
+            ? undefined
+            : {
+                scale: { duration: 0.12, ease: "easeOut" },
+                boxShadow: { duration: 0.12, ease: "easeOut" },
+              }
+        }
         onDrag={(_, info) => {
           if (!isMobile) return;
+          const dragOffsetX = Math.round(info.offset.x);
           const nextOffset =
             mobileSwipeMode === "decision"
-              ? Math.max(-136, Math.min(136, info.offset.x))
-              : Math.min(0, info.offset.x);
+              ? Math.max(-136, Math.min(136, dragOffsetX))
+              : Math.min(0, dragOffsetX);
           setNotificationSwipeOffsets((prev) => {
-            if ((prev[request.id] ?? 0) === nextOffset) return prev;
+            const previousOffset = prev[request.id] ?? 0;
+            if (Math.abs(previousOffset - nextOffset) < 4) return prev;
             return { ...prev, [request.id]: nextOffset };
           });
         }}
         onDragEnd={(_, info) => {
           if (!isMobile) return;
           if (notificationDeletingIds.has(request.id)) return;
-          const passedLeft = info.offset.x < -112;
-          const passedRight = info.offset.x > 112;
-          setNotificationSwipeOffsets((prev) => {
-            if (!(request.id in prev)) return prev;
-            const next = { ...prev };
-            next[request.id] = 0;
-            return next;
-          });
+          const passedLeft = info.offset.x <= -actionThreshold;
+          const passedRight = info.offset.x >= actionThreshold;
           if (mobileSwipeMode === "decision") {
             if (passedLeft) {
               setNotificationSwipeOffsets((prev) => {
@@ -4468,11 +4531,26 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
                 return next;
               });
               void handleNotificationDecision(request.id, "approve");
+              return;
             }
+            setNotificationSwipeOffsets((prev) => {
+              if (!(request.id in prev)) return prev;
+              const next = { ...prev };
+              next[request.id] = 0;
+              return next;
+            });
             return;
           }
-          if (!passedLeft) return;
-          void handleDismissNotification(request, index);
+          if (passedLeft) {
+            void handleDismissNotification(request, index);
+            return;
+          }
+          setNotificationSwipeOffsets((prev) => {
+            if (!(request.id in prev)) return prev;
+            const next = { ...prev };
+            next[request.id] = 0;
+            return next;
+          });
         }}
         className={`notification-card-shell ${notificationDeletingIds.has(request.id) ? "is-deleting" : ""}`}
       >
