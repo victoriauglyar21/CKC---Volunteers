@@ -42,3 +42,4 @@ export const APPOINTMENT_COLOR_OTHER_DEFAULT = "#f97316";
 
 export const SELF_DROP_REASON_PREFIX = "__self_drop__:";
 export const ADMIN_DROPPED_NOTIFICATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+export const APPOINTMENT_NOTIFICATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;

@@ -140,6 +140,33 @@ export type ShiftAppointment = {
   created_by: string | null;
 };
 
+export type AppointmentNotificationItem = {
+  notification_kind: "appointment";
+  id: string;
+  appointment_id: string;
+  shift_instance_id?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  title: string;
+  description: string | null;
+  color: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  event_type: "created" | "updated";
+  shift_instance?: {
+    id: number;
+    shift_date: string | null;
+    starts_at: string | null;
+    ends_at: string | null;
+    template?: {
+      id: string;
+      title: string;
+    } | null;
+  } | null;
+};
+
+export type AppNotificationItem = ShiftAssignmentDetail | AppointmentNotificationItem;
+
 export type AppointmentKind = "foster" | "adoption" | "vax" | "orientation" | "other";
 
 export type DropDayLeadAssignment = {

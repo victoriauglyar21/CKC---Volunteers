@@ -7,6 +7,8 @@ import {
   timeFormatter,
 } from "./constants";
 import type {
+  AppNotificationItem,
+  AppointmentNotificationItem,
   AppointmentKind,
   CalendarCell,
   DropDayLeadAssignment,
@@ -56,13 +58,23 @@ export function getMonthKey(date: Date) {
   return `${year}-${month}`;
 }
 
-export function getNotificationSortTimestamp(item: ShiftAssignmentDetail) {
-  const value = item.dropped_at ?? item.created_at ?? "";
+function isAppointmentNotificationItem(item: AppNotificationItem): item is AppointmentNotificationItem {
+  return "notification_kind" in item && item.notification_kind === "appointment";
+}
+
+export function getNotificationSortTimestamp(item: AppNotificationItem) {
+  const value = isAppointmentNotificationItem(item)
+    ? item.updated_at ?? item.created_at ?? ""
+    : item.dropped_at ?? item.created_at ?? "";
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-export function getNotificationDismissToken(item: ShiftAssignmentDetail) {
+export function getNotificationDismissToken(item: AppNotificationItem) {
+  if (isAppointmentNotificationItem(item)) {
+    const changeMoment = item.updated_at ?? item.created_at ?? "";
+    return `appointment:${item.appointment_id}:${changeMoment}`;
+  }
   const status = item.status ?? "unknown";
   const changeMoment = item.dropped_at ?? item.created_at ?? "";
   return `${item.id}:${status}:${changeMoment}`;
@@ -454,8 +466,9 @@ export function resolveTemplateStartTime(template: ShiftTemplate) {
     const parsed = candidate.match(/(\d{1,2}):(\d{2})/);
     if (parsed) return `${parsed[1].padStart(2, "0")}:${parsed[2]}`;
   }
-  if (/evening/i.test(template.title)) return "17:00";
-  if (/morning/i.test(template.title)) return "09:00";
+  const title = (template.title ?? "").toLowerCase();
+  if (/\b(evening|pm)\b/.test(title)) return "17:00";
+  if (/\b(morning|am)\b/.test(title)) return "09:00";
   return "09:00";
 }
 
@@ -471,8 +484,9 @@ export function resolveTemplateEndTime(template: ShiftTemplate) {
     const parsed = candidate.match(/(\d{1,2}):(\d{2})/);
     if (parsed) return `${parsed[1].padStart(2, "0")}:${parsed[2]}`;
   }
-  if (/evening/i.test(template.title)) return "19:00";
-  if (/morning/i.test(template.title)) return "11:00";
+  const title = (template.title ?? "").toLowerCase();
+  if (/\b(evening|pm)\b/.test(title)) return "19:00";
+  if (/\b(morning|am)\b/.test(title)) return "11:00";
   return "11:00";
 }
 

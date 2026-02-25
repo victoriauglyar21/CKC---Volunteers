@@ -1,7 +1,7 @@
 import { supabase } from "../../supabaseClient";
-import { ADMIN_DROPPED_NOTIFICATION_WINDOW_MS } from "../constants";
+import { ADMIN_DROPPED_NOTIFICATION_WINDOW_MS, APPOINTMENT_NOTIFICATION_WINDOW_MS } from "../constants";
 import { getNotificationDismissToken, getNotificationSortTimestamp } from "../utils";
-import type { ShiftAssignmentDetail } from "../types";
+import type { AppNotificationItem, AppointmentNotificationItem, ShiftAssignmentDetail } from "../types";
 
 const NOTIFICATION_SELECT = `
   id,
@@ -17,6 +17,28 @@ const NOTIFICATION_SELECT = `
     preferred_name,
     role
   ),
+  shift_instance:shift_instances (
+    id,
+    shift_date,
+    starts_at,
+    ends_at,
+    template:shift_templates (
+      id,
+      title
+    )
+  )
+`;
+
+const APPOINTMENT_NOTIFICATION_SELECT = `
+  id,
+  shift_instance_id,
+  title,
+  description,
+  color,
+  starts_at,
+  ends_at,
+  created_at,
+  updated_at,
   shift_instance:shift_instances (
     id,
     shift_date,
@@ -75,7 +97,7 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
     rawItems = (data as ShiftAssignmentDetail[]) ?? [];
   }
 
-  const items = rawItems
+  const assignmentItems = rawItems
     .filter((item) => {
       if (input.isPrimaryAdminAccount) {
         if (item.status === "pending") return true;
@@ -92,10 +114,115 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
       if (Number.isNaN(createdAt)) return false;
       return Date.now() - createdAt <= 5 * 60 * 1000;
     })
-    .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)))
-    .sort((left, right) => getNotificationSortTimestamp(right) - getNotificationSortTimestamp(left));
+    .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
+
+  const { items: appointmentItems, error: appointmentError } = await fetchAppointmentNotificationItems(input);
+  if (appointmentError) {
+    return { items: [] as AppNotificationItem[], error: appointmentError };
+  }
+
+  const items = [...assignmentItems, ...appointmentItems].sort(
+    (left, right) => getNotificationSortTimestamp(right) - getNotificationSortTimestamp(left),
+  );
 
   return { items, error: null };
+}
+
+type AppointmentNotificationRow = {
+  id: string;
+  shift_instance_id: number | null;
+  title: string | null;
+  description: string | null;
+  color: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  shift_instance: AppointmentNotificationItem["shift_instance"] | AppointmentNotificationItem["shift_instance"][];
+};
+
+async function fetchAppointmentNotificationItems(input: FetchNotificationsInput) {
+  if (!input.isPrimaryAdminAccount && input.role !== "Lead") {
+    return { items: [] as AppointmentNotificationItem[], error: null as string | null };
+  }
+
+  const cutoffIso = new Date(Date.now() - APPOINTMENT_NOTIFICATION_WINDOW_MS).toISOString();
+  let allowedInstanceIds: number[] | null = null;
+
+  if (!input.isPrimaryAdminAccount && input.role === "Lead") {
+    const { data: leadAssignments, error: leadAssignmentsError } = await supabase
+      .from("shift_assignments")
+      .select("shift_instance_id")
+      .eq("volunteer_id", input.sessionUserId)
+      .eq("assignment_role", "lead")
+      .eq("status", "active");
+
+    if (leadAssignmentsError) {
+      return { items: [] as AppointmentNotificationItem[], error: leadAssignmentsError.message };
+    }
+
+    allowedInstanceIds = Array.from(
+      new Set(
+        ((leadAssignments as { shift_instance_id: number | null }[] | null) ?? [])
+          .map((row) => row.shift_instance_id)
+          .filter((value): value is number => Number.isInteger(value)),
+      ),
+    );
+
+    if (allowedInstanceIds.length === 0) {
+      return { items: [] as AppointmentNotificationItem[], error: null as string | null };
+    }
+  }
+
+  let query = supabase
+    .from("shift_appointments")
+    .select(APPOINTMENT_NOTIFICATION_SELECT)
+    .gte("updated_at", cutoffIso)
+    .order("updated_at", { ascending: false });
+
+  if (allowedInstanceIds && allowedInstanceIds.length > 0) {
+    query = query.in("shift_instance_id", allowedInstanceIds);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    return { items: [] as AppointmentNotificationItem[], error: error.message };
+  }
+
+  const items = ((data as AppointmentNotificationRow[] | null) ?? [])
+    .map((row): AppointmentNotificationItem | null => {
+      const normalizedShiftInstance = Array.isArray(row.shift_instance)
+        ? (row.shift_instance[0] ?? null)
+        : (row.shift_instance ?? null);
+      const createdAtMs = row.created_at ? Date.parse(row.created_at) : NaN;
+      const updatedAtMs = row.updated_at ? Date.parse(row.updated_at) : NaN;
+      const eventType =
+        Number.isFinite(createdAtMs) &&
+        Number.isFinite(updatedAtMs) &&
+        Math.abs(updatedAtMs - createdAtMs) > 1500
+          ? "updated"
+          : "created";
+      const item: AppointmentNotificationItem = {
+        notification_kind: "appointment",
+        id: `appointment:${row.id}:${row.updated_at ?? row.created_at ?? ""}`,
+        appointment_id: row.id,
+        shift_instance_id: row.shift_instance_id,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        title: row.title ?? "Appointment",
+        description: row.description,
+        color: row.color,
+        starts_at: row.starts_at,
+        ends_at: row.ends_at,
+        event_type: eventType,
+        shift_instance: normalizedShiftInstance,
+      };
+      return item;
+    })
+    .filter((item): item is AppointmentNotificationItem => Boolean(item))
+    .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
+
+  return { items, error: null as string | null };
 }
 
 export async function fetchAssignmentById(assignmentId: string) {

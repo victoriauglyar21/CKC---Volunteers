@@ -43,8 +43,10 @@ import {
   sendVolunteerPush,
 } from "./authedApp/services/pushNotificationService";
 import type {
+  AppNotificationItem,
   AuthedAppProps,
   AppointmentKind,
+  AppointmentNotificationItem,
   PersonalAssignment,
   ProfileRecord,
   RecurringAssignment,
@@ -117,7 +119,7 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
   const [showNotifications, setShowNotifications] = useState(false);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsMessage, setNotificationsMessage] = useState("");
-  const [notifications, setNotifications] = useState<ShiftAssignmentDetail[]>([]);
+  const [notifications, setNotifications] = useState<AppNotificationItem[]>([]);
   const [notificationShiftFallbacks, setNotificationShiftFallbacks] = useState<
     Record<
       number,
@@ -524,12 +526,35 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
           const end = row.ends_at ? new Date(row.ends_at) : start;
           if (!start || Number.isNaN(start.getTime())) return null;
           const safeEnd = end && !Number.isNaN(end.getTime()) ? end : start;
+          const title = row.template?.title ?? "Shift";
+          const titleLower = title.toLowerCase();
+          const isPmShiftTitle = /\b(evening|pm)\b/.test(titleLower);
+          const isAmShiftTitle = /\b(morning|am)\b/.test(titleLower);
+          const normalizedStart = new Date(start);
+          const normalizedEnd = new Date(safeEnd);
+          const matchesAmWindow =
+            normalizedStart.getHours() === 9 &&
+            normalizedStart.getMinutes() === 0 &&
+            normalizedEnd.getHours() === 11 &&
+            normalizedEnd.getMinutes() === 0;
+          const matchesPmWindow =
+            normalizedStart.getHours() === 17 &&
+            normalizedStart.getMinutes() === 0 &&
+            normalizedEnd.getHours() === 19 &&
+            normalizedEnd.getMinutes() === 0;
+          if (isPmShiftTitle && matchesAmWindow) {
+            normalizedStart.setHours(17, 0, 0, 0);
+            normalizedEnd.setHours(19, 0, 0, 0);
+          } else if (isAmShiftTitle && matchesPmWindow) {
+            normalizedStart.setHours(9, 0, 0, 0);
+            normalizedEnd.setHours(11, 0, 0, 0);
+          }
           return {
             id: `${row.id}`,
             instanceId: row.id,
-            title: row.template?.title ?? "Shift",
-            start,
-            end: safeEnd,
+            title,
+            start: normalizedStart,
+            end: normalizedEnd,
             templateId: row.template?.id ?? "",
           } satisfies ShiftInstance;
         })
@@ -1726,6 +1751,17 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
           fetchNotifications();
         },
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "shift_appointments",
+        },
+        () => {
+          fetchNotifications();
+        },
+      )
       .subscribe();
 
     return () => {
@@ -1767,7 +1803,7 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
   }, [notifications, dismissedNotificationTokens, persistDismissedTokens]);
 
   const handleDismissNotification = useCallback(
-    async (item: ShiftAssignmentDetail, indexHint?: number) => {
+    async (item: AppNotificationItem, indexHint?: number) => {
       if (notificationDeletingIds.has(item.id)) return;
       setNotificationsMessage("");
       setNotificationDeletingIds((prev) => new Set(prev).add(item.id));
@@ -3486,7 +3522,9 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
       return;
     }
 
-    let approvedRequest = notifications.find((item) => item.id === assignmentId);
+    let approvedRequest = notifications.find(
+      (item): item is ShiftAssignmentDetail => item.id === assignmentId && !isAppointmentNotification(item),
+    );
     if (!approvedRequest) {
       const { data: approvedData } = await fetchAssignmentById(assignmentId);
       approvedRequest = approvedData ?? undefined;
@@ -4010,7 +4048,7 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
     }
   };
 
-  const jumpToNotificationShift = (item: ShiftAssignmentDetail) => {
+  const jumpToNotificationShift = (item: AppNotificationItem) => {
     const shift =
       item.shift_instance ??
       (() => {
@@ -4361,7 +4399,7 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
   const notificationsSyncing = notificationsLoading && hasLoadedNotifications;
 
   const renderNotificationCard = (
-    request: ShiftAssignmentDetail,
+    request: AppNotificationItem,
     index: number,
     isLatest: boolean,
     content: ReactNode,
@@ -4589,6 +4627,9 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
     </motion.div>
     );
   };
+
+  const isAppointmentNotification = (item: AppNotificationItem): item is AppointmentNotificationItem =>
+    "notification_kind" in item && item.notification_kind === "appointment";
 
   return (
     <div className="calendar-shell">
@@ -5823,6 +5864,59 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
                 <motion.div className="notifications-list" layout={prefersReducedMotion ? false : "position"}>
                   <AnimatePresence initial={false}>
                   {notifications.map((request, index) => {
+                    const isLatest = index === 0;
+                    if (isAppointmentNotification(request)) {
+                      const shiftInstance = request.shift_instance;
+                      const fallbackNotificationShiftFromQuery =
+                        (shiftInstance?.id ?? request.shift_instance_id ?? null) != null
+                          ? notificationShiftFallbacks[
+                              Number(shiftInstance?.id ?? request.shift_instance_id ?? -1)
+                            ] ?? null
+                          : null;
+                      const fallbackNotificationShiftFromCalendar =
+                        ((shiftInstance?.id ?? request.shift_instance_id ?? null) != null
+                          ? instanceShifts.find(
+                              (shift) =>
+                                shift.instanceId === (shiftInstance?.id ?? request.shift_instance_id ?? -1),
+                            )
+                          : null);
+                      const appointmentShiftLabel = formatShortShiftRequestLabel(
+                        shiftInstance?.starts_at || shiftInstance?.shift_date
+                          ? shiftInstance
+                          : fallbackNotificationShiftFromQuery
+                            ? fallbackNotificationShiftFromQuery
+                            : fallbackNotificationShiftFromCalendar
+                              ? {
+                                  starts_at: fallbackNotificationShiftFromCalendar.start.toISOString(),
+                                  title: fallbackNotificationShiftFromCalendar.title,
+                                }
+                              : null,
+                      );
+                      const appointmentTimeLabel = request.starts_at
+                        ? formatDateTime(request.starts_at)
+                        : appointmentShiftLabel;
+                      const appointmentShiftTitle = shiftInstance?.template?.title ?? "Shift";
+                      const appointmentMeta = `${appointmentTimeLabel} · ${appointmentShiftTitle}`;
+                      const appointmentActionLabel =
+                        request.event_type === "updated" ? "Appointment updated" : "New appointment";
+
+                      return renderNotificationCard(
+                        request,
+                        index,
+                        isLatest,
+                        <>
+                          {isLatest ? <span className="notification-tag">Latest</span> : null}
+                          <p className="notification-meta">{appointmentMeta}</p>
+                          <p className="notification-name">
+                            {appointmentActionLabel}: {request.title || "Appointment"}
+                          </p>
+                          {request.description ? (
+                            <p className="notification-reason">{request.description}</p>
+                          ) : null}
+                        </>,
+                      );
+                    }
+
                     const volunteerName =
                       request.volunteer?.preferred_name ||
                       request.volunteer?.full_name ||
@@ -5881,8 +5975,6 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
                             endsAt ? ` — ${formatDateTime(endsAt)}` : ""
                           } · ${shiftTitle}`;
                     const readableDropReason = normalizeDropReason(request.dropped_reason);
-                    const isLatest = index === 0;
-
                     if (isPrimaryAdminAccount) {
                       if (request.status === "dropped") {
                         return renderNotificationCard(
