@@ -499,7 +499,9 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
           shift_date,
           template:shift_templates (
             id,
-            title
+            title,
+            start_time,
+            end_time
           )
         `,
         )
@@ -527,27 +529,41 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
           if (!start || Number.isNaN(start.getTime())) return null;
           const safeEnd = end && !Number.isNaN(end.getTime()) ? end : start;
           const title = row.template?.title ?? "Shift";
-          const titleLower = title.toLowerCase();
-          const isPmShiftTitle = /\b(evening|pm)\b/.test(titleLower);
-          const isAmShiftTitle = /\b(morning|am)\b/.test(titleLower);
           const normalizedStart = new Date(start);
           const normalizedEnd = new Date(safeEnd);
-          const matchesAmWindow =
-            normalizedStart.getHours() === 9 &&
-            normalizedStart.getMinutes() === 0 &&
-            normalizedEnd.getHours() === 11 &&
-            normalizedEnd.getMinutes() === 0;
-          const matchesPmWindow =
-            normalizedStart.getHours() === 17 &&
-            normalizedStart.getMinutes() === 0 &&
-            normalizedEnd.getHours() === 19 &&
-            normalizedEnd.getMinutes() === 0;
-          if (isPmShiftTitle && matchesAmWindow) {
-            normalizedStart.setHours(17, 0, 0, 0);
-            normalizedEnd.setHours(19, 0, 0, 0);
-          } else if (isAmShiftTitle && matchesPmWindow) {
-            normalizedStart.setHours(9, 0, 0, 0);
-            normalizedEnd.setHours(11, 0, 0, 0);
+
+          const templateForTimeNormalization = row.template
+            ? ({
+                id: row.template.id,
+                title: row.template.title,
+                start_time: row.template.start_time ?? null,
+                end_time: row.template.end_time ?? null,
+              } as ShiftTemplate)
+            : null;
+          const baseDayForTemplateTime =
+            row.shift_date ? parseDateOnly(row.shift_date) : start ? startOfDay(start) : null;
+
+          if (templateForTimeNormalization && baseDayForTemplateTime) {
+            const normalizedStartIso = toIsoForDateAndTime(
+              baseDayForTemplateTime,
+              resolveTemplateStartTime(templateForTimeNormalization),
+            );
+            const normalizedEndIso = toIsoForDateAndTime(
+              baseDayForTemplateTime,
+              resolveTemplateEndTime(templateForTimeNormalization),
+            );
+            if (normalizedStartIso) {
+              const parsedNormalizedStart = new Date(normalizedStartIso);
+              if (!Number.isNaN(parsedNormalizedStart.getTime())) {
+                normalizedStart.setTime(parsedNormalizedStart.getTime());
+              }
+            }
+            if (normalizedEndIso) {
+              const parsedNormalizedEnd = new Date(normalizedEndIso);
+              if (!Number.isNaN(parsedNormalizedEnd.getTime())) {
+                normalizedEnd.setTime(parsedNormalizedEnd.getTime());
+              }
+            }
           }
           return {
             id: `${row.id}`,
