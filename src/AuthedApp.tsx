@@ -499,9 +499,7 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
           shift_date,
           template:shift_templates (
             id,
-            title,
-            start_time,
-            end_time
+            title
           )
         `,
         )
@@ -532,13 +530,8 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
           const normalizedStart = new Date(start);
           const normalizedEnd = new Date(safeEnd);
 
-          const templateForTimeNormalization = row.template
-            ? ({
-                id: row.template.id,
-                title: row.template.title,
-                start_time: row.template.start_time ?? null,
-                end_time: row.template.end_time ?? null,
-              } as ShiftTemplate)
+          const templateForTimeNormalization = row.template?.id
+            ? (templates.find((template) => template.id === row.template?.id) ?? null)
             : null;
           const baseDayForTemplateTime =
             row.shift_date ? parseDateOnly(row.shift_date) : start ? startOfDay(start) : null;
