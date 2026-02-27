@@ -166,9 +166,13 @@ async function getAuthorizedManualTrigger(req: Request) {
   const email = (data.user.email ?? "").trim().toLowerCase();
   const allowed = role === "admin" || role === "lead" || email === PRIMARY_ADMIN_EMAIL;
 
-  return allowed
-    ? { allowed: true, userId: data.user.id }
-    : { allowed: false, error: "Forbidden." };
+  return {
+    allowed,
+    userId: data.user.id,
+    role,
+    email,
+    error: allowed ? null : "Forbidden.",
+  };
 }
 
 async function fetchSubscriptionsForUsers(userIds: string[]) {
@@ -381,6 +385,114 @@ async function sendUpcomingShiftReminders(now: Date) {
   return { sent, failed, matched: targets.length };
 }
 
+async function sendManualShiftReminderTest(userId: string) {
+  const { data: assignments, error } = await supabaseAdmin
+    .from("shift_assignments")
+    .select(
+      `
+      volunteer_id,
+      shift_instance_id,
+      shift_instance:shift_instances (
+        id,
+        starts_at,
+        template:shift_templates (
+          title
+        )
+      )
+    `,
+    )
+    .eq("volunteer_id", userId)
+    .eq("status", "active")
+    .gte("shift_instance.starts_at", new Date().toISOString())
+    .order("starts_at", { ascending: true, foreignTable: "shift_instances" })
+    .limit(1);
+
+  if (error) {
+    return { sent: 0, failed: 0, matched: 0, error: error.message };
+  }
+
+  const nextAssignment = ((assignments ?? []) as Array<{
+    volunteer_id: string | null;
+    shift_instance_id: number | null;
+    shift_instance:
+      | {
+          id: number | null;
+          starts_at: string | null;
+          template:
+            | {
+                title: string | null;
+              }
+            | {
+                title: string | null;
+              }[]
+            | null;
+        }
+      | {
+          id: number | null;
+          starts_at: string | null;
+          template:
+            | {
+                title: string | null;
+              }
+            | {
+                title: string | null;
+              }[]
+            | null;
+        }[]
+      | null;
+  }>)[0] ?? null;
+
+  if (!nextAssignment?.volunteer_id || !nextAssignment.shift_instance_id) {
+    return { sent: 0, failed: 0, matched: 0, error: null };
+  }
+
+  const shiftInstance = Array.isArray(nextAssignment.shift_instance)
+    ? (nextAssignment.shift_instance[0] ?? null)
+    : nextAssignment.shift_instance;
+  const template = Array.isArray(shiftInstance?.template)
+    ? (shiftInstance.template[0] ?? null)
+    : (shiftInstance?.template ?? null);
+  if (!shiftInstance?.starts_at) {
+    return { sent: 0, failed: 0, matched: 0, error: null };
+  }
+
+  const { data: profiles, error: profilesError } = await supabaseAdmin
+    .from("profiles")
+    .select("id,notification_settings")
+    .eq("id", userId)
+    .eq("notification_pref", "push_and_email")
+    .limit(1);
+
+  if (profilesError) {
+    return { sent: 0, failed: 0, matched: 1, error: profilesError.message };
+  }
+
+  const eligibleProfile = ((profiles ?? []) as Array<{ id: string; notification_settings: NotificationSettings }>)[0] ?? null;
+  if (!eligibleProfile || eligibleProfile.notification_settings?.shift_reminder === false) {
+    return { sent: 0, failed: 0, matched: 1, error: null };
+  }
+
+  const subsByUser = await fetchSubscriptionsForUsers([userId]);
+  const subscriptions = subsByUser.get(userId) ?? [];
+  if (subscriptions.length === 0) {
+    return { sent: 0, failed: 0, matched: 1, error: null };
+  }
+
+  const title = "Shift reminder";
+  const body = template?.title
+    ? `Your ${template.title} starts in 1 hour.`
+    : "Your shift starts in 1 hour.";
+  const result = await sendPushToSubscriptions({
+    subscriptions,
+    userId,
+    title,
+    body,
+    url: "/?view=notifications",
+  });
+
+  return { sent: result.sent, failed: result.failed, matched: 1, error: null };
+}
+
 async function sendLeadNeededAlerts(
   now: Date,
   options?: { manualTest?: boolean },
@@ -556,6 +668,36 @@ serve(async (req) => {
   }
 
   const payload = (await req.json().catch(() => ({}))) as ManualTriggerInput;
+  if (payload.mode === "shift_reminder_test") {
+    const auth = await getAuthorizedManualTrigger(req);
+    if (!auth.userId) {
+      return new Response(JSON.stringify({ error: auth.error ?? "Unauthorized." }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    try {
+      const result = await sendManualShiftReminderTest(auth.userId);
+      return jsonResponse({
+        manual: true,
+        reminder_sent: result.sent,
+        reminder_failed: result.failed,
+        reminder_matched: result.matched,
+        sent: result.sent,
+        failed: result.failed,
+        ...(result.error ? { error: result.error } : {}),
+      });
+    } catch (error) {
+      return jsonResponse({
+        manual: true,
+        sent: 0,
+        failed: 0,
+        error: error instanceof Error ? error.message : "Manual shift reminder test failed.",
+      });
+    }
+  }
+
   if (payload.mode === "lead_needed_test") {
     const auth = await getAuthorizedManualTrigger(req);
     if (!auth.allowed) {

@@ -3090,17 +3090,35 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setNotificationLoading(true);
     setNotificationAction("test");
     try {
-      const pushError = await sendVolunteerPush({
-        userId: session.user.id,
-        title: "Test notification",
-        body: "Push is working on this device.",
-        notificationType: "self_test",
-        url: "/?view=notifications",
+      const authHeaders = await getFunctionAuthHeaders();
+      if (!authHeaders) {
+        setNotificationMessage("Unauthorized: missing session token. Please log in again.");
+        return;
+      }
+
+      const { data, error } = await supabase.functions.invoke("send-shift-reminders", {
+        headers: authHeaders,
+        body: { mode: "shift_reminder_test" },
       });
-      if (pushError) {
-        setNotificationMessage(`Test failed: ${pushError}`);
+      if (error) {
+        setNotificationMessage(`Test failed: ${error.message}`);
+        return;
+      }
+      const matched = Number((data as { reminder_matched?: unknown } | null)?.reminder_matched ?? 0);
+      const sent = Number((data as { reminder_sent?: unknown } | null)?.reminder_sent ?? 0);
+      const failureMessage = typeof (data as { error?: unknown } | null)?.error === "string"
+        ? ((data as { error: string }).error)
+        : "";
+      if (matched <= 0) {
+        setNotificationMessage("No upcoming active shifts were found to test.");
+        return;
+      }
+      if (sent > 0) {
+        setNotificationMessage("Shift reminder test sent.");
+      } else if (failureMessage) {
+        setNotificationMessage(failureMessage);
       } else {
-        setNotificationMessage("Test push sent.");
+        setNotificationMessage("Shift reminder test ran, but no push subscription was available.");
       }
     } finally {
       setNotificationLoading(false);
@@ -7227,7 +7245,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     onClick={() => void handleTestNotification()}
                     disabled={notificationLoading}
                   >
-                    {notificationAction === "test" ? "Sending..." : "Test push"}
+                    {notificationAction === "test" ? "Sending..." : "Test shift reminder"}
                   </button>
                   {(profile?.role === "Admin" || profile?.role === "Lead") ? (
                     <button
