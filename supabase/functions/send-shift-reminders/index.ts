@@ -19,9 +19,7 @@ const hasPushConfig = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
 const supabaseAdmin = hasSupabaseConfig
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
   : null;
-if (hasPushConfig) {
-  webpush.setVapidDetails("mailto:notifications@cokittyvolunteers.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-}
+let pushConfigured = false;
 
 type NotificationSettings = Record<string, boolean> | null | undefined;
 
@@ -219,6 +217,10 @@ async function sendPushToSubscriptions({
   }
   if (!hasPushConfig) {
     throw new Error("Missing VAPID key configuration.");
+  }
+  if (!pushConfigured) {
+    webpush.setVapidDetails("mailto:notifications@cokittyvolunteers.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    pushConfigured = true;
   }
   let sent = 0;
   let failed = 0;

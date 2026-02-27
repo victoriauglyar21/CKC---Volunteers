@@ -720,6 +720,29 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const rangeEndExclusive = addDays(rangeEnd, 1);
     const rangeStartDate = getDateKey(rangeStart);
     const rangeEndDate = getDateKey(rangeEndExclusive);
+    const sortedTemplateIds = Array.from(visibleTemplateIds).sort();
+    const assignmentCacheKey = `weekAssignments:${session.user.id}:${rangeStartDate}:${rangeEndDate}:${sortedTemplateIds.join(",")}`;
+
+    if (typeof window !== "undefined") {
+      const cachedValue = window.localStorage.getItem(assignmentCacheKey);
+      if (cachedValue) {
+        try {
+          const parsed = JSON.parse(cachedValue) as Record<string, ShiftAssignmentDetail[]>;
+          const cachedMap: Record<number, ShiftAssignmentDetail[]> = {};
+          visibleShiftKeys.forEach((instanceId, slotKey) => {
+            const cachedAssignments = parsed[slotKey];
+            if (cachedAssignments?.length) {
+              cachedMap[instanceId] = cachedAssignments;
+            }
+          });
+          if (Object.keys(cachedMap).length > 0) {
+            setWeekAssignments(cachedMap);
+          }
+        } catch {
+          // Ignore invalid cached payloads and continue with live fetch.
+        }
+      }
+    }
 
     let eligibleInstanceIds = new Set<number>();
     const realInstanceIdToVisibleInstanceId = new Map<number, number>();
@@ -800,7 +823,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     const map: Record<number, ShiftAssignmentDetail[]> = {};
-    let droppedAssignments = 0;
+    const cacheMap: Record<string, ShiftAssignmentDetail[]> = {};
     allAssignments.forEach((rawAssignment) => {
       const rawShiftInstanceId =
         (rawAssignment as ShiftAssignmentDetail & { shift_instance_id?: number | null }).shift_instance_id ?? null;
@@ -847,14 +870,28 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         }
       }
       if (!targetInstanceId) {
-        droppedAssignments += 1;
         return;
       }
       if (!map[targetInstanceId]) map[targetInstanceId] = [];
       map[targetInstanceId].push(normalizedAssignment);
+
+      const templateId = normalizedAssignment.shift_instance?.template?.id ?? null;
+      const dayKey =
+        normalizedAssignment.shift_instance?.shift_date ??
+        (normalizedAssignment.shift_instance?.starts_at
+          ? getDateKey(new Date(normalizedAssignment.shift_instance.starts_at))
+          : null);
+      if (templateId && dayKey) {
+        const slotKey = `${templateId}-${dayKey}`;
+        if (!cacheMap[slotKey]) cacheMap[slotKey] = [];
+        cacheMap[slotKey].push(normalizedAssignment);
+      }
     });
 
     setWeekAssignments(map);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(assignmentCacheKey, JSON.stringify(cacheMap));
+    }
   }, [instanceShifts]);
 
   const fetchWeekAppointments = useCallback(async () => {
