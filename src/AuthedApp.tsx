@@ -36,7 +36,6 @@ import {
   fetchNotificationsData,
 } from "./authedApp/services/notificationService";
 import {
-  getFunctionAuthHeaders,
   notifyActiveMembersOnShiftInstance,
   notifyLeadsOnShiftInstance,
   sendAdminPush,
@@ -255,11 +254,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [profileSaveLoading, setProfileSaveLoading] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationLoading, setNotificationLoading] = useState(false);
-  const [notificationAction, setNotificationAction] = useState<
-    "enable" | "disable" | "test" | "lead-needed-test" | null
-  >(
-    null,
-  );
+  const [notificationAction, setNotificationAction] = useState<"enable" | "disable" | null>(null);
   const [pendingNotificationUrlAction, setPendingNotificationUrlAction] = useState<{
     action: "approve" | "deny";
     assignmentId: string;
@@ -3124,126 +3119,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     await handleDisableNotifications();
   };
 
-  const handleTestNotification = async () => {
-    setNotificationMessage("");
-    setNotificationLoading(true);
-    setNotificationAction("test");
-    try {
-      const authHeaders = await getFunctionAuthHeaders();
-      if (!authHeaders) {
-        setNotificationMessage("Unauthorized: missing session token. Please log in again.");
-        return;
-      }
-
-      const { data, error } = await supabase.functions.invoke("send-shift-reminders", {
-        headers: authHeaders,
-        body: { mode: "shift_reminder_test" },
-      });
-      if (error) {
-        const errorContext = (error as { context?: { status?: number; statusText?: string; text?: () => Promise<string> } })
-          .context;
-        if (errorContext) {
-          let details = "";
-          try {
-            if (typeof errorContext.text === "function") {
-              details = (await errorContext.text()).trim();
-            }
-          } catch {
-            // Ignore response body parse issues and fall back to the function error message.
-          }
-          const statusPart =
-            typeof errorContext.status === "number"
-              ? `${errorContext.status}${errorContext.statusText ? ` ${errorContext.statusText}` : ""}`
-              : "";
-          const detailPart = details || error.message;
-          setNotificationMessage(`Test failed: ${[statusPart, detailPart].filter(Boolean).join(": ")}`);
-        } else {
-          setNotificationMessage(`Test failed: ${error.message}`);
-        }
-        return;
-      }
-      const matched = Number((data as { reminder_matched?: unknown } | null)?.reminder_matched ?? 0);
-      const sent = Number((data as { reminder_sent?: unknown } | null)?.reminder_sent ?? 0);
-      const failureMessage = typeof (data as { error?: unknown } | null)?.error === "string"
-        ? ((data as { error: string }).error)
-        : "";
-      if (matched <= 0) {
-        setNotificationMessage("No upcoming active shifts were found to test.");
-        return;
-      }
-      if (sent > 0) {
-        setNotificationMessage("Shift reminder test sent.");
-      } else if (failureMessage) {
-        setNotificationMessage(failureMessage);
-      } else {
-        setNotificationMessage("Shift reminder test ran, but no push subscription was available.");
-      }
-    } finally {
-      setNotificationLoading(false);
-      setNotificationAction(null);
-    }
-  };
-
-  const handleLeadNeededTestNotification = async () => {
-    setNotificationMessage("");
-    setNotificationLoading(true);
-    setNotificationAction("lead-needed-test");
-    try {
-      const authHeaders = await getFunctionAuthHeaders();
-      if (!authHeaders) {
-        setNotificationMessage("Unauthorized: missing session token. Please log in again.");
-        return;
-      }
-
-      const { data, error } = await supabase.functions.invoke("send-shift-reminders", {
-        headers: authHeaders,
-        body: { mode: "lead_needed_test" },
-      });
-      if (error) {
-        const errorContext = (error as { context?: { status?: number; statusText?: string; text?: () => Promise<string> } })
-          .context;
-        if (errorContext) {
-          let details = "";
-          try {
-            if (typeof errorContext.text === "function") {
-              details = (await errorContext.text()).trim();
-            }
-          } catch {
-            // Ignore response body parse issues and fall back to the function error message.
-          }
-          const statusPart =
-            typeof errorContext.status === "number"
-              ? `${errorContext.status}${errorContext.statusText ? ` ${errorContext.statusText}` : ""}`
-              : "";
-          const detailPart = details || error.message;
-          setNotificationMessage([statusPart, detailPart].filter(Boolean).join(": "));
-        } else {
-          setNotificationMessage(error.message);
-        }
-        return;
-      }
-      const matched = Number((data as { lead_needed_matched?: unknown } | null)?.lead_needed_matched ?? 0);
-      const sent = Number((data as { lead_needed_sent?: unknown } | null)?.lead_needed_sent ?? 0);
-      if (matched <= 0) {
-        setNotificationMessage("No uncovered lead shifts were found for tomorrow.");
-        return;
-      }
-      setNotificationMessage(
-        sent > 0
-          ? `Lead-needed test sent for ${matched} shift${matched === 1 ? "" : "s"}.`
-          : `Lead-needed test ran for ${matched} shift${matched === 1 ? "" : "s"}, but no push subscriptions were available.`,
-      );
-      await fetchNotifications();
-    } catch (error) {
-      setNotificationMessage(
-        error instanceof Error ? error.message : "Unable to run lead-needed test.",
-      );
-    } finally {
-      setNotificationLoading(false);
-      setNotificationAction(null);
-    }
-  };
-
   const toShiftDateTimeIso = useCallback(
     (shift: ShiftInstance, timeValue: string) => {
       if (!timeValue) return null;
@@ -4142,9 +4017,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   const getTodayShiftScrollPreference = () => {
     const hour = new Date().getHours();
-    if (hour < 9) return "morning" as const;
-    if (hour >= 11) return "evening" as const;
-    return null;
+    return hour < 11 ? ("morning" as const) : ("evening" as const);
   };
 
   const scrollDayCardToShiftSection = (
@@ -7295,28 +7168,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       <span className="notification-switch-thumb" />
                     </span>
                   </label>
-                </div>
-                <div className="modal-row notification-controls-row">
-                  <button
-                    className="nav-button"
-                    type="button"
-                    onClick={() => void handleTestNotification()}
-                    disabled={notificationLoading}
-                  >
-                    {notificationAction === "test" ? "Sending..." : "Test shift reminder"}
-                  </button>
-                  {(profile?.role === "Admin" || profile?.role === "Lead") ? (
-                    <button
-                      className="account-button"
-                      type="button"
-                      onClick={() => void handleLeadNeededTestNotification()}
-                      disabled={notificationLoading}
-                    >
-                      {notificationAction === "lead-needed-test"
-                        ? "Checking..."
-                        : "Test lead-needed alert"}
-                    </button>
-                  ) : null}
                 </div>
                 {notificationMessage ? (
                   <div className="error-banner">{notificationMessage}</div>
