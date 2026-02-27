@@ -3115,7 +3115,26 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         body: { mode: "shift_reminder_test" },
       });
       if (error) {
-        setNotificationMessage(`Test failed: ${error.message}`);
+        const errorContext = (error as { context?: { status?: number; statusText?: string; text?: () => Promise<string> } })
+          .context;
+        if (errorContext) {
+          let details = "";
+          try {
+            if (typeof errorContext.text === "function") {
+              details = (await errorContext.text()).trim();
+            }
+          } catch {
+            // Ignore response body parse issues and fall back to the function error message.
+          }
+          const statusPart =
+            typeof errorContext.status === "number"
+              ? `${errorContext.status}${errorContext.statusText ? ` ${errorContext.statusText}` : ""}`
+              : "";
+          const detailPart = details || error.message;
+          setNotificationMessage(`Test failed: ${[statusPart, detailPart].filter(Boolean).join(": ")}`);
+        } else {
+          setNotificationMessage(`Test failed: ${error.message}`);
+        }
         return;
       }
       const matched = Number((data as { reminder_matched?: unknown } | null)?.reminder_matched ?? 0);

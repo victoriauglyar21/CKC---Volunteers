@@ -146,14 +146,14 @@ async function recordNotificationSend({
   throw error;
 }
 
-async function getAuthorizedManualTrigger(req: Request) {
+async function getManualTriggerUser(req: Request) {
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.replace("Bearer ", "").trim();
-  if (!token) return { allowed: false, error: "Missing auth token." };
+  if (!token) return { allowed: false, error: "Missing auth token.", userId: null, role: "", email: "" };
 
   const { data, error } = await supabaseAdmin.auth.getUser(token);
   if (error || !data.user) {
-    return { allowed: false, error: "Unauthorized." };
+    return { allowed: false, error: "Unauthorized.", userId: null, role: "", email: "" };
   }
 
   const { data: profile } = await supabaseAdmin
@@ -164,14 +164,12 @@ async function getAuthorizedManualTrigger(req: Request) {
 
   const role = (profile?.role ?? "").trim().toLowerCase();
   const email = (data.user.email ?? "").trim().toLowerCase();
-  const allowed = role === "admin" || role === "lead" || email === PRIMARY_ADMIN_EMAIL;
-
   return {
-    allowed,
     userId: data.user.id,
     role,
     email,
-    error: allowed ? null : "Forbidden.",
+    allowed: true,
+    error: null,
   };
 }
 
@@ -669,7 +667,7 @@ serve(async (req) => {
 
   const payload = (await req.json().catch(() => ({}))) as ManualTriggerInput;
   if (payload.mode === "shift_reminder_test") {
-    const auth = await getAuthorizedManualTrigger(req);
+    const auth = await getManualTriggerUser(req);
     if (!auth.userId) {
       return new Response(JSON.stringify({ error: auth.error ?? "Unauthorized." }), {
         status: 401,
@@ -699,10 +697,17 @@ serve(async (req) => {
   }
 
   if (payload.mode === "lead_needed_test") {
-    const auth = await getAuthorizedManualTrigger(req);
-    if (!auth.allowed) {
+    const auth = await getManualTriggerUser(req);
+    const isPrivileged = auth.role === "admin" || auth.role === "lead" || auth.email === PRIMARY_ADMIN_EMAIL;
+    if (!auth.userId) {
+      return new Response(JSON.stringify({ error: auth.error ?? "Unauthorized." }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (!isPrivileged) {
       return new Response(JSON.stringify({ error: auth.error }), {
-        status: auth.error === "Forbidden." ? 403 : 401,
+        status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
