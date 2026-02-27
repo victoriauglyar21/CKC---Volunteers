@@ -1895,6 +1895,16 @@ html[data-theme="dark"] .weekday-today {
   transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
+.notification-switch-track.is-off {
+  background: var(--rose-100);
+  border-color: color-mix(in srgb, var(--rose-400) 85%, #0000);
+}
+
+.notification-switch-track.is-on {
+  background: rgba(80, 200, 120, 0.38);
+  border-color: rgba(80, 200, 120, 0.8);
+}
+
 .notification-switch-thumb {
   width: 22px;
   height: 22px;
@@ -1903,11 +1913,6 @@ html[data-theme="dark"] .weekday-today {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
   transform: translateX(0);
   transition: transform 0.2s ease;
-}
-
-.notification-switch-input:checked + .notification-switch-track {
-  background: rgba(80, 200, 120, 0.38);
-  border-color: rgba(80, 200, 120, 0.8);
 }
 
 .notification-switch-input:checked + .notification-switch-track .notification-switch-thumb {

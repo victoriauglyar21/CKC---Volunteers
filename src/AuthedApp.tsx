@@ -108,6 +108,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [today, setToday] = useState(() => startOfDay(new Date()));
   const [templates, setTemplates] = useState<ShiftTemplate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [visibleRealInstanceIdsBySlot, setVisibleRealInstanceIdsBySlot] = useState<Record<string, number>>({});
   const [activeShiftInstanceId, setActiveShiftInstanceId] = useState<number | null>(null);
   const [instanceShifts, setInstanceShifts] = useState<ShiftInstance[]>([]);
   const [weekAssignments, setWeekAssignments] = useState<
@@ -452,6 +453,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
       if (visibleDates.length === 0) {
         setInstanceShifts([]);
+        setVisibleRealInstanceIdsBySlot({});
         return;
       }
 
@@ -542,10 +544,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       if (error || !data) {
         setInstanceShifts([]);
+        setVisibleRealInstanceIdsBySlot({});
         return;
       }
 
       const rows = data as unknown as ShiftInstanceRow[];
+      const visibleRealIdsBySlot: Record<string, number> = {};
+      rows.forEach((row) => {
+        const templateId = row.template?.id ?? "";
+        const dayKey = row.shift_date ?? (row.starts_at ? getDateKey(new Date(row.starts_at)) : "");
+        if (!templateId || !dayKey) return;
+        visibleRealIdsBySlot[`${templateId}-${dayKey}`] = row.id;
+      });
       const shifts = rows
         .map((row) => {
           const startValue = row.starts_at ?? row.shift_date;
@@ -607,6 +617,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         (shift) => !existingKeys.has(`${shift.templateId}-${getDateKey(shift.start)}`),
       );
 
+      setVisibleRealInstanceIdsBySlot(visibleRealIdsBySlot);
       setInstanceShifts(
         [...shifts, ...fallbackShifts].sort((left, right) => {
           const startDiff = left.start.getTime() - right.start.getTime();
@@ -744,34 +755,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
     }
 
-    let eligibleInstanceIds = new Set<number>();
     const realInstanceIdToVisibleInstanceId = new Map<number, number>();
-    if (visibleTemplateIds.size > 0) {
-      const { data: matchingInstances, error: matchingInstancesError } = await supabase
-        .from("shift_instances")
-        .select("id, template_id, shift_date, starts_at")
-        .in("template_id", Array.from(visibleTemplateIds))
-        .or(
-          `starts_at.gte.${rangeStart.toISOString()},starts_at.lt.${rangeEndExclusive.toISOString()},shift_date.gte.${rangeStartDate},shift_date.lt.${rangeEndDate}`,
-        );
-
-      if (matchingInstancesError) {
-        return;
-      }
-
-      (matchingInstances ?? []).forEach((row) => {
-        const dayKey = row.shift_date ?? (row.starts_at ? getDateKey(new Date(row.starts_at)) : null);
-        if (!dayKey) return;
-        const visibleKey = `${row.template_id}-${dayKey}`;
-        const visibleInstanceId = visibleShiftKeys.get(visibleKey);
-        if (!visibleInstanceId) return;
-        const realInstanceId = row.id as number;
-        eligibleInstanceIds.add(realInstanceId);
+    const instanceIds = Array.from(visibleShiftKeys.entries())
+      .map(([slotKey, visibleInstanceId]) => {
+        const realInstanceId = visibleRealInstanceIdsBySlot[slotKey] ?? null;
+        if (!realInstanceId) return null;
         realInstanceIdToVisibleInstanceId.set(realInstanceId, visibleInstanceId);
-      });
-    }
-
-    const instanceIds = Array.from(eligibleInstanceIds).filter((id) => id > 0);
+        return realInstanceId;
+      })
+      .filter((id): id is number => Boolean(id) && id > 0);
     if (instanceIds.length === 0) {
       setWeekAssignments({});
       return;
@@ -892,7 +884,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(assignmentCacheKey, JSON.stringify(cacheMap));
     }
-  }, [instanceShifts]);
+  }, [instanceShifts, session.user.id, visibleRealInstanceIdsBySlot]);
 
   const fetchWeekAppointments = useCallback(async () => {
     if (instanceShifts.length === 0) {
@@ -7296,7 +7288,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       disabled={notificationLoading}
                       aria-label="Toggle push notifications"
                     />
-                    <span className="notification-switch-track" aria-hidden="true">
+                    <span
+                      className={`notification-switch-track ${notificationsEnabled ? "is-on" : "is-off"}`}
+                      aria-hidden="true"
+                    >
                       <span className="notification-switch-thumb" />
                     </span>
                   </label>
