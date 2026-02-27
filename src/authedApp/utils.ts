@@ -12,6 +12,7 @@ import type {
   AppointmentKind,
   CalendarCell,
   DropDayLeadAssignment,
+  LeadNeededNotificationItem,
   ShiftAssignmentDetail,
   ShiftInstance,
   ShiftTemplate,
@@ -62,10 +63,16 @@ function isAppointmentNotificationItem(item: AppNotificationItem): item is Appoi
   return "notification_kind" in item && item.notification_kind === "appointment";
 }
 
+function isLeadNeededNotificationItem(item: AppNotificationItem): item is LeadNeededNotificationItem {
+  return "notification_kind" in item && item.notification_kind === "lead_needed";
+}
+
 export function getNotificationSortTimestamp(item: AppNotificationItem) {
   const value = isAppointmentNotificationItem(item)
     ? item.updated_at ?? item.created_at ?? ""
-    : item.dropped_at ?? item.created_at ?? "";
+    : isLeadNeededNotificationItem(item)
+      ? item.created_at ?? ""
+      : item.dropped_at ?? item.created_at ?? "";
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
 }
@@ -74,6 +81,9 @@ export function getNotificationDismissToken(item: AppNotificationItem) {
   if (isAppointmentNotificationItem(item)) {
     const changeMoment = item.updated_at ?? item.created_at ?? "";
     return `appointment:${item.appointment_id}:${changeMoment}`;
+  }
+  if (isLeadNeededNotificationItem(item)) {
+    return `lead-needed:${item.shift_instance_id ?? "unknown"}:${item.notification_type}:${item.created_at ?? ""}`;
   }
   const status = item.status ?? "unknown";
   const changeMoment = item.dropped_at ?? item.created_at ?? "";

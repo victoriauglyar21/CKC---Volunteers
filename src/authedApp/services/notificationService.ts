@@ -1,7 +1,12 @@
 import { supabase } from "../../supabaseClient";
 import { ADMIN_DROPPED_NOTIFICATION_WINDOW_MS, APPOINTMENT_NOTIFICATION_WINDOW_MS } from "../constants";
 import { getNotificationDismissToken, getNotificationSortTimestamp } from "../utils";
-import type { AppNotificationItem, AppointmentNotificationItem, ShiftAssignmentDetail } from "../types";
+import type {
+  AppNotificationItem,
+  AppointmentNotificationItem,
+  LeadNeededNotificationItem,
+  ShiftAssignmentDetail,
+} from "../types";
 
 const NOTIFICATION_SELECT = `
   id,
@@ -39,6 +44,23 @@ const APPOINTMENT_NOTIFICATION_SELECT = `
   ends_at,
   created_at,
   updated_at,
+  shift_instance:shift_instances (
+    id,
+    shift_date,
+    starts_at,
+    ends_at,
+    template:shift_templates (
+      id,
+      title
+    )
+  )
+`;
+
+const LEAD_NEEDED_NOTIFICATION_SELECT = `
+  id,
+  created_at,
+  notification_type,
+  shift_instance_id,
   shift_instance:shift_instances (
     id,
     shift_date,
@@ -121,7 +143,12 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
     return { items: [] as AppNotificationItem[], error: appointmentError };
   }
 
-  const items = [...assignmentItems, ...appointmentItems].sort(
+  const { items: leadNeededItems, error: leadNeededError } = await fetchLeadNeededNotificationItems(input);
+  if (leadNeededError) {
+    return { items: [] as AppNotificationItem[], error: leadNeededError };
+  }
+
+  const items = [...assignmentItems, ...appointmentItems, ...leadNeededItems].sort(
     (left, right) => getNotificationSortTimestamp(right) - getNotificationSortTimestamp(left),
   );
 
@@ -220,6 +247,56 @@ async function fetchAppointmentNotificationItems(input: FetchNotificationsInput)
       return item;
     })
     .filter((item): item is AppointmentNotificationItem => Boolean(item))
+    .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
+
+  return { items, error: null as string | null };
+}
+
+type LeadNeededNotificationRow = {
+  id: string | number;
+  created_at: string | null;
+  notification_type: "lead_needed" | "lead_needed_test" | null;
+  shift_instance_id: number | null;
+  shift_instance:
+    | LeadNeededNotificationItem["shift_instance"]
+    | LeadNeededNotificationItem["shift_instance"][];
+};
+
+async function fetchLeadNeededNotificationItems(input: FetchNotificationsInput) {
+  if (input.role !== "Lead") {
+    return { items: [] as LeadNeededNotificationItem[], error: null as string | null };
+  }
+
+  const cutoffIso = new Date(Date.now() - APPOINTMENT_NOTIFICATION_WINDOW_MS).toISOString();
+  const { data, error } = await supabase
+    .from("shift_notification_sends")
+    .select(LEAD_NEEDED_NOTIFICATION_SELECT)
+    .in("notification_type", ["lead_needed", "lead_needed_test"])
+    .gte("created_at", cutoffIso)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    return { items: [] as LeadNeededNotificationItem[], error: error.message };
+  }
+
+  const items = ((data as LeadNeededNotificationRow[] | null) ?? [])
+    .map((row): LeadNeededNotificationItem | null => {
+      if (row.notification_type !== "lead_needed" && row.notification_type !== "lead_needed_test") {
+        return null;
+      }
+      const shiftInstance = Array.isArray(row.shift_instance)
+        ? (row.shift_instance[0] ?? null)
+        : (row.shift_instance ?? null);
+      return {
+        notification_kind: "lead_needed",
+        id: `lead-needed:${row.id}`,
+        created_at: row.created_at,
+        notification_type: row.notification_type,
+        shift_instance_id: row.shift_instance_id,
+        shift_instance: shiftInstance,
+      };
+    })
+    .filter((item): item is LeadNeededNotificationItem => Boolean(item))
     .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
 
   return { items, error: null as string | null };

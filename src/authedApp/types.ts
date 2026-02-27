@@ -165,7 +165,28 @@ export type AppointmentNotificationItem = {
   } | null;
 };
 
-export type AppNotificationItem = ShiftAssignmentDetail | AppointmentNotificationItem;
+export type LeadNeededNotificationItem = {
+  notification_kind: "lead_needed";
+  id: string;
+  created_at: string | null;
+  notification_type: "lead_needed" | "lead_needed_test";
+  shift_instance_id: number | null;
+  shift_instance?: {
+    id: number;
+    shift_date: string | null;
+    starts_at: string | null;
+    ends_at: string | null;
+    template?: {
+      id?: string;
+      title: string;
+    } | null;
+  } | null;
+};
+
+export type AppNotificationItem =
+  | ShiftAssignmentDetail
+  | AppointmentNotificationItem
+  | LeadNeededNotificationItem;
 
 export type AppointmentKind = "foster" | "adoption" | "vax" | "orientation" | "other";
 
@@ -206,5 +227,4 @@ export type ShiftInstanceRow = {
 export type AuthedAppProps = {
   session: Session;
   profile: ProfileRecord | null;
-  onInitialCalendarReady?: () => void;
 };

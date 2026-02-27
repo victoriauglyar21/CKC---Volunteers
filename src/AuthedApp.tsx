@@ -50,6 +50,7 @@ import type {
   PersonalAssignment,
   ProfileRecord,
   RecurringAssignment,
+  LeadNeededNotificationItem,
   ShiftAppointment,
   ShiftAssignment,
   ShiftAssignmentDetail,
@@ -102,7 +103,7 @@ import {
   urlBase64ToUint8Array,
 } from "./authedApp/utils";
 
-export default function AuthedApp({ session, profile, onInitialCalendarReady }: AuthedAppProps) {
+export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [today, setToday] = useState(() => startOfDay(new Date()));
   const [templates, setTemplates] = useState<ShiftTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -252,7 +253,9 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
   const [profileSaveLoading, setProfileSaveLoading] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationLoading, setNotificationLoading] = useState(false);
-  const [notificationAction, setNotificationAction] = useState<"enable" | "disable" | "test" | null>(
+  const [notificationAction, setNotificationAction] = useState<
+    "enable" | "disable" | "test" | "lead-needed-test" | null
+  >(
     null,
   );
   const [pendingNotificationUrlAction, setPendingNotificationUrlAction] = useState<{
@@ -286,8 +289,6 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
   const canSeeVolunteerRecurringFlag = isAdminRole(displayProfile?.role);
   const prefersReducedMotion = useReducedMotion();
   const [notificationDeletingIds, setNotificationDeletingIds] = useState<Set<string>>(new Set());
-  const [hasLoadedInitialShiftInstances, setHasLoadedInitialShiftInstances] = useState(false);
-  const initialCalendarReadySentRef = useRef(false);
   const notificationsEnabled = displayProfile?.notification_pref === "push_and_email";
   const notificationPermission =
     typeof window !== "undefined" && "Notification" in window
@@ -399,9 +400,6 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
     let mounted = true;
 
     const fetchShiftInstances = async () => {
-      const markInitialShiftInstancesLoaded = () => {
-        setHasLoadedInitialShiftInstances(true);
-      };
       const rangeAnchorDate =
         calendarRangeMode === "month"
           ? addMonths(today, monthOffset)
@@ -426,7 +424,6 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
       }
       if (visibleDates.length === 0) {
         setInstanceShifts([]);
-        markInitialShiftInstancesLoaded();
         return;
       }
       const rangeStart = visibleDates[0];
@@ -512,7 +509,6 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
 
       if (error || !data) {
         setInstanceShifts([]);
-        markInitialShiftInstancesLoaded();
         return;
       }
 
@@ -603,7 +599,6 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
           return left.title.localeCompare(right.title);
         }),
       );
-      markInitialShiftInstancesLoaded();
     };
 
     fetchShiftInstances();
@@ -612,14 +607,6 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
       mounted = false;
     };
   }, [today, weekOffset, monthOffset, calendarRangeMode, templates, shiftInstancesRefreshToken]);
-
-  useEffect(() => {
-    if (initialCalendarReadySentRef.current) return;
-    if (loading) return;
-    if (!hasLoadedInitialShiftInstances) return;
-    initialCalendarReadySentRef.current = true;
-    onInitialCalendarReady?.();
-  }, [hasLoadedInitialShiftInstances, loading, onInitialCalendarReady]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 600px)");
@@ -1745,6 +1732,17 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
     if (!session.user.id) return;
     const channel = supabase
       .channel(`notifications:${session.user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "shift_notification_sends",
+        },
+        () => {
+          fetchNotifications();
+        },
+      )
       .on(
         "postgres_changes",
         {
@@ -3103,6 +3101,40 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
       } else {
         setNotificationMessage("Test push sent.");
       }
+    } finally {
+      setNotificationLoading(false);
+      setNotificationAction(null);
+    }
+  };
+
+  const handleLeadNeededTestNotification = async () => {
+    setNotificationMessage("");
+    setNotificationLoading(true);
+    setNotificationAction("lead-needed-test");
+    try {
+      const { data, error } = await supabase.functions.invoke("send-shift-reminders", {
+        body: { mode: "lead_needed_test" },
+      });
+      if (error) {
+        setNotificationMessage(error.message);
+        return;
+      }
+      const matched = Number((data as { lead_needed_matched?: unknown } | null)?.lead_needed_matched ?? 0);
+      const sent = Number((data as { lead_needed_sent?: unknown } | null)?.lead_needed_sent ?? 0);
+      if (matched <= 0) {
+        setNotificationMessage("No uncovered lead shifts were found for tomorrow.");
+        return;
+      }
+      setNotificationMessage(
+        sent > 0
+          ? `Lead-needed test sent for ${matched} shift${matched === 1 ? "" : "s"}.`
+          : `Lead-needed test ran for ${matched} shift${matched === 1 ? "" : "s"}, but no push subscriptions were available.`,
+      );
+      await fetchNotifications();
+    } catch (error) {
+      setNotificationMessage(
+        error instanceof Error ? error.message : "Unable to run lead-needed test.",
+      );
     } finally {
       setNotificationLoading(false);
       setNotificationAction(null);
@@ -4640,6 +4672,9 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
   const isAppointmentNotification = (item: AppNotificationItem): item is AppointmentNotificationItem =>
     "notification_kind" in item && item.notification_kind === "appointment";
 
+  const isLeadNeededNotification = (item: AppNotificationItem): item is LeadNeededNotificationItem =>
+    "notification_kind" in item && item.notification_kind === "lead_needed";
+
   return (
     <div className="calendar-shell">
       <header className="calendar-header">
@@ -5925,6 +5960,56 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
                         </>,
                       );
                     }
+                    if (isLeadNeededNotification(request)) {
+                      const shiftInstance = request.shift_instance;
+                      const fallbackNotificationShiftFromQuery =
+                        (shiftInstance?.id ?? request.shift_instance_id ?? null) != null
+                          ? notificationShiftFallbacks[
+                              Number(shiftInstance?.id ?? request.shift_instance_id ?? -1)
+                            ] ?? null
+                          : null;
+                      const fallbackNotificationShiftFromCalendar =
+                        ((shiftInstance?.id ?? request.shift_instance_id ?? null) != null
+                          ? instanceShifts.find(
+                              (shift) =>
+                                shift.instanceId === (shiftInstance?.id ?? request.shift_instance_id ?? -1),
+                            )
+                          : null);
+                      const leadNeededShiftLabel = formatShortShiftRequestLabel(
+                        shiftInstance?.starts_at || shiftInstance?.shift_date
+                          ? shiftInstance
+                          : fallbackNotificationShiftFromQuery
+                            ? fallbackNotificationShiftFromQuery
+                            : fallbackNotificationShiftFromCalendar
+                              ? {
+                                  starts_at: fallbackNotificationShiftFromCalendar.start.toISOString(),
+                                  title: fallbackNotificationShiftFromCalendar.title,
+                                }
+                              : null,
+                      );
+                      const shiftTitle = shiftInstance?.template?.title ?? "Shift";
+                      const shiftTimeLabel = shiftInstance?.starts_at
+                        ? formatDateTime(shiftInstance.starts_at)
+                        : leadNeededShiftLabel;
+                      const notificationTitle =
+                        request.notification_type === "lead_needed_test"
+                          ? "Test lead-needed alert"
+                          : "Lead needed tomorrow";
+
+                      return renderNotificationCard(
+                        request,
+                        index,
+                        isLatest,
+                        <>
+                          {isLatest ? <span className="notification-tag">Latest</span> : null}
+                          <p className="notification-meta">{shiftTimeLabel}</p>
+                          <p className="notification-name">{notificationTitle}</p>
+                          <p className="notification-reason">
+                            {shiftTitle} ({leadNeededShiftLabel})
+                          </p>
+                        </>,
+                      );
+                    }
 
                     const volunteerName =
                       request.volunteer?.preferred_name ||
@@ -7109,6 +7194,26 @@ export default function AuthedApp({ session, profile, onInitialCalendarReady }: 
                   </label>
                 </div>
                 <div className="modal-row notification-controls-row">
+                  <button
+                    className="nav-button"
+                    type="button"
+                    onClick={() => void handleTestNotification()}
+                    disabled={notificationLoading}
+                  >
+                    {notificationAction === "test" ? "Sending..." : "Test push"}
+                  </button>
+                  {(profile?.role === "Admin" || profile?.role === "Lead") ? (
+                    <button
+                      className="account-button"
+                      type="button"
+                      onClick={() => void handleLeadNeededTestNotification()}
+                      disabled={notificationLoading}
+                    >
+                      {notificationAction === "lead-needed-test"
+                        ? "Checking..."
+                        : "Test lead-needed alert"}
+                    </button>
+                  ) : null}
                 </div>
                 {notificationMessage ? (
                   <div className="error-banner">{notificationMessage}</div>

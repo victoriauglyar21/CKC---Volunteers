@@ -29,6 +29,7 @@ export const NOTIFICATION_SETTING_KEYS = [
   "recurring_added",
   "recurring_removed",
   "shift_reminder",
+  "lead_needed",
   "self_test",
 ] as const;
 

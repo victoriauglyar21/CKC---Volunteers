@@ -7,7 +7,6 @@ import AuthedApp from "./AuthedApp";
 import ProfileOnboarding from "./ProfileOnboarding";
 import NewUI from "./NewUI";
 import SplashScreen from "./components/SplashScreen";
-import AppLoader from "./components/AppLoader";
 
 type ThemeMode = "light" | "dark";
 const THEME_STORAGE_KEY = "ui-theme";
@@ -83,7 +82,6 @@ function hasAuthType(targetType: string) {
 }
 
 function MainApp() {
-  const MIN_LOADER_VISIBLE_MS = 850;
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
@@ -91,10 +89,6 @@ function MainApp() {
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [profileMissing, setProfileMissing] = useState(false);
-  const [authedAppInitialReady, setAuthedAppInitialReady] = useState(false);
-  const [showAppLoader, setShowAppLoader] = useState(true);
-  const loaderShownAtRef = useRef<number>(Date.now());
-  const loaderHideTimerRef = useRef<number | null>(null);
   const routePath = typeof window !== "undefined" ? window.location.pathname : "/";
   const isSignupRoute = routePath === "/signup";
   const isCompleteProfileRoute = routePath === "/complete-profile";
@@ -223,10 +217,6 @@ function MainApp() {
     };
   }, [goToCompleteProfile, isCompleteProfileRoute, isSignupRoute, session]);
 
-  useEffect(() => {
-    setAuthedAppInitialReady(false);
-  }, [session?.user?.id]);
-
   const willRenderNewUi =
     !loading &&
     !passwordRecovery &&
@@ -245,43 +235,6 @@ function MainApp() {
     (hasUsableProfile || !profileLoading) &&
     !needsOnboarding &&
     !willRenderNewUi;
-
-  const shouldShowAppLoader =
-    loading ||
-    (!!session && profileLoading && !profile) ||
-    (willRenderAuthedApp && !authedAppInitialReady);
-
-  useEffect(() => {
-    if (loaderHideTimerRef.current !== null) {
-      window.clearTimeout(loaderHideTimerRef.current);
-      loaderHideTimerRef.current = null;
-    }
-
-    if (shouldShowAppLoader) {
-      loaderShownAtRef.current = Date.now();
-      setShowAppLoader(true);
-      return;
-    }
-
-    const elapsed = Date.now() - loaderShownAtRef.current;
-    const remaining = Math.max(0, MIN_LOADER_VISIBLE_MS - elapsed);
-    if (remaining === 0) {
-      setShowAppLoader(false);
-      return;
-    }
-
-    loaderHideTimerRef.current = window.setTimeout(() => {
-      setShowAppLoader(false);
-      loaderHideTimerRef.current = null;
-    }, remaining);
-
-    return () => {
-      if (loaderHideTimerRef.current !== null) {
-        window.clearTimeout(loaderHideTimerRef.current);
-        loaderHideTimerRef.current = null;
-      }
-    };
-  }, [shouldShowAppLoader]);
 
   let content: ReactNode = null;
 
@@ -342,21 +295,10 @@ function MainApp() {
     !needsOnboarding &&
     !content
   ) {
-    content = (
-      <AuthedApp
-        session={session}
-        profile={profile}
-        onInitialCalendarReady={() => setAuthedAppInitialReady(true)}
-      />
-    );
+    content = <AuthedApp session={session} profile={profile} />;
   }
 
-  return (
-    <>
-      {content}
-      <AppLoader visible={showAppLoader} />
-    </>
-  );
+  return content;
 }
 
 export default function App() {
