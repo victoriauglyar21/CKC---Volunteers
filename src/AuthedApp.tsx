@@ -36,6 +36,7 @@ import {
   fetchNotificationsData,
 } from "./authedApp/services/notificationService";
 import {
+  getFunctionAuthHeaders,
   notifyActiveMembersOnShiftInstance,
   notifyLeadsOnShiftInstance,
   sendAdminPush,
@@ -3112,11 +3113,37 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setNotificationLoading(true);
     setNotificationAction("lead-needed-test");
     try {
+      const authHeaders = await getFunctionAuthHeaders();
+      if (!authHeaders) {
+        setNotificationMessage("Unauthorized: missing session token. Please log in again.");
+        return;
+      }
+
       const { data, error } = await supabase.functions.invoke("send-shift-reminders", {
+        headers: authHeaders,
         body: { mode: "lead_needed_test" },
       });
       if (error) {
-        setNotificationMessage(error.message);
+        const errorContext = (error as { context?: { status?: number; statusText?: string; text?: () => Promise<string> } })
+          .context;
+        if (errorContext) {
+          let details = "";
+          try {
+            if (typeof errorContext.text === "function") {
+              details = (await errorContext.text()).trim();
+            }
+          } catch {
+            // Ignore response body parse issues and fall back to the function error message.
+          }
+          const statusPart =
+            typeof errorContext.status === "number"
+              ? `${errorContext.status}${errorContext.statusText ? ` ${errorContext.statusText}` : ""}`
+              : "";
+          const detailPart = details || error.message;
+          setNotificationMessage([statusPart, detailPart].filter(Boolean).join(": "));
+        } else {
+          setNotificationMessage(error.message);
+        }
         return;
       }
       const matched = Number((data as { lead_needed_matched?: unknown } | null)?.lead_needed_matched ?? 0);

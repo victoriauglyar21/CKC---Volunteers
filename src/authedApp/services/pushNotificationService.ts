@@ -3,7 +3,7 @@ import type { NotificationSettingKey } from "../constants";
 import type { DropDayLeadAssignment } from "../types";
 import { getDropAssignmentVolunteerRole, isAdminRole, isLeadAssignmentRole, isLeadRole } from "../utils";
 
-async function getFunctionAuthHeaders() {
+export async function getFunctionAuthHeaders() {
   const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? "";
   let { data } = await supabase.auth.getSession();
   const expiresAt = (data.session?.expires_at ?? 0) * 1000;
