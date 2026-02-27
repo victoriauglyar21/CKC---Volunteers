@@ -14,16 +14,14 @@ const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY") ?? "";
 const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY") ?? "";
 const DEFAULT_SHIFT_TIMEZONE = Deno.env.get("DEFAULT_SHIFT_TIMEZONE") ?? "UTC";
 const PRIMARY_ADMIN_EMAIL = "victoriauglyar21@gmail.com";
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error("Missing Supabase service role configuration.");
+const hasSupabaseConfig = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+const hasPushConfig = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+const supabaseAdmin = hasSupabaseConfig
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  : null;
+if (hasPushConfig) {
+  webpush.setVapidDetails("mailto:notifications@cokittyvolunteers.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 }
-if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-  throw new Error("Missing VAPID key configuration.");
-}
-
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-webpush.setVapidDetails("mailto:notifications@cokittyvolunteers.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
 type NotificationSettings = Record<string, boolean> | null | undefined;
 
@@ -134,6 +132,9 @@ async function recordNotificationSend({
   notificationType: string;
   sendKey: string;
 }) {
+  if (!supabaseAdmin) {
+    throw new Error("Missing Supabase service role configuration.");
+  }
   const { error } = await supabaseAdmin.from("shift_notification_sends").insert({
     shift_instance_id: shiftInstanceId,
     volunteer_id: volunteerId,
@@ -147,6 +148,9 @@ async function recordNotificationSend({
 }
 
 async function getManualTriggerUser(req: Request) {
+  if (!supabaseAdmin) {
+    return { allowed: false, error: "Missing Supabase service role configuration.", userId: null, role: "", email: "" };
+  }
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.replace("Bearer ", "").trim();
   if (!token) return { allowed: false, error: "Missing auth token.", userId: null, role: "", email: "" };
@@ -174,6 +178,9 @@ async function getManualTriggerUser(req: Request) {
 }
 
 async function fetchSubscriptionsForUsers(userIds: string[]) {
+  if (!supabaseAdmin) {
+    throw new Error("Missing Supabase service role configuration.");
+  }
   if (userIds.length === 0) return new Map<string, PushSubscriptionRow[]>();
 
   const { data: subs, error } = await supabaseAdmin
@@ -207,6 +214,12 @@ async function sendPushToSubscriptions({
   body: string;
   url?: string;
 }) {
+  if (!supabaseAdmin) {
+    throw new Error("Missing Supabase service role configuration.");
+  }
+  if (!hasPushConfig) {
+    throw new Error("Missing VAPID key configuration.");
+  }
   let sent = 0;
   let failed = 0;
 
@@ -663,6 +676,13 @@ async function sendLeadNeededAlerts(
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
+  }
+
+  if (!hasSupabaseConfig) {
+    return new Response(JSON.stringify({ error: "Missing Supabase service role configuration." }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 
   const payload = (await req.json().catch(() => ({}))) as ManualTriggerInput;

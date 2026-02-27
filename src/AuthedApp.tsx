@@ -717,16 +717,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       visibleShiftKeys.set(`${shift.templateId}-${getDateKey(shift.start)}`, shift.instanceId);
     });
 
-    const realVisibleInstanceIds = instanceShifts.map((shift) => shift.instanceId).filter((id) => id > 0);
     const rangeEndExclusive = addDays(rangeEnd, 1);
     const rangeStartDate = getDateKey(rangeStart);
     const rangeEndDate = getDateKey(rangeEndExclusive);
 
-    let eligibleInstanceIds = new Set<number>(realVisibleInstanceIds);
+    let eligibleInstanceIds = new Set<number>();
     const realInstanceIdToVisibleInstanceId = new Map<number, number>();
-    realVisibleInstanceIds.forEach((id) => {
-      realInstanceIdToVisibleInstanceId.set(id, id);
-    });
     if (visibleTemplateIds.size > 0) {
       const { data: matchingInstances, error: matchingInstancesError } = await supabase
         .from("shift_instances")
