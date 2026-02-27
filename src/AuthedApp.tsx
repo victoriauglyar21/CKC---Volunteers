@@ -401,6 +401,33 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     let mounted = true;
 
     const fetchShiftInstances = async () => {
+      const buildFallbackShifts = () => {
+        const fallback: ShiftInstance[] = [];
+        visibleDates.forEach((day) => {
+          const dayKey = getDateKey(day);
+          templates.forEach((template) => {
+            if (template.is_active === false) return;
+            const startIso = toIsoForDateAndTime(day, resolveTemplateStartTime(template));
+            const endIso = toIsoForDateAndTime(day, resolveTemplateEndTime(template));
+            if (!startIso || !endIso) return;
+            fallback.push({
+              id: `virtual-${template.id}-${dayKey}`,
+              instanceId: buildVirtualInstanceId(template.id, dayKey),
+              title: template.title,
+              start: new Date(startIso),
+              end: new Date(endIso),
+              templateId: template.id,
+              isVirtual: true,
+            });
+          });
+        });
+        return fallback.sort((left, right) => {
+          const startDiff = left.start.getTime() - right.start.getTime();
+          if (startDiff !== 0) return startDiff;
+          return left.title.localeCompare(right.title);
+        });
+      };
+
       const rangeAnchorDate =
         calendarRangeMode === "month"
           ? addMonths(today, monthOffset)
@@ -427,6 +454,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         setInstanceShifts([]);
         return;
       }
+
+      if (templates.length > 0) {
+        setInstanceShifts(buildFallbackShifts());
+      }
+
       const rangeStart = visibleDates[0];
       const lastVisibleDate = visibleDates[visibleDates.length - 1];
       const rangeEndExclusive = addDays(lastVisibleDate, 1);
@@ -571,27 +603,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           .filter((shift) => Boolean(shift.templateId))
           .map((shift) => `${shift.templateId}-${getDateKey(shift.start)}`),
       );
-      const fallbackShifts: ShiftInstance[] = [];
-      visibleDates.forEach((day) => {
-        const dayKey = getDateKey(day);
-        templates.forEach((template) => {
-          if (template.is_active === false) return;
-          const key = `${template.id}-${dayKey}`;
-          if (existingKeys.has(key)) return;
-          const startIso = toIsoForDateAndTime(day, resolveTemplateStartTime(template));
-          const endIso = toIsoForDateAndTime(day, resolveTemplateEndTime(template));
-          if (!startIso || !endIso) return;
-          fallbackShifts.push({
-            id: `virtual-${template.id}-${dayKey}`,
-            instanceId: buildVirtualInstanceId(template.id, dayKey),
-            title: template.title,
-            start: new Date(startIso),
-            end: new Date(endIso),
-            templateId: template.id,
-            isVirtual: true,
-          });
-        });
-      });
+      const fallbackShifts = buildFallbackShifts().filter(
+        (shift) => !existingKeys.has(`${shift.templateId}-${getDateKey(shift.start)}`),
+      );
 
       setInstanceShifts(
         [...shifts, ...fallbackShifts].sort((left, right) => {
@@ -855,7 +869,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     setAppointmentsLoading(true);
-    const instanceIds = instanceShifts.map((shift) => shift.instanceId);
+    const instanceIds = instanceShifts.map((shift) => shift.instanceId).filter((id) => id > 0);
     const { data, error } = await fetchWeekAppointmentsByInstanceIds(instanceIds);
 
     if (error) {
@@ -4899,9 +4913,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         </div>
       </header>
 
-      {loading ? (
-        <div className="loading-banner">Loading templates…</div>
-      ) : null}
       {showEmptyState ? (
         <div className="error-banner">No active shift templates</div>
       ) : null}
