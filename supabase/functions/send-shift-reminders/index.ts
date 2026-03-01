@@ -14,6 +14,8 @@ const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY") ?? "";
 const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY") ?? "";
 const DEFAULT_SHIFT_TIMEZONE = Deno.env.get("DEFAULT_SHIFT_TIMEZONE") ?? "UTC";
 const PRIMARY_ADMIN_EMAIL = "victoriauglyar21@gmail.com";
+const SHIFT_REMINDERS_ENABLED = false;
+const LEAD_NEEDED_ALERTS_ENABLED = false;
 const hasSupabaseConfig = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
 const hasPushConfig = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
 const supabaseAdmin = hasSupabaseConfig
@@ -261,6 +263,10 @@ async function sendPushToSubscriptions({
 }
 
 async function sendUpcomingShiftReminders(now: Date) {
+  if (!SHIFT_REMINDERS_ENABLED) {
+    return { sent: 0, failed: 0, matched: 0 };
+  }
+
   const start = new Date(now.getTime() + 60 * 60 * 1000);
   const end = new Date(start.getTime() + 5 * 60 * 1000);
 
@@ -399,6 +405,10 @@ async function sendUpcomingShiftReminders(now: Date) {
 }
 
 async function sendManualShiftReminderTest(userId: string) {
+  if (!SHIFT_REMINDERS_ENABLED) {
+    return { sent: 0, failed: 0, matched: 0, error: null };
+  }
+
   const { data: assignments, error } = await supabaseAdmin
     .from("shift_assignments")
     .select(
@@ -510,6 +520,10 @@ async function sendLeadNeededAlerts(
   now: Date,
   options?: { manualTest?: boolean },
 ) {
+  if (!LEAD_NEEDED_ALERTS_ENABLED) {
+    return { sent: 0, failed: 0, matched: 0 };
+  }
+
   const windowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const windowEnd = new Date(now.getTime() + 72 * 60 * 60 * 1000);
 
