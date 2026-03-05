@@ -3388,9 +3388,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
     const volunteerName = volunteer.preferred_name || volunteer.full_name || "A volunteer";
-    const adminName =
-      displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
-    const shiftTitle = assignedShift?.title ?? "Shift";
     const shiftDate = assignedShift
       ? assignedShift.start.toLocaleDateString("en-US", {
           weekday: "long",
@@ -3400,12 +3397,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         })
       : "an upcoming date";
     const shiftTime = assignedShift ? formatTimeRangeFromInstance(assignedShift.start, assignedShift.end) : "—";
+    const shiftNotificationSummary = `${shiftDate} (${shiftTime})`;
     const notificationErrors: string[] = [];
 
     const { error: adminPushError } = await supabase.functions.invoke("send-admin-push", {
       body: {
         title: "Shift added",
-        body: `${volunteerName} is now on (${shiftDate}, ${shiftTime}), ${shiftTitle}.`,
+        body: shiftNotificationSummary,
         url: "/?view=notifications",
       },
     });
@@ -3427,7 +3425,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const pushError = await sendVolunteerPush({
       userId: volunteerId,
       title: "Shift added",
-      body: `${adminName} added you to ${shiftDate}, ${shiftTime}, ${shiftTitle}.`,
+      body: shiftNotificationSummary,
       notificationType: "shift_added",
       shiftInstanceId: assignShiftInstanceId,
     });
