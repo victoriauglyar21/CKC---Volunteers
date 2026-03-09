@@ -4321,7 +4321,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   const runLiveRefresh = useCallback(async () => {
     if (liveRefreshInFlightRef.current) return;
-    if (showMenu || showInfoMenu) return;
+    if (showMenu || showInfoMenu || isAnyModalOpen) return;
     liveRefreshInFlightRef.current = true;
     try {
       if (showNotifications) {
@@ -4346,6 +4346,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     fetchNotifications,
     showMenu,
     showInfoMenu,
+    isAnyModalOpen,
     showNotifications,
   ]);
 
@@ -4359,17 +4360,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       void runLiveRefresh();
     };
 
-    const intervalId = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      void runLiveRefresh();
-    }, 15000);
-
     window.addEventListener("focus", handleVisibleRefresh);
     document.addEventListener("visibilitychange", handleVisibleRefresh);
     window.addEventListener("online", handleOnlineRefresh);
 
     return () => {
-      window.clearInterval(intervalId);
       window.removeEventListener("focus", handleVisibleRefresh);
       document.removeEventListener("visibilitychange", handleVisibleRefresh);
       window.removeEventListener("online", handleOnlineRefresh);
