@@ -123,8 +123,6 @@ export type ShiftAssignment = {
     template: {
       id: string;
       title: string;
-      start_time?: string | null;
-      end_time?: string | null;
     } | null;
   } | null;
 };

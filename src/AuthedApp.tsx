@@ -1183,9 +1183,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           notes,
           template:shift_templates (
             id,
-            title,
-            start_time,
-            end_time
+            title
           )
         )
       `,
@@ -5247,8 +5245,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           ? "Morning Shift"
                           : title;
                       const dateText = formatDateWithWeekday(shift.shift_date ?? shift.starts_at);
-                      const templateStartTime = shift.template?.start_time;
-                      const templateEndTime = shift.template?.end_time;
+                      const templateForShift = shift.template?.id ? templateMap[shift.template.id] : undefined;
+                      const templateStartTime = templateForShift
+                        ? resolveTemplateStartTime(templateForShift)
+                        : null;
+                      const templateEndTime = templateForShift ? resolveTemplateEndTime(templateForShift) : null;
                       const timeText = templateStartTime
                         ? `${formatTemplateTime(templateStartTime)}${
                             templateEndTime ? ` — ${formatTemplateTime(templateEndTime)}` : ""
