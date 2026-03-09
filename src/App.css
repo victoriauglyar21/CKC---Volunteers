@@ -467,6 +467,13 @@ html[data-theme="dark"] {
   border-color: var(--rose-400);
 }
 
+.account-link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .jump-today {
   align-self: flex-start;
 }

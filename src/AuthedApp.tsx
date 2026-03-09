@@ -318,6 +318,40 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     ],
     [],
   );
+  const reportIssueGmailComposeUrl = useMemo(() => {
+    const reporter =
+      displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "Volunteer";
+    const page =
+      typeof window !== "undefined"
+        ? `${window.location.pathname}${window.location.search}${window.location.hash}`
+        : "/";
+    const subject = encodeURIComponent("CKC Volunteers bug/issues report");
+    const body = encodeURIComponent(
+      [
+        "Hi,",
+        "",
+        "I found a bug/issue:",
+        "",
+        "Steps to reproduce:",
+        "1. ",
+        "2. ",
+        "",
+        "Expected result:",
+        "",
+        "Actual result:",
+        "",
+        `Reporter: ${reporter}`,
+        `Page: ${page}`,
+      ].join("\n"),
+    );
+    return `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
+      PRIMARY_ADMIN_EMAIL,
+    )}&su=${subject}&body=${body}`;
+  }, [displayProfile?.preferred_name, displayProfile?.full_name, session.user.email]);
+  const handleReportIssueClick = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.open(reportIssueGmailComposeUrl, "_blank", "noopener,noreferrer");
+  }, [reportIssueGmailComposeUrl]);
   const dismissedStorageKey = `notificationsDismissed:${session.user.id}`;
   const isAnyModalOpen =
     showMyShifts ||
@@ -7302,6 +7336,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     <span>{formatDate(displayProfile?.joined_at)}</span>
                   )}
                 </div>
+              </div>
+              <div className="account-section">
+                <div className="account-section-header">
+                  <p className="account-section-title">Support</p>
+                </div>
+                <button className="account-button account-link-button" type="button" onClick={handleReportIssueClick}>
+                  Report bug/issues
+                </button>
               </div>
             </div>
           </div>
