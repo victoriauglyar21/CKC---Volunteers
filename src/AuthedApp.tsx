@@ -1167,6 +1167,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setAssignmentsMessage("");
     const rangeStart = getWeekStart(startOfDay(new Date()), true);
     const rangeEnd = addDays(rangeStart, 7);
+    const rangeStartDate = getDateKey(rangeStart);
+    const rangeEndDate = getDateKey(rangeEnd);
 
     const { data, error } = await supabase
       .from("shift_assignments")
@@ -1189,7 +1191,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       `,
       )
       .eq("volunteer_id", session.user.id)
-      .in("status", ["active", "pending"])
+      .eq("status", "active")
+      .or(
+        `starts_at.gte.${rangeStart.toISOString()},starts_at.lt.${rangeEnd.toISOString()},shift_date.gte.${rangeStartDate},shift_date.lt.${rangeEndDate}`,
+        { foreignTable: "shift_instances" },
+      )
       .order("starts_at", { ascending: true, foreignTable: "shift_instances" });
 
     if (!data || error) {
@@ -2099,6 +2105,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const showEmptyState = !loading && templates.length === 0;
   const assignmentsForDisplay = assignments.filter(
     (assignment) =>
+      assignment.status === "active" &&
       assignment.shift_instance &&
       (assignment.shift_instance.starts_at || assignment.shift_instance.shift_date),
   );
