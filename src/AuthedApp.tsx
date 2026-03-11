@@ -487,7 +487,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
 
       if (templates.length > 0) {
-        setInstanceShifts(buildFallbackShifts());
+        setInstanceShifts((previous) => {
+          // Keep the current visible shifts during background refreshes so assignment
+          // cards do not disappear while real instance rows are reloaded.
+          if (previous.length > 0) return previous;
+          return buildFallbackShifts();
+        });
       }
 
       const rangeStart = visibleDates[0];
@@ -674,8 +679,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, []);
 
   useEffect(() => {
+    let ticking = false;
     const onScroll = () => {
-      setShowFloatingViewToggle(window.scrollY > 220);
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(() => {
+        ticking = false;
+        const shouldShow = window.scrollY > 220;
+        setShowFloatingViewToggle((current) => (current === shouldShow ? current : shouldShow));
+      });
     };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });

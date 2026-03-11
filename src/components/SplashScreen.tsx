@@ -46,14 +46,14 @@ export default function SplashScreen() {
       className="fixed inset-0 z-50 flex items-center justify-center bg-[#fcf0eb]"
       initial={{ opacity: 1 }}
       animate={{ opacity: [1, 1, 0] }}
-      transition={{ duration: 3.4, times: [0, 3.0 / 3.4, 1], ease: "easeInOut" }}
+      transition={{ duration: 0.9, times: [0, 0.72, 1], ease: "easeInOut" }}
     >
       <div className="relative h-full w-full overflow-hidden">
         <motion.div
           className="absolute inset-0 bg-[radial-gradient(circle_at_top,_#fae7df_0%,_#fcf0eb_55%,_#f8e1d4_100%)]"
           initial={{ x: 0, y: 0 }}
-          animate={{ x: [0, 3, 0], y: [0, -2, 0] }}
-          transition={{ duration: 2.8, ease: "easeInOut" }}
+          animate={{ opacity: [0.96, 1, 0.98] }}
+          transition={{ duration: 0.75, ease: "easeInOut" }}
         >
           {pawPrints.map((paw, index) => (
             <motion.div
@@ -62,7 +62,7 @@ export default function SplashScreen() {
               style={{ left: paw.left, top: paw.top }}
               initial={{ opacity: 0, scale: 0.85, y: 8 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              transition={{ duration: 0.28, delay: index * 0.09, ease: "easeOut" }}
+              transition={{ duration: 0.18, delay: index * 0.02, ease: "easeOut" }}
             >
               <div
                 style={{
@@ -80,7 +80,7 @@ export default function SplashScreen() {
             className="mt-4 rounded-3xl bg-[#fcf0eb]/95 px-6 py-5 shadow-xl ring-1 ring-[#cc9f8c]"
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 1.9, duration: 0.25, ease: "easeOut" }}
+            transition={{ delay: 0.2, duration: 0.18, ease: "easeOut" }}
           >
             <motion.img
               src="/pwa-512.png"
@@ -88,14 +88,14 @@ export default function SplashScreen() {
               className="mx-auto h-24 w-24 drop-shadow-sm sm:h-28 sm:w-28"
               initial={{ opacity: 0, scale: 0.85, y: 8 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              transition={{ delay: 1.95, type: "spring", stiffness: 170, damping: 18 }}
+              transition={{ delay: 0.24, type: "spring", stiffness: 170, damping: 18 }}
             />
 
             <motion.div
               className="mt-4 text-[#2f2018]"
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 2.1, duration: 0.45, ease: "easeOut" }}
+              transition={{ delay: 0.3, duration: 0.22, ease: "easeOut" }}
             >
               <p className="text-6xl font-black tracking-tight [text-shadow:0_1px_8px_rgba(229,193,176,0.65)] sm:text-7xl">
                 Colorado Kitty Coalition

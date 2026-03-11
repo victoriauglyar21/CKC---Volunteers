@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import "./App.css";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
 import { signOutSafely, supabase } from "./supabaseClient";
-import Auth from "./Auth";
-import AuthedApp from "./AuthedApp";
-import ProfileOnboarding from "./ProfileOnboarding";
-import NewUI from "./NewUI";
 import SplashScreen from "./components/SplashScreen";
+import AppLoader from "./components/AppLoader";
+
+const Auth = lazy(() => import("./Auth"));
+const AuthedApp = lazy(() => import("./AuthedApp"));
+const ProfileOnboarding = lazy(() => import("./ProfileOnboarding"));
+const NewUI = lazy(() => import("./NewUI"));
 
 type ThemeMode = "light" | "dark";
 const THEME_STORAGE_KEY = "ui-theme";
@@ -307,6 +309,7 @@ export default function App() {
   const hadSessionOnBootRef = useRef(false);
   const authReadyRef = useRef(false);
   const splashTimerRef = useRef<number | null>(null);
+  const splashShownAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -318,13 +321,33 @@ export default function App() {
   useEffect(() => {
     const runSplash = () => {
       setShowSplash(true);
+      splashShownAtRef.current = performance.now();
       if (splashTimerRef.current !== null) {
         window.clearTimeout(splashTimerRef.current);
       }
       splashTimerRef.current = window.setTimeout(() => {
         setShowSplash(false);
         splashTimerRef.current = null;
-      }, 3400);
+        splashShownAtRef.current = null;
+      }, 900);
+    };
+
+    const clearSplashSoon = () => {
+      if (splashShownAtRef.current === null) {
+        setShowSplash(false);
+        return;
+      }
+
+      const elapsedMs = performance.now() - splashShownAtRef.current;
+      const remainingMs = Math.max(0, 450 - elapsedMs);
+      if (splashTimerRef.current !== null) {
+        window.clearTimeout(splashTimerRef.current);
+      }
+      splashTimerRef.current = window.setTimeout(() => {
+        setShowSplash(false);
+        splashTimerRef.current = null;
+        splashShownAtRef.current = null;
+      }, remainingMs);
     };
 
     supabase.auth.getSession().then(({ data }) => {
@@ -342,6 +365,7 @@ export default function App() {
           window.clearTimeout(splashTimerRef.current);
           splashTimerRef.current = null;
         }
+        splashShownAtRef.current = null;
         return;
       }
 
@@ -351,6 +375,10 @@ export default function App() {
         }
         hadSessionOnBootRef.current = true;
       }
+
+      if (event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+        clearSplashSoon();
+      }
     });
 
     return () => {
@@ -358,6 +386,7 @@ export default function App() {
       if (splashTimerRef.current !== null) {
         window.clearTimeout(splashTimerRef.current);
       }
+      splashShownAtRef.current = null;
     };
   }, []);
 
@@ -365,5 +394,9 @@ export default function App() {
     return <SplashScreen />;
   }
 
-  return <MainApp />;
+  return (
+    <Suspense fallback={<AppLoader visible />}>
+      <MainApp />
+    </Suspense>
+  );
 }
