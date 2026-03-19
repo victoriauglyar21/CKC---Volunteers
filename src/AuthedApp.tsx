@@ -149,7 +149,7 @@ function serializeShiftInstances(shifts: ShiftInstance[]): CachedShiftInstance[]
 function deserializeShiftInstances(cached: CachedShiftInstance[] | null | undefined) {
   if (!cached) return [] as ShiftInstance[];
   return cached
-    .map((shift) => {
+    .map<ShiftInstance | null>((shift) => {
       const start = new Date(shift.start);
       const end = new Date(shift.end);
       if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
