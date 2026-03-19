@@ -106,10 +106,70 @@ import {
   urlBase64ToUint8Array,
 } from "./authedApp/utils";
 
+const SHIFT_TEMPLATE_CACHE_KEY = "ckc:shift-templates";
+const SHIFT_INSTANCE_CACHE_PREFIX = "ckc:shift-instances";
+
+type CachedShiftInstance = {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  templateId: string;
+  instanceId: number;
+  isVirtual?: boolean;
+};
+
+function readStoredJson<T>(storageKey: string) {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function readCachedTemplates() {
+  return readStoredJson<ShiftTemplate[]>(SHIFT_TEMPLATE_CACHE_KEY) ?? [];
+}
+
+function serializeShiftInstances(shifts: ShiftInstance[]): CachedShiftInstance[] {
+  return shifts.map((shift) => ({
+    id: shift.id,
+    title: shift.title,
+    start: shift.start.toISOString(),
+    end: shift.end.toISOString(),
+    templateId: shift.templateId,
+    instanceId: shift.instanceId,
+    isVirtual: shift.isVirtual,
+  }));
+}
+
+function deserializeShiftInstances(cached: CachedShiftInstance[] | null | undefined) {
+  if (!cached) return [] as ShiftInstance[];
+  return cached
+    .map((shift) => {
+      const start = new Date(shift.start);
+      const end = new Date(shift.end);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+      return {
+        id: shift.id,
+        title: shift.title,
+        start,
+        end,
+        templateId: shift.templateId,
+        instanceId: shift.instanceId,
+        isVirtual: shift.isVirtual,
+      } satisfies ShiftInstance;
+    })
+    .filter((shift): shift is ShiftInstance => Boolean(shift));
+}
+
 export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [today, setToday] = useState(() => startOfDay(new Date()));
-  const [templates, setTemplates] = useState<ShiftTemplate[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [templates, setTemplates] = useState<ShiftTemplate[]>(() => readCachedTemplates());
+  const [loading, setLoading] = useState(() => readCachedTemplates().length === 0);
   const [visibleRealInstanceIdsBySlot, setVisibleRealInstanceIdsBySlot] = useState<Record<string, number>>({});
   const [activeShiftInstanceId, setActiveShiftInstanceId] = useState<number | null>(null);
   const [instanceShifts, setInstanceShifts] = useState<ShiftInstance[]>([]);
@@ -409,15 +469,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     let mounted = true;
 
     const fetchTemplates = async () => {
-      setLoading(true);
+      setLoading(templates.length === 0);
       const { data, error } = await supabase.from("shift_templates").select("*");
 
       if (!mounted) return;
 
       if (error || !data) {
-        setTemplates([]);
+        setLoading(false);
+        return;
       } else {
-        setTemplates(data as unknown as ShiftTemplate[]);
+        const nextTemplates = data as unknown as ShiftTemplate[];
+        setTemplates(nextTemplates);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(SHIFT_TEMPLATE_CACHE_KEY, JSON.stringify(nextTemplates));
+        }
       }
 
       setLoading(false);
@@ -428,7 +493,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [templates.length]);
 
   useEffect(() => {
     let mounted = true;
@@ -506,6 +571,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const rangeEndExclusive = addDays(lastVisibleDate, 1);
       const rangeStartDate = getDateKey(rangeStart);
       const rangeEndDate = getDateKey(rangeEndExclusive);
+      const shiftInstanceCacheKey = `${SHIFT_INSTANCE_CACHE_PREFIX}:${calendarRangeMode}:${rangeStartDate}:${rangeEndDate}`;
+
+      const cachedShiftPayload = readStoredJson<{
+        visibleRealIdsBySlot: Record<string, number>;
+        shifts: CachedShiftInstance[];
+      }>(shiftInstanceCacheKey);
+
+      if (cachedShiftPayload) {
+        const cachedShifts = deserializeShiftInstances(cachedShiftPayload.shifts);
+        if (cachedShifts.length > 0) {
+          setVisibleRealInstanceIdsBySlot(cachedShiftPayload.visibleRealIdsBySlot ?? {});
+          setInstanceShifts(cachedShifts);
+        }
+      }
 
       const { data, error } = await supabase
         .from("shift_instances")
@@ -602,13 +681,21 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       );
 
       setVisibleRealInstanceIdsBySlot(visibleRealIdsBySlot);
-      setInstanceShifts(
-        [...shifts, ...fallbackShiftsWithoutRealRows].sort((left, right) => {
+      const mergedShifts = [...shifts, ...fallbackShiftsWithoutRealRows].sort((left, right) => {
           const startDiff = left.start.getTime() - right.start.getTime();
           if (startDiff !== 0) return startDiff;
           return left.title.localeCompare(right.title);
-        }),
-      );
+        });
+      setInstanceShifts(mergedShifts);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          shiftInstanceCacheKey,
+          JSON.stringify({
+            visibleRealIdsBySlot,
+            shifts: serializeShiftInstances(mergedShifts),
+          }),
+        );
+      }
 
       if (templates.length === 0) return;
 
@@ -2085,7 +2172,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const closeAssignVolunteerModal = useCallback(() => {
     setShowAssignVolunteer(false);
     setAssignVolunteerSearchInput("");
-    setAssignVolunteerSearch("");
     setAssignShiftInstanceId(null);
     setAssignMessage("");
     setShowAssignOtherForm(false);
@@ -2766,7 +2852,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         }
                         setAssignMessage("");
                         setAssignVolunteerSearchInput("");
-                        setAssignVolunteerSearch("");
                         setShowAssignOtherForm(false);
                         setAssignOtherName("");
                         setAssignOtherDetails("");
@@ -2862,7 +2947,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   if (profile?.role === "Admin") {
                     setAssignMessage("");
                     setAssignVolunteerSearchInput("");
-                    setAssignVolunteerSearch("");
                     setShowAssignOtherForm(false);
                     setAssignOtherName("");
                     setAssignOtherDetails("");

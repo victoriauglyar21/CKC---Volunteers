@@ -197,7 +197,7 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
       await supabase.functions.invoke("send-admin-push", {
         body: {
           title: "New volunteer signup",
-          body: `${newVolunteerName} has signed up for CKC Volunteer shifts`,
+          body: `${newVolunteerName} signed up!`,
           url: "/?view=notifications",
         },
       });

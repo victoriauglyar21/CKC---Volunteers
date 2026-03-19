@@ -2,9 +2,9 @@ import { Suspense, lazy, useCallback, useEffect, useState, type ReactNode } from
 import "./App.css";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
 import { signOutSafely, supabase } from "./supabaseClient";
-import AuthedApp from "./AuthedApp";
 
 const Auth = lazy(() => import("./Auth"));
+const AuthedApp = lazy(() => import("./AuthedApp"));
 const ProfileOnboarding = lazy(() => import("./ProfileOnboarding"));
 const NewUI = lazy(() => import("./NewUI"));
 
