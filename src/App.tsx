@@ -1,12 +1,10 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState, type ReactNode } from "react";
 import "./App.css";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
 import { signOutSafely, supabase } from "./supabaseClient";
-import SplashScreen from "./components/SplashScreen";
-import AppLoader from "./components/AppLoader";
+import AuthedApp from "./AuthedApp";
 
 const Auth = lazy(() => import("./Auth"));
-const AuthedApp = lazy(() => import("./AuthedApp"));
 const ProfileOnboarding = lazy(() => import("./ProfileOnboarding"));
 const NewUI = lazy(() => import("./NewUI"));
 
@@ -305,11 +303,6 @@ function MainApp() {
 
 export default function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => getInitialTheme());
-  const [showSplash, setShowSplash] = useState(false);
-  const hadSessionOnBootRef = useRef(false);
-  const authReadyRef = useRef(false);
-  const splashTimerRef = useRef<number | null>(null);
-  const splashShownAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -318,84 +311,8 @@ export default function App() {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
-  useEffect(() => {
-    const runSplash = () => {
-      setShowSplash(true);
-      splashShownAtRef.current = performance.now();
-      if (splashTimerRef.current !== null) {
-        window.clearTimeout(splashTimerRef.current);
-      }
-      splashTimerRef.current = window.setTimeout(() => {
-        setShowSplash(false);
-        splashTimerRef.current = null;
-        splashShownAtRef.current = null;
-      }, 900);
-    };
-
-    const clearSplashSoon = () => {
-      if (splashShownAtRef.current === null) {
-        setShowSplash(false);
-        return;
-      }
-
-      const elapsedMs = performance.now() - splashShownAtRef.current;
-      const remainingMs = Math.max(0, 450 - elapsedMs);
-      if (splashTimerRef.current !== null) {
-        window.clearTimeout(splashTimerRef.current);
-      }
-      splashTimerRef.current = window.setTimeout(() => {
-        setShowSplash(false);
-        splashTimerRef.current = null;
-        splashShownAtRef.current = null;
-      }, remainingMs);
-    };
-
-    supabase.auth.getSession().then(({ data }) => {
-      hadSessionOnBootRef.current = Boolean(data.session);
-      authReadyRef.current = true;
-    });
-
-    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
-      if (!authReadyRef.current) return;
-
-      if (event === "SIGNED_OUT") {
-        hadSessionOnBootRef.current = false;
-        setShowSplash(false);
-        if (splashTimerRef.current !== null) {
-          window.clearTimeout(splashTimerRef.current);
-          splashTimerRef.current = null;
-        }
-        splashShownAtRef.current = null;
-        return;
-      }
-
-      if (event === "SIGNED_IN") {
-        if (!hadSessionOnBootRef.current) {
-          runSplash();
-        }
-        hadSessionOnBootRef.current = true;
-      }
-
-      if (event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
-        clearSplashSoon();
-      }
-    });
-
-    return () => {
-      sub.subscription.unsubscribe();
-      if (splashTimerRef.current !== null) {
-        window.clearTimeout(splashTimerRef.current);
-      }
-      splashShownAtRef.current = null;
-    };
-  }, []);
-
-  if (showSplash) {
-    return <SplashScreen />;
-  }
-
   return (
-    <Suspense fallback={<AppLoader visible />}>
+    <Suspense fallback={<div style={{ padding: 16 }}>Loading...</div>}>
       <MainApp />
     </Suspense>
   );

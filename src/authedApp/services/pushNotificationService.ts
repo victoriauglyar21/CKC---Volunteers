@@ -117,10 +117,10 @@ export async function sendVolunteerPush({
     return error.message;
   }
   if (data?.skipped) {
-    return "Volunteer has not enabled push notifications.";
+    return null;
   }
   if (typeof data?.sent === "number" && data.sent <= 0) {
-    return "Push notification was not delivered.";
+    return null;
   }
 
   return null;

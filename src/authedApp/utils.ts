@@ -263,6 +263,109 @@ export function formatTemplateTime(value: string | null | undefined) {
   return timeFormatter.format(date);
 }
 
+export function getCanonicalShiftTimeRangeForTitle(title: string | null | undefined) {
+  const normalizedTitle = (title ?? "").toLowerCase();
+  if (/\b(morning|am)\b/.test(normalizedTitle)) {
+    return { start: "09:00", end: "11:00" };
+  }
+  if (/\b(evening|pm)\b/.test(normalizedTitle)) {
+    return { start: "17:00", end: "19:00" };
+  }
+  return null;
+}
+
+function getShiftTitleCandidate(
+  shift:
+    | {
+        template?: { title?: string | null } | null;
+        title?: string | null;
+      }
+    | null
+    | undefined,
+  fallbackTitle?: string | null,
+) {
+  return shift?.template?.title ?? shift?.title ?? fallbackTitle ?? null;
+}
+
+function getShiftBaseDate(
+  shift:
+    | {
+        starts_at?: string | null;
+        shift_date?: string | null;
+      }
+    | null
+    | undefined,
+) {
+  if (shift?.shift_date) {
+    const parsedShiftDate = parseDateOnly(shift.shift_date);
+    if (parsedShiftDate && !Number.isNaN(parsedShiftDate.getTime())) {
+      return parsedShiftDate;
+    }
+  }
+  if (!shift?.starts_at) return null;
+  const parsedStart = new Date(shift.starts_at);
+  if (Number.isNaN(parsedStart.getTime())) return null;
+  return parsedStart;
+}
+
+export function formatResolvedShiftTimeRange(
+  shift:
+    | {
+        starts_at?: string | null;
+        ends_at?: string | null;
+        shift_date?: string | null;
+        template?: { title?: string | null } | null;
+        title?: string | null;
+      }
+    | null
+    | undefined,
+  fallbackTitle?: string | null,
+) {
+  const title = getShiftTitleCandidate(shift, fallbackTitle);
+  const canonicalRange = getCanonicalShiftTimeRangeForTitle(title);
+  if (canonicalRange) {
+    return `${formatTemplateTime(canonicalRange.start)} — ${formatTemplateTime(canonicalRange.end)}`;
+  }
+
+  if (shift?.starts_at) {
+    return `${formatTimeOnly(shift.starts_at)}${
+      shift.ends_at ? ` — ${formatTimeOnly(shift.ends_at)}` : ""
+    }`;
+  }
+
+  return "scheduled shift";
+}
+
+export function formatResolvedShiftDateTimeRange(
+  shift:
+    | {
+        starts_at?: string | null;
+        ends_at?: string | null;
+        shift_date?: string | null;
+        template?: { title?: string | null } | null;
+        title?: string | null;
+      }
+    | null
+    | undefined,
+  fallbackTitle?: string | null,
+) {
+  const title = getShiftTitleCandidate(shift, fallbackTitle);
+  const canonicalRange = getCanonicalShiftTimeRangeForTitle(title);
+  const baseDate = getShiftBaseDate(shift);
+
+  if (canonicalRange && baseDate) {
+    const startIso = toIsoForDateAndTime(baseDate, canonicalRange.start);
+    const endIso = toIsoForDateAndTime(baseDate, canonicalRange.end);
+    if (startIso) {
+      return `${formatDateTime(startIso)}${endIso ? ` — ${formatDateTime(endIso)}` : ""}`;
+    }
+  }
+
+  const startsAt = shift?.starts_at ?? shift?.shift_date ?? null;
+  if (!startsAt) return "—";
+  return `${formatDateTime(startsAt)}${shift?.ends_at ? ` — ${formatDateTime(shift.ends_at)}` : ""}`;
+}
+
 export function getShiftPeriodLabel(template: ShiftTemplate | undefined) {
   if (!template) return "shift";
   if (/evening/i.test(template.title)) return "evening shift";
@@ -467,6 +570,8 @@ export function toIsoForDateAndTime(date: Date, hhmm: string | null | undefined)
 }
 
 export function resolveTemplateStartTime(template: ShiftTemplate) {
+  const canonicalRange = getCanonicalShiftTimeRangeForTitle(template.title);
+  if (canonicalRange) return canonicalRange.start;
   const dynamic = template as ShiftTemplate & Record<string, unknown>;
   const candidates = [
     template.start_time,
@@ -478,13 +583,12 @@ export function resolveTemplateStartTime(template: ShiftTemplate) {
     const parsed = candidate.match(/(\d{1,2}):(\d{2})/);
     if (parsed) return `${parsed[1].padStart(2, "0")}:${parsed[2]}`;
   }
-  const title = (template.title ?? "").toLowerCase();
-  if (/\b(evening|pm)\b/.test(title)) return "17:00";
-  if (/\b(morning|am)\b/.test(title)) return "09:00";
   return "09:00";
 }
 
 export function resolveTemplateEndTime(template: ShiftTemplate) {
+  const canonicalRange = getCanonicalShiftTimeRangeForTitle(template.title);
+  if (canonicalRange) return canonicalRange.end;
   const dynamic = template as ShiftTemplate & Record<string, unknown>;
   const candidates = [
     template.end_time,
@@ -496,9 +600,6 @@ export function resolveTemplateEndTime(template: ShiftTemplate) {
     const parsed = candidate.match(/(\d{1,2}):(\d{2})/);
     if (parsed) return `${parsed[1].padStart(2, "0")}:${parsed[2]}`;
   }
-  const title = (template.title ?? "").toLowerCase();
-  if (/\b(evening|pm)\b/.test(title)) return "19:00";
-  if (/\b(morning|am)\b/.test(title)) return "11:00";
   return "11:00";
 }
 
