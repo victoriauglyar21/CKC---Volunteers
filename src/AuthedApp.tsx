@@ -2082,6 +2082,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     void Promise.all([fetchWeekAssignments(), fetchPersonalAssignments(), fetchMyShifts()]);
   }, [fetchMyShifts, fetchPersonalAssignments, fetchWeekAssignments]);
 
+  const closeAssignVolunteerModal = useCallback(() => {
+    setShowAssignVolunteer(false);
+    setAssignVolunteerSearchInput("");
+    setAssignVolunteerSearch("");
+    setAssignShiftInstanceId(null);
+    setAssignMessage("");
+    setShowAssignOtherForm(false);
+    setAssignOtherName("");
+    setAssignOtherDetails("");
+  }, []);
+
   useEffect(() => {
     const storageKey = `weekOffset:${session.user.id}`;
     const stored = localStorage.getItem(storageKey);
@@ -3541,14 +3552,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    setShowAssignVolunteer(false);
-    setAssignVolunteerSearchInput("");
-    setAssignVolunteerSearch("");
-    setAssignShiftInstanceId(null);
-    setShowAssignOtherForm(false);
-    setAssignOtherName("");
-    setAssignOtherDetails("");
-
     const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
     const volunteerName = volunteer.preferred_name || volunteer.full_name || "A volunteer";
     const shiftDate = assignedShift
@@ -3598,12 +3601,68 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (notificationErrors.length > 0) {
       setAssignMessage(`Volunteer added, but ${notificationErrors.join(" | ")}`);
       setAssignLoading(false);
+      closeAssignVolunteerModal();
+      addWeekAssignmentLocally({
+        id: `${assignShiftInstanceId}-${volunteerId}-${Date.now()}`,
+        shift_instance_id: assignShiftInstanceId,
+        created_at: new Date().toISOString(),
+        status: "active",
+        assignment_role: assignmentRole,
+        volunteer: {
+          id: volunteer.id,
+          full_name: volunteer.full_name,
+          preferred_name: volunteer.preferred_name,
+          phone: volunteer.phone,
+          role: volunteer.role,
+        },
+        shift_instance: assignedShift
+          ? {
+              id: assignShiftInstanceId,
+              shift_date: getDateKey(startOfDay(assignedShift.start)),
+              starts_at: assignedShift.start.toISOString(),
+              ends_at: assignedShift.end.toISOString(),
+              template: {
+                id: assignedShift.templateId,
+                title: assignedShift.title,
+              },
+            }
+          : null,
+      });
       setShiftInstancesRefreshToken((value) => value + 1);
+      refreshShiftViewsInBackground();
       return;
     }
 
+    closeAssignVolunteerModal();
+    addWeekAssignmentLocally({
+      id: `${assignShiftInstanceId}-${volunteerId}-${Date.now()}`,
+      shift_instance_id: assignShiftInstanceId,
+      created_at: new Date().toISOString(),
+      status: "active",
+      assignment_role: assignmentRole,
+      volunteer: {
+        id: volunteer.id,
+        full_name: volunteer.full_name,
+        preferred_name: volunteer.preferred_name,
+        phone: volunteer.phone,
+        role: volunteer.role,
+      },
+      shift_instance: assignedShift
+        ? {
+            id: assignShiftInstanceId,
+            shift_date: getDateKey(startOfDay(assignedShift.start)),
+            starts_at: assignedShift.start.toISOString(),
+            ends_at: assignedShift.end.toISOString(),
+            template: {
+              id: assignedShift.templateId,
+              title: assignedShift.title,
+            },
+          }
+        : null,
+    });
     setShiftInstancesRefreshToken((value) => value + 1);
     setAssignLoading(false);
+    refreshShiftViewsInBackground();
   };
 
   const handleAssignOther = useCallback(async () => {
@@ -3656,6 +3715,28 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       adminNotifyError ? `admin notification failed: ${adminNotifyError}` : null,
     ].filter((value): value is string => Boolean(value));
 
+    closeAssignVolunteerModal();
+    addWeekAssignmentLocally({
+      id: `other-${assignShiftInstanceId}-${Date.now()}`,
+      shift_instance_id: assignShiftInstanceId,
+      created_at: new Date().toISOString(),
+      status: "active",
+      assignment_role: "regular",
+      notes,
+      volunteer: null,
+      shift_instance: assignedShift
+        ? {
+            id: assignShiftInstanceId,
+            shift_date: getDateKey(startOfDay(assignedShift.start)),
+            starts_at: assignedShift.start.toISOString(),
+            ends_at: assignedShift.end.toISOString(),
+            template: {
+              id: assignedShift.templateId,
+              title: assignedShift.title,
+            },
+          }
+        : null,
+    });
     setAssignOtherName("");
     setAssignOtherDetails("");
     setShowAssignOtherForm(false);
@@ -3666,12 +3747,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         : "Added Other to this shift.",
     );
     setShiftInstancesRefreshToken((value) => value + 1);
-    await fetchWeekAssignments();
+    refreshShiftViewsInBackground();
   }, [
+    addWeekAssignmentLocally,
     assignOtherDetails,
     assignOtherName,
     assignShiftInstanceId,
-    fetchWeekAssignments,
+    closeAssignVolunteerModal,
+    refreshShiftViewsInBackground,
     instanceShifts,
     session.user.id,
   ]);
@@ -4532,12 +4615,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowAppointments(false);
     closeTakeShiftPrompt();
     setShowNotifications(false);
-    setShowAssignVolunteer(false);
-    setAssignVolunteerSearchInput("");
-    setAssignVolunteerSearch("");
-    setShowAssignOtherForm(false);
-    setAssignOtherName("");
-    setAssignOtherDetails("");
+    closeAssignVolunteerModal();
     setShowHelpfulLinks(false);
     setShowDropConfirm(false);
     setShowDropReason(false);
@@ -6318,16 +6396,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               <button
                 className="modal-close"
                 type="button"
-                onClick={() => {
-                  setShowAssignVolunteer(false);
-                  setAssignVolunteerSearchInput("");
-                  setAssignVolunteerSearch("");
-                  setAssignShiftInstanceId(null);
-                  setAssignMessage("");
-                  setShowAssignOtherForm(false);
-                  setAssignOtherName("");
-                  setAssignOtherDetails("");
-                }}
+                onClick={closeAssignVolunteerModal}
               >
                 Close
               </button>
