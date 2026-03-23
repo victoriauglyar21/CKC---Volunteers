@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useState, type ReactNode } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import "./App.css";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
 import { signOutSafely, supabase } from "./supabaseClient";
@@ -74,6 +74,42 @@ function canAccessNewUi(role: ProfileRecord["role"] | null | undefined) {
   return role === "Admin";
 }
 
+function LogoLoadingScreen({ visible }: { visible: boolean }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+        background: "var(--app-page-bg)",
+        opacity: visible ? 1 : 0,
+        transform: visible ? "scale(1)" : "scale(1.015)",
+        transition: "opacity 280ms ease, transform 280ms ease",
+        pointerEvents: visible ? "auto" : "none",
+        zIndex: 999,
+      }}
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <img
+        src="/favicon.png"
+        alt="CKC logo"
+        style={{
+          width: "clamp(160px, 28vw, 260px)",
+          height: "auto",
+          display: "block",
+          opacity: visible ? 1 : 0.92,
+          transform: visible ? "translateY(0)" : "translateY(4px)",
+          transition: "opacity 240ms ease, transform 240ms ease",
+        }}
+      />
+    </div>
+  );
+}
+
 function hasAuthType(targetType: string) {
   if (typeof window === "undefined") return false;
   const searchParams = new URLSearchParams(window.location.search);
@@ -89,6 +125,9 @@ function MainApp() {
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [profileMissing, setProfileMissing] = useState(false);
+  const [startupOverlayMounted, setStartupOverlayMounted] = useState(true);
+  const [startupOverlayVisible, setStartupOverlayVisible] = useState(true);
+  const startupOverlayStartedAtRef = useRef(Date.now());
   const routePath = typeof window !== "undefined" ? window.location.pathname : "/";
   const isSignupRoute = routePath === "/signup";
   const isCompleteProfileRoute = routePath === "/complete-profile";
@@ -236,6 +275,44 @@ function MainApp() {
     !needsOnboarding &&
     !willRenderNewUi;
 
+  const showStartupLogo =
+    loading ||
+    (!!session &&
+      profileLoading &&
+      !hasUsableProfile &&
+      !profileMissing &&
+      !needsOnboarding &&
+      !passwordRecovery);
+
+  useEffect(() => {
+    if (showStartupLogo) {
+      startupOverlayStartedAtRef.current = Date.now();
+      setStartupOverlayMounted(true);
+      const frameId = window.requestAnimationFrame(() => {
+        setStartupOverlayVisible(true);
+      });
+      return () => {
+        window.cancelAnimationFrame(frameId);
+      };
+    }
+
+    const minimumVisibleMs = 260;
+    const fadeDurationMs = 280;
+    const elapsed = Date.now() - startupOverlayStartedAtRef.current;
+    const delayBeforeFade = Math.max(0, minimumVisibleMs - elapsed);
+    const fadeTimer = window.setTimeout(() => {
+      setStartupOverlayVisible(false);
+    }, delayBeforeFade);
+    const unmountTimer = window.setTimeout(() => {
+      setStartupOverlayMounted(false);
+    }, delayBeforeFade + fadeDurationMs);
+
+    return () => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(unmountTimer);
+    };
+  }, [showStartupLogo]);
+
   let content: ReactNode = null;
 
   if (!loading && passwordRecovery) {
@@ -298,7 +375,20 @@ function MainApp() {
     content = <AuthedApp session={session} profile={profile} />;
   }
 
-  return content;
+  return (
+    <>
+      <div
+        style={{
+          minHeight: "100vh",
+          opacity: showStartupLogo ? 0 : 1,
+          transition: "opacity 240ms ease",
+        }}
+      >
+        {content}
+      </div>
+      {startupOverlayMounted ? <LogoLoadingScreen visible={startupOverlayVisible} /> : null}
+    </>
+  );
 }
 
 export default function App() {
@@ -312,7 +402,7 @@ export default function App() {
   }, [theme]);
 
   return (
-    <Suspense fallback={<div style={{ padding: 16 }}>Loading...</div>}>
+    <Suspense fallback={<LogoLoadingScreen visible={true} />}>
       <MainApp />
     </Suspense>
   );

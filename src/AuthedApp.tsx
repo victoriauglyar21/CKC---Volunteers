@@ -108,6 +108,7 @@ import {
 
 const SHIFT_TEMPLATE_CACHE_KEY = "ckc:shift-templates";
 const SHIFT_INSTANCE_CACHE_PREFIX = "ckc:shift-instances";
+const WEEK_ASSIGNMENTS_CACHE_PREFIX = "weekAssignments:";
 
 type CachedShiftInstance = {
   id: string;
@@ -128,6 +129,56 @@ function readStoredJson<T>(storageKey: string) {
   } catch {
     return null;
   }
+}
+
+function isQuotaExceededError(error: unknown) {
+  return (
+    error instanceof DOMException &&
+    (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED")
+  );
+}
+
+function removeStoredKeysByPrefix(prefix: string, excludeKey?: string) {
+  if (typeof window === "undefined") return;
+  const keysToRemove: string[] = [];
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (!key || !key.startsWith(prefix) || key === excludeKey) continue;
+    keysToRemove.push(key);
+  }
+  keysToRemove.forEach((key) => {
+    window.localStorage.removeItem(key);
+  });
+}
+
+function writeStoredJson(storageKey: string, value: unknown, cleanupPrefixes: string[] = []) {
+  if (typeof window === "undefined") return false;
+  const serialized = JSON.stringify(value);
+
+  try {
+    window.localStorage.setItem(storageKey, serialized);
+    return true;
+  } catch (error) {
+    if (!isQuotaExceededError(error)) return false;
+  }
+
+  cleanupPrefixes.forEach((prefix) => {
+    removeStoredKeysByPrefix(prefix, storageKey);
+  });
+
+  try {
+    window.localStorage.setItem(storageKey, serialized);
+    return true;
+  } catch (error) {
+    if (!isQuotaExceededError(error)) return false;
+  }
+
+  try {
+    window.localStorage.removeItem(storageKey);
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+  return false;
 }
 
 function readCachedTemplates() {
@@ -626,7 +677,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         const nextTemplates = data as unknown as ShiftTemplate[];
         setTemplates(nextTemplates);
         if (typeof window !== "undefined") {
-          window.localStorage.setItem(SHIFT_TEMPLATE_CACHE_KEY, JSON.stringify(nextTemplates));
+          writeStoredJson(SHIFT_TEMPLATE_CACHE_KEY, nextTemplates, [
+            WEEK_ASSIGNMENTS_CACHE_PREFIX,
+            SHIFT_INSTANCE_CACHE_PREFIX,
+          ]);
         }
       }
 
@@ -833,12 +887,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         });
       setInstanceShifts(mergedShifts);
       if (typeof window !== "undefined") {
-        window.localStorage.setItem(
+        writeStoredJson(
           shiftInstanceCacheKey,
-          JSON.stringify({
+          {
             visibleRealIdsBySlot,
             shifts: serializeShiftInstances(mergedShifts),
-          }),
+          },
+          [WEEK_ASSIGNMENTS_CACHE_PREFIX, SHIFT_INSTANCE_CACHE_PREFIX],
         );
       }
 
@@ -1149,7 +1204,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     setWeekAssignments(map);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(assignmentCacheKey, JSON.stringify(cacheMap));
+      writeStoredJson(assignmentCacheKey, cacheMap, [
+        WEEK_ASSIGNMENTS_CACHE_PREFIX,
+        SHIFT_INSTANCE_CACHE_PREFIX,
+      ]);
     }
   }, [instanceShifts, session.user.id, visibleRealInstanceIdsBySlot]);
 
