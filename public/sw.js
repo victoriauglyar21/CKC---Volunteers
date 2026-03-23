@@ -39,6 +39,33 @@ self.addEventListener("push", (event) => {
   );
 });
 
+async function notifyPushSubscriptionChanged() {
+  const clientsArr = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  await Promise.all(
+    clientsArr.map((client) => client.postMessage({ type: "push-subscription-changed" })),
+  );
+}
+
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        const applicationServerKey = event.oldSubscription?.options?.applicationServerKey;
+        if (applicationServerKey) {
+          await self.registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey,
+          });
+        }
+      } catch {
+        // Ignore re-subscribe failures here; the app repairs the subscription on next resume.
+      }
+
+      await notifyPushSubscriptionChanged();
+    })(),
+  );
+});
+
 async function openNotificationUrl(targetUrl) {
   const safeUrl = targetUrl || "/";
   const clientsArr = await self.clients.matchAll({ type: "window", includeUncontrolled: true });

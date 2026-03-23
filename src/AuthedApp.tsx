@@ -326,6 +326,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [shiftInstancesRefreshToken, setShiftInstancesRefreshToken] = useState(0);
   const scrollYRef = useRef(0);
   const liveRefreshInFlightRef = useRef(false);
+  const pushSubscriptionSyncInFlightRef = useRef(false);
   const initialTodayScrollDoneRef = useRef(false);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const swipeTriggeredRef = useRef(false);
@@ -365,6 +366,150 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   if (import.meta.env.DEV && !vapidPublicKey) {
     console.warn("Missing VITE_VAPID_PUBLIC_KEY");
   }
+
+  const syncPushSubscription = useCallback(
+    async ({
+      requestPermission = false,
+      persistPreference = false,
+      showFeedback = false,
+    }: {
+      requestPermission?: boolean;
+      persistPreference?: boolean;
+      showFeedback?: boolean;
+    } = {}) => {
+      if (!vapidPublicKey) {
+        if (showFeedback) {
+          setNotificationMessage("Missing VAPID public key configuration.");
+        }
+        return false;
+      }
+      if (
+        !("serviceWorker" in navigator) ||
+        !("PushManager" in window) ||
+        !("Notification" in window)
+      ) {
+        if (showFeedback) {
+          setNotificationMessage("Push notifications are not supported on this device.");
+        }
+        return false;
+      }
+
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      const isStandalone =
+        window.matchMedia?.("(display-mode: standalone)").matches ||
+        (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
+      if (isIOS && !isStandalone) {
+        if (showFeedback) {
+          setNotificationMessage(
+            "On iPhone, open this app from the Home Screen icon first (Safari -> Share -> Add to Home Screen), then tap Enable notifications again.",
+          );
+        }
+        return false;
+      }
+
+      if (Notification.permission === "denied") {
+        if (showFeedback) {
+          setNotificationMessage(
+            "Notifications are blocked in iPhone/browser settings. Re-enable them in Settings, then try again.",
+          );
+        }
+        return false;
+      }
+
+      let permission = Notification.permission;
+      if (permission !== "granted") {
+        if (!requestPermission) {
+          return false;
+        }
+        permission = await Notification.requestPermission();
+      }
+      if (permission !== "granted") {
+        if (showFeedback) {
+          setNotificationMessage(
+            "Notification permission was not granted. If no popup appeared, permissions are already set for this app.",
+          );
+        }
+        return false;
+      }
+
+      const registration = await navigator.serviceWorker.register("/sw.js");
+      const readyRegistration = await navigator.serviceWorker.ready;
+      await registration.update().catch(() => {
+        // Ignore update failures; an existing worker can still receive push.
+      });
+
+      let subscription = await readyRegistration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await readyRegistration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+        });
+      }
+
+      const json = subscription.toJSON();
+      const p256dh = json.keys?.p256dh;
+      const authKey = json.keys?.auth;
+      if (!p256dh || !authKey) {
+        if (showFeedback) {
+          setNotificationMessage("Unable to read subscription keys.");
+        }
+        return false;
+      }
+
+      const { error: subscriptionError } = await supabase.from("push_subscriptions").upsert(
+        {
+          user_id: session.user.id,
+          endpoint: subscription.endpoint,
+          p256dh,
+          auth: authKey,
+        },
+        { onConflict: "user_id,endpoint" },
+      );
+      if (subscriptionError) {
+        if (showFeedback) {
+          setNotificationMessage(subscriptionError.message);
+        }
+        return false;
+      }
+
+      if (persistPreference) {
+        const { error: prefError } = await supabase
+          .from("profiles")
+          .update({ notification_pref: "push_and_email" })
+          .eq("id", session.user.id);
+        if (prefError) {
+          if (showFeedback) {
+            setNotificationMessage(prefError.message);
+          }
+          return false;
+        }
+
+        setProfileOverride((previous) => ({
+          ...(previous ?? {}),
+          notification_pref: "push_and_email",
+        }));
+      }
+
+      if (showFeedback) {
+        setNotificationMessage("Notifications enabled!");
+      }
+      return true;
+    },
+    [session.user.id, vapidPublicKey],
+  );
+
+  const ensurePushSubscription = useCallback(async () => {
+    if (!notificationsEnabled || typeof window === "undefined" || pushSubscriptionSyncInFlightRef.current) {
+      return;
+    }
+
+    pushSubscriptionSyncInFlightRef.current = true;
+    try {
+      await syncPushSubscription();
+    } finally {
+      pushSubscriptionSyncInFlightRef.current = false;
+    }
+  }, [notificationsEnabled, syncPushSubscription]);
   const helpfulLinks = useMemo(
     () => [
       {
@@ -3215,98 +3360,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   const handleEnableNotifications = async () => {
     setNotificationMessage("");
-    if (!vapidPublicKey) {
-      setNotificationMessage("Missing VAPID public key configuration.");
-      return;
-    }
-    if (
-      !("serviceWorker" in navigator) ||
-      !("PushManager" in window) ||
-      !("Notification" in window)
-    ) {
-      setNotificationMessage("Push notifications are not supported on this device.");
-      return;
-    }
-
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    const isStandalone =
-      window.matchMedia?.("(display-mode: standalone)").matches ||
-      (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
-    if (isIOS && !isStandalone) {
-      setNotificationMessage(
-        "On iPhone, open this app from the Home Screen icon first (Safari -> Share -> Add to Home Screen), then tap Enable notifications again.",
-      );
-      return;
-    }
-
     setNotificationLoading(true);
     setNotificationAction("enable");
     try {
-      if (Notification.permission === "denied") {
-        setNotificationMessage(
-          "Notifications are blocked in iPhone/browser settings. Re-enable them in Settings, then try again.",
-        );
-        return;
-      }
-
-      const permission =
-        Notification.permission === "granted"
-          ? "granted"
-          : await Notification.requestPermission();
-      if (permission !== "granted") {
-        setNotificationMessage(
-          "Notification permission was not granted. If no popup appeared, permissions are already set for this app.",
-        );
-        return;
-      }
-
-      const registration = await navigator.serviceWorker.register("/sw.js");
-      await navigator.serviceWorker.ready;
-      let subscription = await registration.pushManager.getSubscription();
-      if (!subscription) {
-        subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-        });
-      }
-
-      const json = subscription.toJSON();
-      const p256dh = json.keys?.p256dh;
-      const authKey = json.keys?.auth;
-      if (!p256dh || !authKey) {
-        setNotificationMessage("Unable to read subscription keys.");
-        return;
-      }
-
-      const { error } = await supabase.from("push_subscriptions").upsert(
-        {
-          user_id: session.user.id,
-          endpoint: subscription.endpoint,
-          p256dh,
-          auth: authKey,
-        },
-        { onConflict: "user_id,endpoint" },
-      );
-
-      if (error) {
-        setNotificationMessage(error.message);
-        return;
-      }
-
-      const { error: prefError } = await supabase
-        .from("profiles")
-        .update({ notification_pref: "push_and_email" })
-        .eq("id", session.user.id);
-      if (prefError) {
-        setNotificationMessage(prefError.message);
-        return;
-      }
-
-      setProfileOverride((previous) => ({
-        ...(previous ?? {}),
-        notification_pref: "push_and_email",
-      }));
-      setNotificationMessage("Notifications enabled!");
+      await syncPushSubscription({
+        requestPermission: true,
+        persistPreference: true,
+        showFeedback: true,
+      });
     } catch (error) {
       setNotificationMessage(
         error instanceof Error ? error.message : "Unable to enable notifications.",
@@ -4673,10 +4734,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   useEffect(() => {
     const handleVisibleRefresh = () => {
       if (document.visibilityState !== "visible") return;
+      void ensurePushSubscription();
       void runLiveRefresh();
     };
 
     const handleOnlineRefresh = () => {
+      void ensurePushSubscription();
       void runLiveRefresh();
     };
 
@@ -4689,7 +4752,25 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       document.removeEventListener("visibilitychange", handleVisibleRefresh);
       window.removeEventListener("online", handleOnlineRefresh);
     };
-  }, [runLiveRefresh]);
+  }, [ensurePushSubscription, runLiveRefresh]);
+
+  useEffect(() => {
+    void ensurePushSubscription();
+  }, [ensurePushSubscription]);
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+
+    const handleServiceWorkerMessage = (event: MessageEvent) => {
+      if (event.data?.type !== "push-subscription-changed") return;
+      void ensurePushSubscription();
+    };
+
+    navigator.serviceWorker.addEventListener("message", handleServiceWorkerMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", handleServiceWorkerMessage);
+    };
+  }, [ensurePushSubscription]);
 
   const handleModalBackdropClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
