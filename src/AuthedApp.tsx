@@ -395,6 +395,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const takeShiftCloseTimerRef = useRef<number | null>(null);
   const baseDocumentTitleRef = useRef<string>("CKC Volunteers");
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
+  const isAdminAccount = profile?.role === "Admin";
   const canSeeVolunteerRecurringFlag = isAdminRole(displayProfile?.role);
   const prefersReducedMotion = useReducedMotion();
   const [notificationDeletingIds, setNotificationDeletingIds] = useState<Set<string>>(new Set());
@@ -408,10 +409,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     : notificationPermission === "granted"
       ? "Allowed on device (tap Enable to finish setup)"
       : "Disabled";
-  const canManageAppointments = profile?.role === "Admin" || profile?.role === "Lead";
-  const canModifyAppointments = profile?.role === "Admin";
+  const canManageAppointments = isAdminAccount;
+  const canModifyAppointments = isAdminAccount;
   const isPrimaryAdminAccount =
-    profile?.role === "Admin" &&
+    isAdminAccount &&
     (session.user.email ?? "").trim().toLowerCase() === PRIMARY_ADMIN_EMAIL;
   const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
   if (import.meta.env.DEV && !vapidPublicKey) {
@@ -1607,6 +1608,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   );
 
   const handleRecurringSave = useCallback(async () => {
+    if (!isAdminAccount) {
+      setRecurringMessage("Only admins can add or edit recurring shifts.");
+      return;
+    }
     if (!selectedVolunteer) return;
     setRecurringMessage("");
     if (!recurringForm.templateId) {
@@ -1920,6 +1925,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     fetchMyShifts();
     fetchWeekAssignments();
   }, [
+    isAdminAccount,
     selectedVolunteer,
     recurringEditId,
     volunteerRecurring,
@@ -1936,6 +1942,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   const handleRecurringDelete = useCallback(
     async (recurringId: string) => {
+      if (!isAdminAccount) {
+        setRecurringMessage("Only admins can delete recurring shifts.");
+        return;
+      }
       if (!selectedVolunteer) return;
       setRecurringMessage("");
       setRecurringDeleteId(recurringId);
@@ -2037,6 +2047,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       fetchWeekAssignments();
     },
     [
+      isAdminAccount,
       selectedVolunteer,
       recurringEditId,
       volunteerRecurring,
@@ -2050,6 +2061,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   );
 
   const handleRecurringEdit = useCallback((recurring: RecurringAssignment) => {
+    if (!isAdminAccount) {
+      setRecurringMessage("Only admins can edit recurring shifts.");
+      return;
+    }
     setRecurringEditId(recurring.id);
     setRecurringForm({
       templateId: recurring.template_id,
@@ -2060,7 +2075,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setRecurringDays(recurring.byday ?? []);
     setRecurringMessage("");
     setShowAddRecurring(true);
-  }, []);
+  }, [isAdminAccount]);
 
   useEffect(() => {
     if (!showMyShifts) return;

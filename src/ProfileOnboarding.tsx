@@ -199,6 +199,7 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
           title: "New volunteer signup",
           body: `${newVolunteerName} signed up!`,
           url: "/?view=notifications",
+          primary_admin_only: true,
         },
       });
     }
