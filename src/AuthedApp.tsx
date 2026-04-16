@@ -20,7 +20,6 @@ import {
   dayFormatter,
   monthFormatter,
   monthJumpFormatter,
-  PRIMARY_ADMIN_EMAIL,
   SELF_DROP_REASON_PREFIX,
   timeFormatter,
   WEEKDAYS_MONDAY_FIRST,
@@ -411,9 +410,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       : "Disabled";
   const canManageAppointments = isAdminAccount;
   const canModifyAppointments = isAdminAccount;
-  const isPrimaryAdminAccount =
-    isAdminAccount &&
-    (session.user.email ?? "").trim().toLowerCase() === PRIMARY_ADMIN_EMAIL;
   const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
   if (import.meta.env.DEV && !vapidPublicKey) {
     console.warn("Missing VITE_VAPID_PUBLIC_KEY");
@@ -2115,7 +2111,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const { items, error } = await fetchNotificationsData({
       sessionUserId: session.user.id,
       role: profile?.role,
-      isPrimaryAdminAccount,
+      isAdminAccount,
       dismissedTokens: dismissedNotificationTokens,
     });
 
@@ -2129,7 +2125,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setNotifications(items);
     setNotificationsLoading(false);
     setHasLoadedNotifications(true);
-  }, [profile?.role, session.user.id, dismissedNotificationTokens, isPrimaryAdminAccount]);
+  }, [profile?.role, session.user.id, dismissedNotificationTokens, isAdminAccount]);
 
   const fetchNotificationsRef = useRef(fetchNotifications);
 
@@ -2174,7 +2170,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           schema: "public",
           table: "shift_assignments",
           filter:
-            isPrimaryAdminAccount
+            isAdminAccount
               ? "status=in.(pending,dropped)"
               : `volunteer_id=eq.${session.user.id}`,
         },
@@ -2198,7 +2194,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [session.user.id, isPrimaryAdminAccount]);
+  }, [session.user.id, isAdminAccount]);
 
   useEffect(() => {
     const stored = localStorage.getItem(dismissedStorageKey);
@@ -3099,7 +3095,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         title: shift.title,
                       });
                       setShowDropConfirm(true);
-                    } else if (isPrimaryAdminAccount) {
+                    } else if (isAdminAccount) {
                       if (assignment.status === "pending") {
                         const pendingName =
                           assignment.volunteer?.preferred_name ||
@@ -3981,7 +3977,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     assignmentId: string,
     decision: "approve" | "deny",
   ) => {
-    if (!isPrimaryAdminAccount) {
+    if (!isAdminAccount) {
       setNotificationsMessage("Only admins can approve or deny requests.");
       return;
     }
@@ -4055,7 +4051,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   };
 
   const handleConfirmDeny = async () => {
-    if (!isPrimaryAdminAccount) {
+    if (!isAdminAccount) {
       setNotificationsMessage("Only admins can deny requests.");
       return;
     }
@@ -4328,7 +4324,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   useEffect(() => {
     if (!pendingNotificationUrlAction) return;
     if (!showNotifications) return;
-    if (!isPrimaryAdminAccount) {
+    if (!isAdminAccount) {
       setPendingNotificationUrlAction(null);
       return;
     }
@@ -4337,7 +4333,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       pendingNotificationUrlAction.action,
     );
     setPendingNotificationUrlAction(null);
-  }, [pendingNotificationUrlAction, showNotifications, isPrimaryAdminAccount]);
+  }, [pendingNotificationUrlAction, showNotifications, isAdminAccount]);
 
   useEffect(() => {
     const missingIds = Array.from(
@@ -6529,7 +6525,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                   : null,
                           )} · ${shiftTitle}`;
                     const readableDropReason = normalizeDropReason(request.dropped_reason);
-                    if (isPrimaryAdminAccount) {
+                    if (isAdminAccount) {
                       if (request.status === "dropped") {
                         return renderNotificationCard(
                           request,

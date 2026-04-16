@@ -14,8 +14,6 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 const NOTIFICATION_ACTION_SECRET = Deno.env.get("NOTIFICATION_ACTION_SECRET") ?? "";
 const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY") ?? "";
 const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY") ?? "";
-const PRIMARY_ADMIN_EMAIL = "victoriauglyar21@gmail.com";
-
 const hasConfig = Boolean(
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY,
 );
@@ -84,7 +82,7 @@ serve(async (req) => {
   }
 
   const payload = await req.json();
-  const { title, body, url, actions, data, primary_admin_only } = payload ?? {};
+  const { title, body, url, actions, data } = payload ?? {};
   if (!title || !body || !url) {
     return new Response("Invalid payload", { status: 400, headers: corsHeaders });
   }
@@ -110,34 +108,11 @@ serve(async (req) => {
         ? notificationData.assignment_id
         : null;
 
-  let adminProfileQuery = supabaseAdmin
+  const { data: admins, error: adminsError } = await supabaseAdmin
     .from("profiles")
     .select("id")
     .eq("role", "Admin")
     .eq("notification_pref", "push_and_email");
-
-  if (primary_admin_only) {
-    const { data: authUsers, error: authUsersError } = await supabaseAdmin.auth.admin.listUsers({
-      page: 1,
-      perPage: 1000,
-    });
-    if (authUsersError) {
-      return new Response(authUsersError.message, { status: 500, headers: corsHeaders });
-    }
-
-    const primaryAdminUser = authUsers.users.find(
-      (user) => (user.email ?? "").trim().toLowerCase() === PRIMARY_ADMIN_EMAIL,
-    );
-    if (!primaryAdminUser) {
-      return new Response(JSON.stringify({ sent: 0, failed: 0 }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    adminProfileQuery = adminProfileQuery.eq("id", primaryAdminUser.id);
-  }
-
-  const { data: admins, error: adminsError } = await adminProfileQuery;
 
   if (adminsError) {
     return new Response(adminsError.message, { status: 500, headers: corsHeaders });

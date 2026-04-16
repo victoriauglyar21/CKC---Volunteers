@@ -76,14 +76,14 @@ const LEAD_NEEDED_NOTIFICATION_SELECT = `
 export type FetchNotificationsInput = {
   sessionUserId: string;
   role: string | null | undefined;
-  isPrimaryAdminAccount: boolean;
+  isAdminAccount: boolean;
   dismissedTokens: Set<string>;
 };
 
 export async function fetchNotificationsData(input: FetchNotificationsInput) {
   let rawItems: ShiftAssignmentDetail[] = [];
 
-  if (input.isPrimaryAdminAccount) {
+  if (input.isAdminAccount) {
     const { data, error } = await supabase
       .from("shift_assignments")
       .select(NOTIFICATION_SELECT)
@@ -121,7 +121,7 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
 
   const assignmentItems = rawItems
     .filter((item) => {
-      if (input.isPrimaryAdminAccount) {
+      if (input.isAdminAccount) {
         if (item.status === "pending") return true;
         if (item.status !== "dropped") return false;
         const droppedAt = item.dropped_at ?? item.created_at ?? "";
@@ -169,14 +169,14 @@ type AppointmentNotificationRow = {
 };
 
 async function fetchAppointmentNotificationItems(input: FetchNotificationsInput) {
-  if (!input.isPrimaryAdminAccount && input.role !== "Lead") {
+  if (!input.isAdminAccount && input.role !== "Lead") {
     return { items: [] as AppointmentNotificationItem[], error: null as string | null };
   }
 
   const cutoffIso = new Date(Date.now() - APPOINTMENT_NOTIFICATION_WINDOW_MS).toISOString();
   let allowedInstanceIds: number[] | null = null;
 
-  if (!input.isPrimaryAdminAccount && input.role === "Lead") {
+  if (!input.isAdminAccount && input.role === "Lead") {
     const { data: leadAssignments, error: leadAssignmentsError } = await supabase
       .from("shift_assignments")
       .select("shift_instance_id")
