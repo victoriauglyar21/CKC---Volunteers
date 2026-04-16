@@ -20,6 +20,7 @@ import {
   dayFormatter,
   monthFormatter,
   monthJumpFormatter,
+  PRIMARY_ADMIN_EMAIL,
   SELF_DROP_REASON_PREFIX,
   timeFormatter,
   WEEKDAYS_MONDAY_FIRST,
@@ -464,7 +465,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         return false;
       }
 
-      let permission = Notification.permission;
+      let permission: NotificationPermission = Notification.permission;
       if (permission !== "granted") {
         if (!requestPermission) {
           return false;
