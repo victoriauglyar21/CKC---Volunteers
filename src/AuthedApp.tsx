@@ -37,10 +37,7 @@ import {
   fetchNotificationsData,
 } from "./authedApp/services/notificationService";
 import {
-  notifyActiveMembersOnShiftInstance,
   notifyLeadsOnShiftInstance,
-  sendAdminPush,
-  sendAdminDropPush,
   sendVolunteerPush,
 } from "./authedApp/services/pushNotificationService";
 import type {
@@ -249,6 +246,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     >
   >({});
   const [dismissedNotificationTokens, setDismissedNotificationTokens] = useState<Set<string>>(new Set());
+  const [dismissedNotificationTokensLoaded, setDismissedNotificationTokensLoaded] = useState(false);
   const [hasLoadedNotifications, setHasLoadedNotifications] = useState(false);
   const [notificationSwipeOffsets, setNotificationSwipeOffsets] = useState<Record<string, number>>({});
   const [showAssignVolunteer, setShowAssignVolunteer] = useState(false);
@@ -2107,6 +2105,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [fetchWeekAssignments, fetchMyShifts, fetchPersonalAssignments]);
 
   const fetchNotifications = useCallback(async () => {
+    if (!dismissedNotificationTokensLoaded) return;
     setNotificationsLoading(true);
     setNotificationsMessage("");
     const { items, error } = await fetchNotificationsData({
@@ -2126,7 +2125,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setNotifications(items);
     setNotificationsLoading(false);
     setHasLoadedNotifications(true);
-  }, [profile?.role, session.user.id, dismissedNotificationTokens, isAdminAccount]);
+  }, [
+    profile?.role,
+    session.user.id,
+    dismissedNotificationTokens,
+    dismissedNotificationTokensLoaded,
+    isAdminAccount,
+  ]);
 
   const fetchNotificationsRef = useRef(fetchNotifications);
 
@@ -2198,9 +2203,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [session.user.id, isAdminAccount]);
 
   useEffect(() => {
+    setDismissedNotificationTokensLoaded(false);
     const stored = localStorage.getItem(dismissedStorageKey);
     if (!stored) {
       setDismissedNotificationTokens(new Set());
+      setDismissedNotificationTokensLoaded(true);
       return;
     }
     try {
@@ -2208,6 +2215,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setDismissedNotificationTokens(new Set(parsed ?? []));
     } catch {
       setDismissedNotificationTokens(new Set());
+    } finally {
+      setDismissedNotificationTokensLoaded(true);
     }
   }, [dismissedStorageKey]);
 
@@ -3609,18 +3618,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           setAppointmentsMessage(`Appointment saved, but ${leadNotifyError}`);
         }
       }
-      const notificationBody = formatAppointmentNotificationBody("Added", appointmentsShift, kindLabel);
-      const adminNotifyError = await sendAdminPush({
-        title: "New appointment",
-        body: notificationBody,
-      });
-      if (adminNotifyError) {
-        setAppointmentsMessage((previous) =>
-          previous
-            ? `${previous} | admin notification failed: ${adminNotifyError}`
-            : `Appointment saved, but admin notification failed: ${adminNotifyError}`,
-        );
-      }
     }
 
     setAppointmentForm({
@@ -3697,12 +3694,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           body: notificationBody,
           notificationType: "shift_removed",
         });
-        const adminNotifyError = await sendAdminPush({
-          title: "Appointment deleted",
-          body: notificationBody,
-        });
-        const notificationErrors = [leadNotifyError, adminNotifyError && `admin notification failed: ${adminNotifyError}`]
-          .filter((value): value is string => Boolean(value));
+        const notificationErrors = [leadNotifyError].filter((value): value is string => Boolean(value));
         if (notificationErrors.length > 0) {
           setAppointmentsMessage(`Appointment deleted, but ${notificationErrors.join(" | ")}`);
         }
@@ -3780,17 +3772,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const shiftTime = assignedShift ? formatTimeRangeFromInstance(assignedShift.start, assignedShift.end) : "—";
     const shiftNotificationSummary = `${shiftDate} (${shiftTime})`;
     const notificationErrors: string[] = [];
-
-    const { error: adminPushError } = await supabase.functions.invoke("send-admin-push", {
-      body: {
-        title: "Shift added",
-        body: shiftNotificationSummary,
-        url: "/?view=notifications",
-      },
-    });
-    if (adminPushError) {
-      notificationErrors.push(`admin notification failed: ${adminPushError.message}`);
-    }
 
     const leadNotifyError = await notifyLeadsOnShiftInstance({
       shiftInstanceId: assignShiftInstanceId,
@@ -3920,15 +3901,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       body: `Other: ${label} was added to ${shiftTitle}.`,
       notificationType: "shift_added",
     });
-    const adminNotifyError = await sendAdminPush({
-      title: "Shift updated",
-      body: `Other: ${label} was added to ${shiftTitle}.`,
-    });
 
-    const notificationErrors = [
-      leadNotifyError,
-      adminNotifyError ? `admin notification failed: ${adminNotifyError}` : null,
-    ].filter((value): value is string => Boolean(value));
+    const notificationErrors = [leadNotifyError].filter((value): value is string => Boolean(value));
 
     closeAssignVolunteerModal();
     addWeekAssignmentLocally({
@@ -4064,6 +4038,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setNotificationsLoading(true);
     setNotificationsMessage("");
 
+    let deniedRequest = notifications.find(
+      (item): item is ShiftAssignmentDetail => item.id === denyTargetId && !isAppointmentNotification(item),
+    );
+    if (!deniedRequest) {
+      const { data: deniedData } = await fetchAssignmentById(denyTargetId);
+      deniedRequest = deniedData ?? undefined;
+    }
+
     const { error } = await denyNotificationAssignment(denyTargetId, denyReason.trim());
 
     if (error) {
@@ -4075,6 +4057,21 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowDenyPrompt(false);
     setDenyTargetId(null);
     setDenyReason("");
+
+    const deniedVolunteerId = deniedRequest?.volunteer?.id;
+    if (deniedVolunteerId) {
+      const deniedShiftTitle = deniedRequest?.shift_instance?.template?.title ?? "your shift";
+      const pushError = await sendVolunteerPush({
+        userId: deniedVolunteerId,
+        title: "Shift denied",
+        body: `Your request for ${deniedShiftTitle} was denied. Reason: ${denyReason.trim()}`,
+        notificationType: "shift_removed",
+        shiftInstanceId: deniedRequest?.shift_instance?.id ?? undefined,
+      });
+      if (pushError) {
+        setNotificationsMessage(`Denied, but push notification failed: ${pushError}`);
+      }
+    }
 
     removeAssignmentLocally(denyTargetId);
     removeNotificationFromList(denyTargetId);
@@ -4114,10 +4111,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       removeTarget.volunteer?.full_name ||
       removeTargetLabel ||
       "A volunteer";
-    const pushError = await sendAdminDropPush(`${adminName} removed ${volunteerName} from a shift.`);
-    if (pushError) {
-      setAssignmentsMessage(`Volunteer removed, but push notification failed: ${pushError}`);
-    }
     const removedVolunteerId = removeTarget.volunteer?.id;
     const removedShiftInstanceId = removeTarget.shift_instance?.id;
     if (removedVolunteerId) {
@@ -4139,7 +4132,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
     }
     if (removedShiftInstanceId) {
-      const memberNotifyError = await notifyActiveMembersOnShiftInstance({
+      const leadNotifyError = await notifyLeadsOnShiftInstance({
         shiftInstanceId: removedShiftInstanceId,
         excludeVolunteerIds: [session.user.id, removedVolunteerId].filter(
           (value): value is string => Boolean(value),
@@ -4148,8 +4141,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         body: `${volunteerName} left your shift`,
         notificationType: "shift_dropped",
       });
-      if (memberNotifyError) {
-        setAssignmentsMessage(`Volunteer removed, but ${memberNotifyError}`);
+      if (leadNotifyError) {
+        setAssignmentsMessage(`Volunteer removed, but ${leadNotifyError}`);
       }
     }
 
@@ -4209,66 +4202,21 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setDropTargetId(null);
     const actorName =
       displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "A volunteer";
-    const reasonText = dropReason.trim();
-    const fallbackShiftForLabel =
-      targetShiftInstanceId != null
-        ? instanceShifts.find((shift) => shift.instanceId === targetShiftInstanceId)
-        : null;
-    const droppedShiftLabel = formatShortShiftRequestLabel(
-      targetAssignment?.shift_instance
-        ? targetAssignment.shift_instance
-        : dropTargetShiftContext
-          ? {
-              starts_at: dropTargetShiftContext.starts_at ?? null,
-              shift_date: dropTargetShiftContext.shift_date ?? null,
-              title: dropTargetShiftContext.title ?? null,
-            }
-        : fallbackShiftForLabel
-          ? {
-              starts_at: fallbackShiftForLabel.start.toISOString(),
-              title: fallbackShiftForLabel.title,
-            }
-          : null,
-    );
-    const pushMessage = reasonText
-      ? `${actorName} Dropped (${droppedShiftLabel}). Reason: ${reasonText}`
-      : `${actorName} Dropped (${droppedShiftLabel})`;
-    const dropFocusDateKey = (() => {
-      if (targetAssignment?.shift_instance?.shift_date) return targetAssignment.shift_instance.shift_date;
-      if (targetAssignment?.shift_instance?.starts_at) {
-        const parsed = new Date(targetAssignment.shift_instance.starts_at);
-        if (!Number.isNaN(parsed.getTime())) return getDateKey(startOfDay(parsed));
-      }
-      if (dropTargetShiftContext?.shift_date) return dropTargetShiftContext.shift_date;
-      if (dropTargetShiftContext?.starts_at) {
-        const parsed = new Date(dropTargetShiftContext.starts_at);
-        if (!Number.isNaN(parsed.getTime())) return getDateKey(startOfDay(parsed));
-      }
-      if (fallbackShiftForLabel) return getDateKey(startOfDay(fallbackShiftForLabel.start));
-      return null;
-    })();
-    const pushError = await sendAdminDropPush(
-      pushMessage,
-      dropFocusDateKey ? `/?focusDate=${dropFocusDateKey}` : "/",
-    );
     const isVolunteerDrop = profile?.role !== "Admin";
     if (isVolunteerDrop && targetShiftInstanceId) {
-      const memberNotifyError = await notifyActiveMembersOnShiftInstance({
+      const leadNotifyError = await notifyLeadsOnShiftInstance({
         shiftInstanceId: targetShiftInstanceId,
         excludeVolunteerIds: [session.user.id],
         title: "Shift dropped",
         body: `${actorName} left your shift`,
         notificationType: "shift_dropped",
       });
-      if (memberNotifyError) {
-        setAssignmentsMessage(`Shift dropped, but ${memberNotifyError}`);
+      if (leadNotifyError) {
+        setAssignmentsMessage(`Shift dropped, but ${leadNotifyError}`);
       }
     }
     setDropReason("");
     setDropTargetShiftContext(null);
-    if (pushError) {
-      setAssignmentsMessage(`Shift dropped, but push notification failed: ${pushError}`);
-    }
 
     removeAssignmentLocally(dropTargetId, getPersonalShiftKeyForAssignment(targetAssignment));
     refreshShiftViewsInBackground();

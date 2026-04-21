@@ -130,7 +130,12 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
         return Date.now() - droppedTs <= ADMIN_DROPPED_NOTIFICATION_WINDOW_MS;
       }
 
-      if (item.status === "dropped") return true;
+      if (item.status === "dropped") {
+        const droppedAt = item.dropped_at ?? item.created_at ?? "";
+        const droppedTs = Date.parse(droppedAt);
+        if (Number.isNaN(droppedTs)) return false;
+        return Date.now() - droppedTs <= ADMIN_DROPPED_NOTIFICATION_WINDOW_MS;
+      }
       if (item.status !== "active") return false;
       const createdAt = item.created_at ? Date.parse(item.created_at) : NaN;
       if (Number.isNaN(createdAt)) return false;
