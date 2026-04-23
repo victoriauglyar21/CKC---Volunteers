@@ -10,6 +10,7 @@ import {
   type TouchEvent as ReactTouchEvent,
 } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import TrainingCourse from "./components/TrainingCourse";
 import { signOutSafely, supabase } from "./supabaseClient";
 import {
   APPOINTMENT_COLOR_ADOPTION,
@@ -40,6 +41,10 @@ import {
   notifyLeadsOnShiftInstance,
   sendVolunteerPush,
 } from "./authedApp/services/pushNotificationService";
+import {
+  fetchTrainingCompletionRows,
+  fetchTrainingCourses,
+} from "./authedApp/services/trainingCourseService";
 import type {
   AppNotificationItem,
   AuthedAppProps,
@@ -133,6 +138,84 @@ function isQuotaExceededError(error: unknown) {
     error instanceof DOMException &&
     (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED")
   );
+}
+
+function isPushSubscriptionQuotaError(error: unknown) {
+  if (!(error instanceof DOMException)) return false;
+  if (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED") {
+    return true;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes("quota") || message.includes("too many");
+}
+
+function getPushSubscriptionErrorMessage(error: unknown) {
+  if (isPushSubscriptionQuotaError(error)) {
+    return "Push notifications quota is full on this phone. Remove this app from Home Screen, clear Safari website data for this site, re-open from Home Screen, then enable notifications again.";
+  }
+  if (error instanceof DOMException && error.name === "NotAllowedError") {
+    return "Notifications are blocked in browser/device settings. Allow notifications, then try again.";
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return "Unable to enable notifications.";
+}
+
+async function clearExistingPushSubscriptions() {
+  if (!("serviceWorker" in navigator)) return false;
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  let removedAny = false;
+  await Promise.all(
+    registrations.map(async (registration) => {
+      const existingSubscription = await registration.pushManager.getSubscription();
+      if (!existingSubscription) return;
+      const unsubscribed = await existingSubscription.unsubscribe();
+      removedAny = removedAny || unsubscribed;
+    }),
+  );
+  return removedAny;
+}
+
+async function resetPushEnvironment() {
+  if (!("serviceWorker" in navigator)) return false;
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  if (registrations.length === 0) return false;
+
+  let changed = false;
+  await Promise.all(
+    registrations.map(async (registration) => {
+      try {
+        const existingSubscription = await registration.pushManager.getSubscription();
+        if (existingSubscription) {
+          const unsubscribed = await existingSubscription.unsubscribe();
+          changed = changed || unsubscribed;
+        }
+      } catch {
+        // Ignore unsubscribe issues during recovery.
+      }
+      try {
+        const unregistered = await registration.unregister();
+        changed = changed || unregistered;
+      } catch {
+        // Ignore unregister issues during recovery.
+      }
+    }),
+  );
+  return changed;
+}
+
+function safeSetLocalStorageItem(storageKey: string, value: string) {
+  if (typeof window === "undefined") return false;
+  try {
+    window.localStorage.setItem(storageKey, value);
+    return true;
+  } catch (error) {
+    if (!isQuotaExceededError(error)) {
+      return false;
+    }
+  }
+  return false;
 }
 
 function removeStoredKeysByPrefix(prefix: string, excludeKey?: string) {
@@ -285,6 +368,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [notesSaving, setNotesSaving] = useState(false);
   const [notesMessage, setNotesMessage] = useState("");
   const [showProfile, setShowProfile] = useState(false);
+  const [showTraining, setShowTraining] = useState(false);
   const [showVolunteers, setShowVolunteers] = useState(false);
   const [volunteersLoading, setVolunteersLoading] = useState(false);
   const [volunteersMessage, setVolunteersMessage] = useState("");
@@ -487,10 +571,62 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       let subscription = await readyRegistration.pushManager.getSubscription();
       if (!subscription) {
-        subscription = await readyRegistration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-        });
+        try {
+          subscription = await readyRegistration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+          });
+        } catch (error) {
+          if (isPushSubscriptionQuotaError(error)) {
+            await clearExistingPushSubscriptions().catch(() => {
+              // Ignore cleanup failures and fall through to user-facing guidance.
+            });
+            subscription = await readyRegistration.pushManager.getSubscription();
+            if (!subscription) {
+              try {
+                subscription = await readyRegistration.pushManager.subscribe({
+                  userVisibleOnly: true,
+                  applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+                });
+              } catch (retryError) {
+                if (isPushSubscriptionQuotaError(retryError)) {
+                  await resetPushEnvironment().catch(() => {
+                    // Ignore environment reset failures and surface guidance below.
+                  });
+                  const freshRegistration = await navigator.serviceWorker.register("/sw.js");
+                  const freshReadyRegistration = await navigator.serviceWorker.ready;
+                  await freshRegistration.update().catch(() => {
+                    // Ignore update failures; an existing worker can still receive push.
+                  });
+                  subscription = await freshReadyRegistration.pushManager.getSubscription();
+                  if (!subscription) {
+                    try {
+                      subscription = await freshReadyRegistration.pushManager.subscribe({
+                        userVisibleOnly: true,
+                        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+                      });
+                    } catch (finalRetryError) {
+                      if (showFeedback) {
+                        setNotificationMessage(getPushSubscriptionErrorMessage(finalRetryError));
+                      }
+                      return false;
+                    }
+                  }
+                } else {
+                  if (showFeedback) {
+                    setNotificationMessage(getPushSubscriptionErrorMessage(retryError));
+                  }
+                  return false;
+                }
+              }
+            }
+          } else {
+            if (showFeedback) {
+              setNotificationMessage(getPushSubscriptionErrorMessage(error));
+            }
+            return false;
+          }
+        }
       }
 
       const json = subscription.toJSON();
@@ -1346,23 +1482,60 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const fetchVolunteers = useCallback(async () => {
     setVolunteersLoading(true);
     setVolunteersMessage("");
-    const { data, error } = await supabase
-      .from("profiles")
-      .select(
-        "id, full_name, preferred_name, pronouns, role, joined_at, date_of_birth, phone, emergency_contact_name, emergency_contact_phone, status, internal_notes, interests, training_completed, training_completed_at, notification_pref, created_at",
-      )
-      .order("joined_at", { ascending: false, nullsFirst: false });
+    const [profilesResult, recurringResult, trainingCoursesResult, trainingCompletionsResult] =
+      await Promise.all([
+        supabase
+          .from("profiles")
+          .select(
+            "id, full_name, preferred_name, pronouns, role, joined_at, date_of_birth, phone, emergency_contact_name, emergency_contact_phone, status, internal_notes, interests, training_completed, training_completed_at, notification_pref, created_at",
+          )
+          .order("joined_at", { ascending: false, nullsFirst: false }),
+        supabase.from("recurring_assignments").select("volunteer_id"),
+        fetchTrainingCourses(),
+        fetchTrainingCompletionRows(),
+      ]);
 
-    if (error || !data) {
+    if (profilesResult.error || !profilesResult.data) {
       setVolunteers([]);
       setVolunteerRecurringStatusById({});
-      setVolunteersMessage(error?.message ?? "Unable to load volunteers.");
+      setVolunteersMessage(profilesResult.error?.message ?? "Unable to load volunteers.");
       setVolunteersLoading(false);
       return;
     }
 
-    setVolunteers(data as unknown as VolunteerRow[]);
-    const { data: recurringRows } = await supabase.from("recurring_assignments").select("volunteer_id");
+    const allCourses = trainingCoursesResult.error ? [] : trainingCoursesResult.data;
+    const completionRows = trainingCompletionsResult.error ? [] : trainingCompletionsResult.data;
+    const completionCourseIdsByUser = new Map<string, Set<string>>();
+    completionRows.forEach((row) => {
+      const entries = completionCourseIdsByUser.get(row.user_id) ?? new Set<string>();
+      entries.add(row.course_id);
+      completionCourseIdsByUser.set(row.user_id, entries);
+    });
+
+    const volunteersWithTraining = (profilesResult.data as unknown as VolunteerRow[]).map((volunteer) => {
+      const requiredAssignedCourseIds = allCourses
+        .filter((course) => {
+          if (!course.dbId || !course.isRequired || course.isPublished === false) return false;
+          if (volunteer.role === "Admin" || volunteer.role === "Lead") {
+            return course.audience.includes("regular") || course.audience.includes("lead");
+          }
+          return course.audience.includes("regular");
+        })
+        .map((course) => course.dbId as string);
+
+      const completedCourseIds = completionCourseIdsByUser.get(volunteer.id) ?? new Set<string>();
+      const trainingComplete =
+        requiredAssignedCourseIds.length > 0 &&
+        requiredAssignedCourseIds.every((courseId) => completedCourseIds.has(courseId));
+
+      return {
+        ...volunteer,
+        training_all_courses_completed: trainingComplete,
+      } satisfies VolunteerRow;
+    });
+
+    setVolunteers(volunteersWithTraining);
+    const recurringRows = recurringResult.data;
     const recurringStatusMap: Record<string, boolean> = {};
     (recurringRows ?? []).forEach((row) => {
       const volunteerId = (row as { volunteer_id?: string | null }).volunteer_id;
@@ -2222,7 +2395,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   const persistDismissedTokens = useCallback(
     (next: Set<string>) => {
-      localStorage.setItem(dismissedStorageKey, JSON.stringify(Array.from(next).slice(-1000)));
+      const latestTokens = Array.from(next).slice(-1000);
+      const serialized = JSON.stringify(latestTokens);
+      if (!safeSetLocalStorageItem(dismissedStorageKey, serialized)) {
+        const reducedSerialized = JSON.stringify(latestTokens.slice(-250));
+        safeSetLocalStorageItem(dismissedStorageKey, reducedSerialized);
+      }
       setDismissedNotificationTokens(next);
     },
     [dismissedStorageKey],
@@ -2416,7 +2594,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   useEffect(() => {
     const storageKey = `weekOffset:${session.user.id}`;
-    localStorage.setItem(storageKey, String(weekOffset));
+    safeSetLocalStorageItem(storageKey, String(weekOffset));
   }, [session.user.id, weekOffset]);
 
   useEffect(() => {
@@ -3448,9 +3626,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         showFeedback: true,
       });
     } catch (error) {
-      setNotificationMessage(
-        error instanceof Error ? error.message : "Unable to enable notifications.",
-      );
+      setNotificationMessage(getPushSubscriptionErrorMessage(error));
     } finally {
       setNotificationLoading(false);
       setNotificationAction(null);
@@ -4235,6 +4411,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (viewParam === "notifications") {
       setShowNotifications(true);
       setShowMenu(false);
+    } else if (viewParam === "training") {
+      setShowTraining(true);
+      setShowMenu(false);
     }
     const notificationActionParam = params.get("notificationAction");
     const assignmentIdParam = params.get("assignmentId");
@@ -4808,6 +4987,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowAssignmentNotes(false);
     setShowVolunteers(false);
     setShowProfile(false);
+    setShowTraining(false);
     setShowAddRecurring(false);
   };
 
@@ -4822,7 +5002,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const nextTheme = getCurrentThemeMode() === "dark" ? "light" : "dark";
     root.dataset.theme = nextTheme;
     root.classList.toggle("dark", nextTheme === "dark");
-    window.localStorage.setItem("ui-theme", nextTheme);
+    safeSetLocalStorageItem("ui-theme", nextTheme);
     setMenuThemeMode(nextTheme);
   };
   const isDarkTheme = menuThemeMode === "dark";
@@ -5140,6 +5320,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             </button>
             {showMenu ? (
               <div className="menu-dropdown" role="menu">
+                <button
+                  className="menu-item menu-item-training"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setShowInfoMenu(false);
+                    setShowTraining(true);
+                  }}
+                >
+                  Training Courses
+                </button>
                 <button
                   className="menu-item"
                   type="button"
@@ -7509,15 +7701,36 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         }}
                       >
                         <div className="volunteer-main">
-                          <p className={nameClass}>{name}</p>
+                          <div className="volunteer-name-row">
+                            <p className={nameClass}>{name}</p>
+                          </div>
                           <p className="volunteer-meta">{roleLabel}</p>
                           {canSeeVolunteerRecurringFlag && volunteerRecurringStatusById[volunteer.id] ? (
                             <p className="volunteer-meta volunteer-recurring-flag">Has Weekly Shifts</p>
                           ) : null}
                         </div>
-                        <span className="volunteer-joined">
-                          Joined {formatDate(volunteer.joined_at)}
-                        </span>
+                        {profile?.role === "Admin" ? (
+                          <div className="volunteer-training-summary">
+                            <span className="volunteer-training-label">Courses Completed</span>
+                            <span
+                              className={`volunteer-training-indicator ${
+                                volunteer.training_all_courses_completed ? "complete" : "incomplete"
+                              }`}
+                              aria-label={
+                                volunteer.training_all_courses_completed
+                                  ? "Completed all required assigned courses"
+                                  : "Missing required assigned courses"
+                              }
+                              title={
+                                volunteer.training_all_courses_completed
+                                  ? "Completed all required assigned courses"
+                                  : "Missing required assigned courses"
+                              }
+                            >
+                              {volunteer.training_all_courses_completed ? "✓" : "✕"}
+                            </span>
+                          </div>
+                        ) : null}
                       </button>
                     );
                   })}
@@ -7719,6 +7932,30 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </div>
               <div className="account-section">
                 <div className="account-section-header">
+                  <p className="account-section-title">Training</p>
+                  <button
+                    className="account-button"
+                    type="button"
+                    onClick={() => {
+                      setShowProfile(false);
+                      setShowTraining(true);
+                    }}
+                  >
+                    Open course
+                  </button>
+                </div>
+                <div className="modal-row">
+                  <span className="modal-label">Status</span>
+                  <span>
+                    {displayProfile?.training_completed
+                      ? `Completed ${formatDate(displayProfile.training_completed_at)}`
+                      : "Not completed"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="account-section">
+                <div className="account-section-header">
                   <p className="account-section-title">Support</p>
                 </div>
                 <button className="account-button account-link-button" type="button" onClick={handleReportIssueClick}>
@@ -7728,6 +7965,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             </div>
           </div>
         </div>
+      ) : null}
+      {showTraining ? (
+        <TrainingCourse
+          userId={session.user.id}
+          profile={displayProfile}
+          onClose={() => setShowTraining(false)}
+          onCompleted={(changes) => {
+            setProfileOverride((previous) => ({
+              ...(previous ?? {}),
+              ...changes,
+            }));
+          }}
+        />
       ) : null}
     </div>
   );
