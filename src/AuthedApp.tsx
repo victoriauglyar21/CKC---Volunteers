@@ -2933,6 +2933,33 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     },
     [],
   );
+  const formatDroppedShiftNotificationLabel = useCallback(
+    (shift: {
+      starts_at?: string | null;
+      shift_date?: string | null;
+      template?: { title?: string | null } | null;
+      title?: string | null;
+    } | null | undefined) => {
+      if (!shift) return "Upcoming, Shift";
+      const parsedDate = shift.starts_at
+        ? new Date(shift.starts_at)
+        : shift.shift_date
+          ? parseDateOnly(shift.shift_date)
+          : null;
+      const dateLabel =
+        parsedDate && !Number.isNaN(parsedDate.getTime())
+          ? parsedDate.toLocaleDateString("en-US", {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+            })
+          : "Upcoming";
+      const title = (shift.template?.title ?? shift.title ?? "").toLowerCase();
+      const shiftPeriod = title.includes("morning") ? "AM Shift" : title.includes("evening") ? "PM Shift" : "Shift";
+      return `${dateLabel}, ${shiftPeriod}`;
+    },
+    [],
+  );
   const formatJoinRequestNotificationLabel = useCallback(
     (shift: {
       starts_at?: string | null;
@@ -4564,23 +4591,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const removedShiftInstanceId = removeTarget.shift_instance?.id;
     const removalNotificationErrors: string[] = [];
     const removedShiftTitle = removeTarget.shift_instance?.template?.title ?? "Shift";
+    const removedShiftLabel = formatDroppedShiftNotificationLabel(removeTarget.shift_instance);
     const adminPushError = await sendAdminPush({
-      title: "Shift dropped",
-      body: `${volunteerName} left ${removedShiftTitle}`,
+      title: "Shift Dropped",
+      body: `${volunteerName}, Dropped A Shift\n${removedShiftLabel}`,
     });
     if (adminPushError) {
       removalNotificationErrors.push(`admin notification failed: ${adminPushError}`);
     }
     if (removedVolunteerId) {
-      const shiftDateValue = removeTarget.shift_instance?.starts_at ?? removeTarget.shift_instance?.shift_date;
-      const shiftDate = formatDateWithWeekday(shiftDateValue);
-      const templateId = removeTarget.shift_instance?.template?.id;
-      const template = templateId ? templateMap[templateId] : undefined;
-      const shiftTime = formatResolvedShiftTimeRange(removeTarget.shift_instance, template?.title ?? null);
       const volunteerPushError = await sendVolunteerPush({
         userId: removedVolunteerId,
-        title: "Shift removed",
-        body: `${adminName} removed you from ${shiftDate}, ${shiftTime}, ${removedShiftTitle}.`,
+        title: "Shift Removed",
+        body: `${adminName} Removed You From ${removedShiftTitle}\n${removedShiftLabel}`,
         notificationType: "shift_removed",
         shiftInstanceId: removedShiftInstanceId ?? undefined,
       });
@@ -4594,8 +4617,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         excludeVolunteerIds: [session.user.id, removedVolunteerId].filter(
           (value): value is string => Boolean(value),
         ),
-        title: "Shift dropped",
-        body: `${volunteerName} left your shift`,
+        title: "Shift Dropped",
+        body: `${volunteerName}, Dropped A Shift\n${removedShiftLabel}`,
         notificationType: "shift_dropped",
       });
       if (leadNotifyError) {
@@ -4603,7 +4626,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
     }
     if (removalNotificationErrors.length > 0) {
-      setAssignmentsMessage(`Volunteer removed, but ${removalNotificationErrors.join(" | ")}`);
+      setAssignmentsMessage(`Volunteer Removed, But ${removalNotificationErrors.join(" | ")}`);
     }
 
     setShowRemovePrompt(false);
@@ -4664,9 +4687,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "A volunteer";
     const isVolunteerDrop = profile?.role !== "Admin";
     const dropNotificationErrors: string[] = [];
+    const droppedShiftLabel = formatDroppedShiftNotificationLabel(
+      targetAssignment?.shift_instance ?? dropTargetShiftContext,
+    );
     const adminPushError = await sendAdminPush({
-      title: "Shift dropped",
-      body: `${actorName} left ${targetAssignment?.shift_instance?.template?.title ?? "a shift"}`,
+      title: "Shift Dropped",
+      body: `${actorName}, Dropped A Shift\n${droppedShiftLabel}`,
     });
     if (adminPushError) {
       dropNotificationErrors.push(`admin notification failed: ${adminPushError}`);
@@ -4675,8 +4701,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const leadNotifyError = await notifyLeadsOnShiftInstance({
         shiftInstanceId: targetShiftInstanceId,
         excludeVolunteerIds: [session.user.id],
-        title: "Shift dropped",
-        body: `${actorName} left your shift`,
+        title: "Shift Dropped",
+        body: `${actorName}, Dropped A Shift\n${droppedShiftLabel}`,
         notificationType: "shift_dropped",
       });
       if (leadNotifyError) {
@@ -4684,7 +4710,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
     }
     if (dropNotificationErrors.length > 0) {
-      setAssignmentsMessage(`Shift dropped, but ${dropNotificationErrors.join(" | ")}`);
+      setAssignmentsMessage(`Shift Dropped, But ${dropNotificationErrors.join(" | ")}`);
     }
     setDropReason("");
     setDropTargetShiftContext(null);
@@ -7013,6 +7039,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             }
                           : null,
                     );
+                    const droppedShiftNotificationLabel = formatDroppedShiftNotificationLabel(
+                      shiftInstance?.starts_at || shiftInstance?.shift_date
+                        ? shiftInstance
+                        : fallbackNotificationShiftFromQuery
+                          ? fallbackNotificationShiftFromQuery
+                          : fallbackNotificationShiftFromCalendar
+                          ? {
+                              starts_at: fallbackNotificationShiftFromCalendar.start.toISOString(),
+                              title: fallbackNotificationShiftFromCalendar.title,
+                            }
+                          : null,
+                    );
                     const joinRequestNotificationLabel = formatJoinRequestNotificationLabel(
                       shiftInstance?.starts_at || shiftInstance?.shift_date
                         ? shiftInstance
@@ -7051,11 +7089,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           isLatest,
                           <>
                             {isLatest ? <span className="notification-tag">Latest</span> : null}
-                            <p className="notification-meta">{timeLine}</p>
                             <p className="notification-name">
-                              <span className={volunteerNameClass}>{volunteerName}</span> Dropped (
-                              {notificationShiftLabel})
+                              <span className={volunteerNameClass}>{volunteerName}</span>, Dropped A Shift
                             </p>
+                            <p className="notification-meta">{droppedShiftNotificationLabel}</p>
                             {readableDropReason ? (
                               <p className="notification-reason">{readableDropReason}</p>
                             ) : null}
@@ -7108,10 +7145,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       request.status === "active"
                         ? "Your shift was approved!"
                         : request.dropped_reason === "Removed by admin"
-                          ? `You have been removed from ${shiftTitle}`
+                          ? `You Have Been Removed From ${shiftTitle}`
                           : isSelfDropReason(request.dropped_reason)
-                            ? `You left ${shiftTitle}`
+                            ? `You Left ${shiftTitle}`
                           : `Shift Denied · ${shiftTitle}`;
+                    const statusMeta =
+                      request.status === "dropped" ? droppedShiftNotificationLabel : timeLine;
 
                     return renderNotificationCard(
                       request,
@@ -7119,7 +7158,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       isLatest,
                       <>
                         {isLatest ? <span className="notification-tag">Latest</span> : null}
-                        <p className="notification-meta">{timeLine}</p>
+                        <p className="notification-meta">{statusMeta}</p>
                         <p className="notification-name">{statusLabel}</p>
                         {request.status === "dropped" &&
                         readableDropReason &&
@@ -7401,7 +7440,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     }
                   }}
                 >
-                  Drop shift
+                  Drop Shift
                 </button>
               </div>
             </div>
@@ -7414,7 +7453,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           <div className="modal-panel take-shift-panel">
             <div className="modal-header">
               <div>
-                <p className="modal-eyebrow">Drop shift</p>
+                <p className="modal-eyebrow">Drop Shift</p>
                 <h3 className="modal-title">Reason</h3>
               </div>
               <button

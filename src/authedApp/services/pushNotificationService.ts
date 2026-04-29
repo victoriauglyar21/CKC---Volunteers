@@ -29,7 +29,7 @@ export async function getFunctionAuthHeaders() {
 
 export async function sendAdminDropPush(message: string, url = "/?view=notifications") {
   return sendAdminPush({
-    title: "Shift dropped",
+    title: "Shift Dropped",
     body: message,
     url,
   });
