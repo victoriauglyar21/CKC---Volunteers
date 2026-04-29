@@ -11,7 +11,6 @@ import {
 } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check, Trash2, X } from "lucide-react";
-import TrainingCourse from "./components/TrainingCourse";
 import { signOutSafely, supabase } from "./supabaseClient";
 import {
   APPOINTMENT_COLOR_ADOPTION,
@@ -44,10 +43,6 @@ import {
   sendAdminPush,
   sendVolunteerPush,
 } from "./authedApp/services/pushNotificationService";
-import {
-  fetchTrainingCompletionRows,
-  fetchTrainingCourses,
-} from "./authedApp/services/trainingCourseService";
 import type {
   AppNotificationItem,
   AuthedAppProps,
@@ -487,7 +482,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [notesSaving, setNotesSaving] = useState(false);
   const [notesMessage, setNotesMessage] = useState("");
   const [showProfile, setShowProfile] = useState(false);
-  const [showTraining, setShowTraining] = useState(false);
   const [showVolunteers, setShowVolunteers] = useState(false);
   const [volunteersLoading, setVolunteersLoading] = useState(false);
   const [volunteersMessage, setVolunteersMessage] = useState("");
@@ -1616,18 +1610,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const fetchVolunteers = useCallback(async () => {
     setVolunteersLoading(true);
     setVolunteersMessage("");
-    const [profilesResult, recurringResult, trainingCoursesResult, trainingCompletionsResult] =
-      await Promise.all([
-        supabase
-          .from("profiles")
-          .select(
-            "id, full_name, preferred_name, pronouns, role, joined_at, date_of_birth, phone, emergency_contact_name, emergency_contact_phone, status, internal_notes, interests, training_completed, training_completed_at, notification_pref, created_at",
-          )
-          .order("joined_at", { ascending: false, nullsFirst: false }),
-        supabase.from("recurring_assignments").select("volunteer_id"),
-        fetchTrainingCourses(),
-        fetchTrainingCompletionRows(),
-      ]);
+    const [profilesResult, recurringResult] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select(
+          "id, full_name, preferred_name, pronouns, role, joined_at, date_of_birth, phone, emergency_contact_name, emergency_contact_phone, status, internal_notes, interests, training_completed, training_completed_at, notification_pref, created_at",
+        )
+        .order("joined_at", { ascending: false, nullsFirst: false }),
+      supabase.from("recurring_assignments").select("volunteer_id"),
+    ]);
 
     if (profilesResult.error || !profilesResult.data) {
       setVolunteers([]);
@@ -1637,38 +1628,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    const allCourses = trainingCoursesResult.error ? [] : trainingCoursesResult.data;
-    const completionRows = trainingCompletionsResult.error ? [] : trainingCompletionsResult.data;
-    const completionCourseIdsByUser = new Map<string, Set<string>>();
-    completionRows.forEach((row) => {
-      const entries = completionCourseIdsByUser.get(row.user_id) ?? new Set<string>();
-      entries.add(row.course_id);
-      completionCourseIdsByUser.set(row.user_id, entries);
-    });
-
-    const volunteersWithTraining = (profilesResult.data as unknown as VolunteerRow[]).map((volunteer) => {
-      const requiredAssignedCourseIds = allCourses
-        .filter((course) => {
-          if (!course.dbId || !course.isRequired || course.isPublished === false) return false;
-          if (volunteer.role === "Admin" || volunteer.role === "Lead") {
-            return course.audience.includes("regular") || course.audience.includes("lead");
-          }
-          return course.audience.includes("regular");
-        })
-        .map((course) => course.dbId as string);
-
-      const completedCourseIds = completionCourseIdsByUser.get(volunteer.id) ?? new Set<string>();
-      const trainingComplete =
-        requiredAssignedCourseIds.length > 0 &&
-        requiredAssignedCourseIds.every((courseId) => completedCourseIds.has(courseId));
-
-      return {
-        ...volunteer,
-        training_all_courses_completed: trainingComplete,
-      } satisfies VolunteerRow;
-    });
-
-    setVolunteers(volunteersWithTraining);
+    setVolunteers(profilesResult.data as unknown as VolunteerRow[]);
     const recurringRows = recurringResult.data;
     const recurringStatusMap: Record<string, boolean> = {};
     (recurringRows ?? []).forEach((row) => {
@@ -4746,9 +4706,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (viewParam === "notifications") {
       setShowNotifications(true);
       setShowMenu(false);
-    } else if (viewParam === "training") {
-      setShowTraining(true);
-      setShowMenu(false);
     }
     const notificationActionParam = params.get("notificationAction");
     const assignmentIdParam = params.get("assignmentId");
@@ -5324,7 +5281,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setAppointmentChecklistNoteDraft("");
     setShowVolunteers(false);
     setShowProfile(false);
-    setShowTraining(false);
     setShowAddRecurring(false);
   };
 
@@ -5657,18 +5613,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             </button>
             {showMenu ? (
               <div className="menu-dropdown" role="menu">
-                <button
-                  className="menu-item menu-item-training"
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setShowMenu(false);
-                    setShowInfoMenu(false);
-                    setShowTraining(true);
-                  }}
-                >
-                  Training Courses
-                </button>
                 <button
                   className="menu-item"
                   type="button"
@@ -8166,28 +8110,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             <p className="volunteer-meta volunteer-recurring-flag">Has Weekly Shifts</p>
                           ) : null}
                         </div>
-                        {profile?.role === "Admin" ? (
-                          <div className="volunteer-training-summary">
-                            <span className="volunteer-training-label">Courses Completed</span>
-                            <span
-                              className={`volunteer-training-indicator ${
-                                volunteer.training_all_courses_completed ? "complete" : "incomplete"
-                              }`}
-                              aria-label={
-                                volunteer.training_all_courses_completed
-                                  ? "Completed all required assigned courses"
-                                  : "Missing required assigned courses"
-                              }
-                              title={
-                                volunteer.training_all_courses_completed
-                                  ? "Completed all required assigned courses"
-                                  : "Missing required assigned courses"
-                              }
-                            >
-                              {volunteer.training_all_courses_completed ? "✓" : "✕"}
-                            </span>
-                          </div>
-                        ) : null}
                       </button>
                     );
                   })}
@@ -8389,30 +8311,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </div>
               <div className="account-section">
                 <div className="account-section-header">
-                  <p className="account-section-title">Training</p>
-                  <button
-                    className="account-button"
-                    type="button"
-                    onClick={() => {
-                      setShowProfile(false);
-                      setShowTraining(true);
-                    }}
-                  >
-                    Open course
-                  </button>
-                </div>
-                <div className="modal-row">
-                  <span className="modal-label">Status</span>
-                  <span>
-                    {displayProfile?.training_completed
-                      ? `Completed ${formatDate(displayProfile.training_completed_at)}`
-                      : "Not completed"}
-                  </span>
-                </div>
-              </div>
-
-              <div className="account-section">
-                <div className="account-section-header">
                   <p className="account-section-title">Support</p>
                 </div>
                 <button className="account-button account-link-button" type="button" onClick={handleReportIssueClick}>
@@ -8422,19 +8320,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             </div>
           </div>
         </div>
-      ) : null}
-      {showTraining ? (
-        <TrainingCourse
-          userId={session.user.id}
-          profile={displayProfile}
-          onClose={() => setShowTraining(false)}
-          onCompleted={(changes) => {
-            setProfileOverride((previous) => ({
-              ...(previous ?? {}),
-              ...changes,
-            }));
-          }}
-        />
       ) : null}
     </div>
   );
