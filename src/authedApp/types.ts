@@ -92,6 +92,7 @@ export type VolunteerRow = {
   interests: string[] | null;
   training_completed: boolean | null;
   training_completed_at: string | null;
+  training_all_courses_completed?: boolean;
   notification_pref?: "email_only" | "push_and_email" | null;
   created_at?: string | null;
 };
@@ -135,6 +136,9 @@ export type ShiftAppointment = {
   color: string | null;
   starts_at: string | null;
   ends_at: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
+  completion_note: string | null;
   created_at: string | null;
   updated_at: string | null;
   created_by: string | null;
@@ -152,7 +156,9 @@ export type AppointmentNotificationItem = {
   color: string | null;
   starts_at: string | null;
   ends_at: string | null;
-  event_type: "created" | "updated";
+  completed_at?: string | null;
+  completion_note?: string | null;
+  event_type: "created" | "updated" | "completed";
   shift_instance?: {
     id: number;
     shift_date: string | null;

@@ -42,6 +42,8 @@ const APPOINTMENT_NOTIFICATION_SELECT = `
   color,
   starts_at,
   ends_at,
+  completed_at,
+  completion_note,
   created_at,
   updated_at,
   shift_instance:shift_instances (
@@ -168,6 +170,8 @@ type AppointmentNotificationRow = {
   color: string | null;
   starts_at: string | null;
   ends_at: string | null;
+  completed_at: string | null;
+  completion_note: string | null;
   created_at: string | null;
   updated_at: string | null;
   shift_instance: AppointmentNotificationItem["shift_instance"] | AppointmentNotificationItem["shift_instance"][];
@@ -228,8 +232,13 @@ async function fetchAppointmentNotificationItems(input: FetchNotificationsInput)
         : (row.shift_instance ?? null);
       const createdAtMs = row.created_at ? Date.parse(row.created_at) : NaN;
       const updatedAtMs = row.updated_at ? Date.parse(row.updated_at) : NaN;
+      const completedAtMs = row.completed_at ? Date.parse(row.completed_at) : NaN;
       const eventType =
-        Number.isFinite(createdAtMs) &&
+        Number.isFinite(completedAtMs) &&
+        Number.isFinite(updatedAtMs) &&
+        Math.abs(updatedAtMs - completedAtMs) <= 2500
+          ? "completed"
+          : Number.isFinite(createdAtMs) &&
         Number.isFinite(updatedAtMs) &&
         Math.abs(updatedAtMs - createdAtMs) > 1500
           ? "updated"
@@ -246,6 +255,8 @@ async function fetchAppointmentNotificationItems(input: FetchNotificationsInput)
         color: row.color,
         starts_at: row.starts_at,
         ends_at: row.ends_at,
+        completed_at: row.completed_at,
+        completion_note: row.completion_note,
         event_type: eventType,
         shift_instance: normalizedShiftInstance,
       };

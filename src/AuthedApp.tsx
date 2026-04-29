@@ -10,6 +10,7 @@ import {
   type TouchEvent as ReactTouchEvent,
 } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { Check, Trash2, X } from "lucide-react";
 import TrainingCourse from "./components/TrainingCourse";
 import { signOutSafely, supabase } from "./supabaseClient";
 import {
@@ -30,6 +31,7 @@ import {
   deleteAppointmentById,
   fetchWeekAppointmentsByInstanceIds,
   saveAppointment,
+  updateAppointmentChecklist,
 } from "./authedApp/services/appointmentService";
 import {
   approveNotificationAssignment,
@@ -39,6 +41,7 @@ import {
 } from "./authedApp/services/notificationService";
 import {
   notifyLeadsOnShiftInstance,
+  sendAdminPush,
   sendVolunteerPush,
 } from "./authedApp/services/pushNotificationService";
 import {
@@ -122,6 +125,105 @@ type CachedShiftInstance = {
   isVirtual?: boolean;
 };
 
+function getAppointmentStartMs(appointment: ShiftAppointment) {
+  if (!appointment.starts_at) return Number.POSITIVE_INFINITY;
+  const parsed = new Date(appointment.starts_at).getTime();
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+function compareAppointmentsByTime(left: ShiftAppointment, right: ShiftAppointment) {
+  const timeDiff = getAppointmentStartMs(left) - getAppointmentStartMs(right);
+  if (timeDiff !== 0) return timeDiff;
+  return (left.created_at ?? "").localeCompare(right.created_at ?? "");
+}
+
+function getAppointmentKindLabelFromColor(color: string | null | undefined) {
+  const kind = getAppointmentKindFromColor(color);
+  if (kind === "foster") return "Foster";
+  if (kind === "adoption") return "Adoption";
+  if (kind === "vax") return "Vax";
+  if (kind === "orientation") return "Orientation";
+  return "Other";
+}
+
+function formatAppointmentDisplayLabel(appointment: {
+  title?: string | null;
+  color?: string | null;
+  starts_at?: string | null;
+}) {
+  const title = appointment.title?.trim() || "Appointment";
+  const kindLabel = getAppointmentKindLabelFromColor(appointment.color);
+  const timeLabel = appointment.starts_at ? formatTimeOnly(appointment.starts_at) : null;
+  return `${title}, ${kindLabel}${timeLabel ? `, ${timeLabel}` : ""}`;
+}
+
+function formatAppointmentNotificationBodyWithNote(
+  appointment: {
+    title?: string | null;
+    color?: string | null;
+    starts_at?: string | null;
+  },
+  note?: string | null,
+) {
+  const noteText = note?.trim();
+  const base = formatAppointmentDisplayLabel(appointment);
+  return noteText ? `${base}. Notes: ${noteText}` : base;
+}
+
+function formatAppointmentMetaLabel(appointment: {
+  color?: string | null;
+  starts_at?: string | null;
+}) {
+  const kindLabel = getAppointmentKindLabelFromColor(appointment.color);
+  const timeLabel = appointment.starts_at ? formatTimeOnly(appointment.starts_at) : null;
+  return `${kindLabel}${timeLabel ? `, ${timeLabel}` : ""}`;
+}
+
+function getOrdinalDay(day: number) {
+  if (day >= 11 && day <= 13) return `${day}th`;
+  const lastDigit = day % 10;
+  if (lastDigit === 1) return `${day}st`;
+  if (lastDigit === 2) return `${day}nd`;
+  if (lastDigit === 3) return `${day}rd`;
+  return `${day}th`;
+}
+
+function formatAppointmentNotificationDate(value: Date | string | null | undefined) {
+  if (!value) return "upcoming";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "upcoming";
+  const month = date.toLocaleDateString("en-US", { month: "long" });
+  return `${month} ${getOrdinalDay(date.getDate())}`;
+}
+
+function formatAppointmentNotificationTitle(
+  action: "added" | "updated" | "deleted" | "completed",
+  value: Date | string | null | undefined,
+) {
+  const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
+  return `Appointment ${actionLabel}, ${formatAppointmentNotificationDate(value)}`;
+}
+
+const APPOINTMENT_TIME_WINDOWS = [
+  { startHour: 9, endHour: 11 },
+  { startHour: 16, endHour: 19 },
+];
+
+const APPOINTMENT_TIME_OPTIONS = APPOINTMENT_TIME_WINDOWS.flatMap(({ startHour, endHour }) => {
+  const startMinutes = startHour * 60;
+  const endMinutes = endHour * 60;
+  return Array.from({ length: (endMinutes - startMinutes) / 15 + 1 }, (_, index) => {
+    const totalMinutes = startMinutes + index * 15;
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    const value = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+    const hour12 = hours % 12 || 12;
+    const period = hours < 12 ? "AM" : "PM";
+    const label = minutes === 0 ? `${hour12} ${period}` : `${hour12}:${String(minutes).padStart(2, "0")} ${period}`;
+    return { value, label };
+  });
+});
+
 function readStoredJson<T>(storageKey: string) {
   if (typeof window === "undefined") return null;
   try {
@@ -160,6 +262,23 @@ function getPushSubscriptionErrorMessage(error: unknown) {
     return error.message;
   }
   return "Unable to enable notifications.";
+}
+
+function uint8ArrayToBase64Url(bytes: Uint8Array) {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function pushSubscriptionMatchesVapidKey(subscription: PushSubscription, vapidPublicKey: string) {
+  const currentKey = subscription.options.applicationServerKey;
+  if (!currentKey) return false;
+
+  const normalizedCurrentKey = uint8ArrayToBase64Url(new Uint8Array(currentKey));
+  const normalizedExpectedKey = vapidPublicKey.replace(/=+$/g, "");
+  return normalizedCurrentKey === normalizedExpectedKey;
 }
 
 async function clearExistingPushSubscriptions() {
@@ -422,6 +541,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   });
   const [appointmentSaving, setAppointmentSaving] = useState(false);
   const [appointmentDeleteId, setAppointmentDeleteId] = useState<string | null>(null);
+  const [appointmentChecklistSavingId, setAppointmentChecklistSavingId] = useState<string | null>(null);
+  const [appointmentNoteDrafts, setAppointmentNoteDrafts] = useState<Record<string, string>>({});
+  const [appointmentChecklistTarget, setAppointmentChecklistTarget] = useState<ShiftAppointment | null>(null);
+  const [appointmentChecklistNoteDraft, setAppointmentChecklistNoteDraft] = useState("");
   const [expandedAppointmentIds, setExpandedAppointmentIds] = useState<Set<string>>(new Set());
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
   const [assignments, setAssignments] = useState<ShiftAssignment[]>([]);
@@ -491,7 +614,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     : notificationPermission === "granted"
       ? "Allowed on device (tap Enable to finish setup)"
       : "Disabled";
-  const canManageAppointments = isAdminAccount;
+  const canUpdateAppointmentChecklist = isAdminAccount || isLeadRole(displayProfile?.role);
+  const canManageAppointments = canUpdateAppointmentChecklist;
   const canModifyAppointments = isAdminAccount;
   const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
   if (import.meta.env.DEV && !vapidPublicKey) {
@@ -570,6 +694,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       });
 
       let subscription = await readyRegistration.pushManager.getSubscription();
+      if (subscription && !pushSubscriptionMatchesVapidKey(subscription, vapidPublicKey)) {
+        try {
+          await subscription.unsubscribe();
+        } catch {
+          // Ignore stale subscription cleanup failures and attempt a fresh subscribe below.
+        }
+        subscription = null;
+      }
+
       if (!subscription) {
         try {
           subscription = await readyRegistration.pushManager.subscribe({
@@ -1355,6 +1488,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const { data, error } = await fetchWeekAppointmentsByInstanceIds(instanceIds);
 
     if (error) {
+      setAppointmentsMessage(error);
       setAppointmentsLoading(false);
       return;
     }
@@ -2791,12 +2925,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const showNoRecurring = !assignmentsLoading && myRecurring.length === 0 && !assignmentsMessage;
   const selectedShiftAppointments = useMemo(() => {
     if (!appointmentsShiftInstanceId) return [];
-    return (appointmentsByShift[appointmentsShiftInstanceId] ?? []).slice().sort((left, right) => {
-      const leftTime = left.starts_at ? new Date(left.starts_at).getTime() : 0;
-      const rightTime = right.starts_at ? new Date(right.starts_at).getTime() : 0;
-      if (leftTime !== rightTime) return leftTime - rightTime;
-      return (left.created_at ?? "").localeCompare(right.created_at ?? "");
-    });
+    return (appointmentsByShift[appointmentsShiftInstanceId] ?? []).slice().sort(compareAppointmentsByTime);
   }, [appointmentsByShift, appointmentsShiftInstanceId]);
   const monthDayDetailsDateKey = monthDayDetailsDate ? getDateKey(monthDayDetailsDate) : null;
   const monthDayDetailsShifts = useMemo(() => {
@@ -2872,34 +3001,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           ? "PM"
           : "Shift";
       return `${dateLabel}, ${shiftPeriod}`;
-    },
-    [],
-  );
-  const formatAppointmentNotificationBody = useCallback(
-    (
-      action: "Added" | "Deleted",
-      shift: { start?: Date | null; title?: string | null } | null | undefined,
-      kindLabel: string,
-    ) => {
-      const parsedDate = shift?.start ?? null;
-      const datePart =
-        parsedDate && !Number.isNaN(parsedDate.getTime())
-          ? parsedDate.toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-            })
-          : "Upcoming";
-      const weekdayPart =
-        parsedDate && !Number.isNaN(parsedDate.getTime())
-          ? parsedDate.toLocaleDateString("en-US", { weekday: "short" })
-          : "day";
-      const title = (shift?.title ?? "").toLowerCase();
-      const shiftPeriod = title.includes("morning")
-        ? "AM shift"
-        : title.includes("evening")
-          ? "PM shift"
-          : "shift";
-      return `Appointment ${action}: to ${datePart}, ${weekdayPart}, ${shiftPeriod} (${kindLabel})`;
     },
     [],
   );
@@ -3020,12 +3121,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
         const items = (appointmentsByShift[shift.instanceId] ?? [])
           .slice()
-          .sort((left, right) => {
-            const leftTime = left.starts_at ? new Date(left.starts_at).getTime() : 0;
-            const rightTime = right.starts_at ? new Date(right.starts_at).getTime() : 0;
-            if (leftTime !== rightTime) return leftTime - rightTime;
-            return (left.created_at ?? "").localeCompare(right.created_at ?? "");
-          })
+          .sort(compareAppointmentsByTime)
           .map((appointment) => ({
             id: appointment.id,
             title: appointment.title,
@@ -3093,7 +3189,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       slotAssignments.push(null);
     }
     const canAddExtraVolunteer = true;
-    const appointmentsForShift = appointmentsByShift[shift.instanceId] ?? [];
+    const appointmentsForShift = (appointmentsByShift[shift.instanceId] ?? [])
+      .slice()
+      .sort(compareAppointmentsByTime);
 
     return (
       <div key={`${keyPrefix}${shift.id}`} className="shift-block">
@@ -3173,22 +3271,47 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 ) : (
                   appointmentsForShift.map((appointment) => (
                     <div key={appointment.id} className="shift-appointment-item">
-                      <button
-                        className="shift-appointment-button"
-                        type="button"
-                        onClick={() => toggleAppointmentExpanded(appointment.id)}
-                        style={{
-                          borderLeftColor: appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT,
-                        }}
-                      >
-                        <span className="shift-appointment-title">{appointment.title}</span>
-                        {appointment.starts_at ? (
-                          <span className="shift-appointment-meta">{format24HourTime(appointment.starts_at)}</span>
+                      <div className="shift-appointment-row">
+                        <button
+                          className="shift-appointment-button"
+                          type="button"
+                          onClick={() => toggleAppointmentExpanded(appointment.id)}
+                          style={{
+                            borderLeftColor: appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT,
+                          }}
+                        >
+                          <span className="shift-appointment-title">
+                            {`${appointment.completed_at ? "Done · " : ""}${formatAppointmentDisplayLabel(
+                              appointment,
+                            )}`}
+                          </span>
+                        </button>
+                        {canUpdateAppointmentChecklist ? (
+                          <label className="shift-appointment-check">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(appointment.completed_at)}
+                              disabled={appointmentChecklistSavingId === appointment.id}
+                              onChange={(event) => {
+                                if (event.currentTarget.checked) {
+                                  openAppointmentChecklistPrompt(appointment);
+                                  return;
+                                }
+                                void handleAppointmentChecklistSave(
+                                  appointment,
+                                  false,
+                                  appointmentNoteDrafts[appointment.id] ?? appointment.completion_note ?? "",
+                                );
+                              }}
+                            />
+                          </label>
                         ) : null}
-                      </button>
+                      </div>
                       {expandedAppointmentIds.has(appointment.id) ? (
                         <div className="shift-appointment-popover shift-appointment-popover-inline">
-                          <p className="shift-appointment-popover-title">{appointment.title}</p>
+                          <p className="shift-appointment-popover-title">
+                            {formatAppointmentDisplayLabel(appointment)}
+                          </p>
                           {appointment.starts_at ? (
                             <p className="shift-appointment-popover-meta">
                               {format24HourTime(appointment.starts_at)}
@@ -3379,31 +3502,56 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             {appointmentsForShift.length > 0
               ? appointmentsForShift.map((appointment) => (
                   <div key={appointment.id} className="shift-appointment-item">
-                    <button
-                      className="shift-appointment-button"
-                      type="button"
-                      onClick={async () => {
-                        if (canManageAppointments) {
-                          await handleOpenAppointments(shift);
-                          if (canModifyAppointments) {
-                            handleEditAppointment(appointment);
+                    <div className="shift-appointment-row">
+                      <button
+                        className="shift-appointment-button"
+                        type="button"
+                        onClick={async () => {
+                          if (canManageAppointments) {
+                            await handleOpenAppointments(shift);
+                            if (canModifyAppointments) {
+                              handleEditAppointment(appointment);
+                            }
+                            return;
                           }
-                          return;
-                        }
-                        toggleAppointmentExpanded(appointment.id);
-                      }}
-                      style={{
-                        borderLeftColor: appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT,
-                      }}
-                    >
-                      <span className="shift-appointment-title">{appointment.title}</span>
-                      {appointment.starts_at ? (
-                        <span className="shift-appointment-meta">{format24HourTime(appointment.starts_at)}</span>
+                          toggleAppointmentExpanded(appointment.id);
+                        }}
+                        style={{
+                          borderLeftColor: appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT,
+                        }}
+                      >
+                        <span className="shift-appointment-title">
+                          {`${appointment.completed_at ? "Done · " : ""}${formatAppointmentDisplayLabel(
+                            appointment,
+                          )}`}
+                        </span>
+                      </button>
+                      {canUpdateAppointmentChecklist ? (
+                        <label className="shift-appointment-check">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(appointment.completed_at)}
+                            disabled={appointmentChecklistSavingId === appointment.id}
+                            onChange={(event) => {
+                              if (event.currentTarget.checked) {
+                                openAppointmentChecklistPrompt(appointment);
+                                return;
+                              }
+                              void handleAppointmentChecklistSave(
+                                appointment,
+                                false,
+                                appointmentNoteDrafts[appointment.id] ?? appointment.completion_note ?? "",
+                              );
+                            }}
+                          />
+                        </label>
                       ) : null}
-                    </button>
+                    </div>
                     {!canManageAppointments && expandedAppointmentIds.has(appointment.id) ? (
                       <div className="shift-appointment-popover">
-                        <p className="shift-appointment-popover-title">{appointment.title}</p>
+                        <p className="shift-appointment-popover-title">
+                          {formatAppointmentDisplayLabel(appointment)}
+                        </p>
                         {appointment.starts_at ? (
                           <p className="shift-appointment-popover-meta">{format24HourTime(appointment.starts_at)}</p>
                         ) : null}
@@ -3549,29 +3697,27 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const denyActionUrl = requestedAssignmentId
         ? `/?view=notifications&notificationAction=deny&assignmentId=${requestedAssignmentId}&focusAssignmentId=${requestedAssignmentId}`
         : requestNotificationsUrl;
-      await supabase.functions.invoke("send-admin-push", {
-        body: {
-          title: "Shift request",
-          body: `${volunteerName} Requested to Join (${formatShortShiftRequestLabel({
-            starts_at: requestedShift?.start?.toISOString(),
-            title: requestedShift?.title,
-          })})`,
-          url: focusDateUrl,
-          actions: requestedAssignmentId
-            ? [
-                { action: "approve-request", title: "Approve" },
-                { action: "deny-request", title: "Deny" },
-              ]
-            : undefined,
-          data: requestedAssignmentId
-            ? {
-                notification_kind: "pending_shift_request",
-                assignment_id: String(requestedAssignmentId),
-                approve_url: approveActionUrl,
-                deny_url: denyActionUrl,
-              }
-            : undefined,
-        },
+      await sendAdminPush({
+        title: "Shift request",
+        body: `${volunteerName} Requested to Join (${formatShortShiftRequestLabel({
+          starts_at: requestedShift?.start?.toISOString(),
+          title: requestedShift?.title,
+        })})`,
+        url: focusDateUrl,
+        actions: requestedAssignmentId
+          ? [
+              { action: "approve-request", title: "Approve" },
+              { action: "deny-request", title: "Deny" },
+            ]
+          : undefined,
+        data: requestedAssignmentId
+          ? {
+              notification_kind: "pending_shift_request",
+              assignment_id: String(requestedAssignmentId),
+              approve_url: approveActionUrl,
+              deny_url: denyActionUrl,
+            }
+          : undefined,
       });
     } else if (nextStatus === "active" && profile?.role === "Regular Volunteer") {
       const volunteerName =
@@ -3579,6 +3725,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         displayProfile?.full_name ||
         session.user.email ||
         "A volunteer";
+      const adminPushError = await sendAdminPush({
+        title: "Shift added",
+        body: `${volunteerName} joined ${formatShortShiftRequestLabel({
+          starts_at: requestedShift?.start?.toISOString(),
+          title: requestedShift?.title,
+        })}`,
+      });
       const leadNotifyError = await notifyLeadsOnShiftInstance({
         shiftInstanceId: activeShiftInstanceId,
         excludeVolunteerIds: [session.user.id],
@@ -3586,8 +3739,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         body: `${volunteerName} has been added to your shift`,
         notificationType: "shift_added",
       });
-      if (leadNotifyError) {
-        setTakeShiftMessage(`Joined shift, but ${leadNotifyError}`);
+      const notificationErrors = [
+        adminPushError ? `admin notification failed: ${adminPushError}` : null,
+        leadNotifyError,
+      ].filter((value): value is string => Boolean(value));
+      if (notificationErrors.length > 0) {
+        setTakeShiftMessage(`Joined shift, but ${notificationErrors.join(" | ")}`);
       }
     }
 
@@ -3723,8 +3880,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       });
       setExpandedAppointmentIds(new Set());
       setShowAppointments(true);
+      setAppointmentNoteDrafts((previous) => {
+        const appointments = appointmentsByShift[resolvedInstanceId] ?? [];
+        const next = { ...previous };
+        appointments.forEach((appointment) => {
+          next[appointment.id] = appointment.completion_note ?? "";
+        });
+        return next;
+      });
     },
-    [ensureShiftInstance],
+    [appointmentsByShift, ensureShiftInstance],
   );
 
   const handleEditAppointment = useCallback((appointment: ShiftAppointment) => {
@@ -3754,7 +3919,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     setAppointmentSaving(true);
     setAppointmentsMessage("");
-    const { error } = await saveAppointment({
+    const { data: savedAppointment, error } = await saveAppointment({
       id: appointmentForm.id,
       shiftInstanceId: appointmentsShiftInstanceId,
       kind: appointmentForm.kind,
@@ -3770,29 +3935,49 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
+    if (savedAppointment) {
+      setAppointmentsByShift((previous) => {
+        const currentAppointments = previous[appointmentsShiftInstanceId] ?? [];
+        const withoutSavedAppointment = currentAppointments.filter(
+          (appointment) => appointment.id !== savedAppointment.id,
+        );
+        return {
+          ...previous,
+          [appointmentsShiftInstanceId]: [...withoutSavedAppointment, savedAppointment].sort(
+            compareAppointmentsByTime,
+          ),
+        };
+      });
+      setAppointmentNoteDrafts((previous) => ({
+        ...previous,
+        [savedAppointment.id]: savedAppointment.completion_note ?? "",
+      }));
+    }
+
     if (isNewAppointment) {
-      const kindLabel =
-        appointmentForm.kind === "foster"
-          ? "Foster"
-          : appointmentForm.kind === "adoption"
-            ? "Adoption"
-            : appointmentForm.kind === "vax"
-              ? "Vax"
-              : appointmentForm.kind === "orientation"
-                ? "Orientation"
-              : "Other";
-      if (appointmentForm.kind !== "orientation") {
-        const notificationBody = formatAppointmentNotificationBody("Added", appointmentsShift, kindLabel);
-        const leadNotifyError = await notifyLeadsOnShiftInstance({
-          shiftInstanceId: appointmentsShiftInstanceId,
-          excludeVolunteerIds: [session.user.id],
-          title: "New appointment",
-          body: notificationBody,
-          notificationType: "shift_added",
-        });
-        if (leadNotifyError) {
-          setAppointmentsMessage(`Appointment saved, but ${leadNotifyError}`);
-        }
+      const notificationTitle = formatAppointmentNotificationTitle("added", startIso ?? appointmentsShift.start);
+      const notificationBody = formatAppointmentDisplayLabel({
+        title: appointmentForm.title,
+        color: appointmentForm.color,
+        starts_at: startIso,
+      });
+      const adminPushError = await sendAdminPush({
+        title: notificationTitle,
+        body: notificationBody,
+      });
+      const leadNotifyError = await notifyLeadsOnShiftInstance({
+        shiftInstanceId: appointmentsShiftInstanceId,
+        excludeVolunteerIds: [session.user.id],
+        title: notificationTitle,
+        body: notificationBody,
+        notificationType: "shift_added",
+      });
+      const notificationErrors = [
+        adminPushError ? `admin notification failed: ${adminPushError}` : null,
+        leadNotifyError,
+      ].filter((value): value is string => Boolean(value));
+      if (notificationErrors.length > 0) {
+        setAppointmentsMessage(`Appointment saved, but ${notificationErrors.join(" | ")}`);
       }
     }
 
@@ -3805,14 +3990,26 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       starts_at: "",
     });
     setAppointmentSaving(false);
-    await fetchWeekAppointments();
+    const { data: refreshedAppointments, error: refreshError } = await fetchWeekAppointmentsByInstanceIds([
+      appointmentsShiftInstanceId,
+    ]);
+    if (refreshError) {
+      setAppointmentsMessage(
+        savedAppointment
+          ? "Appointment saved, but the appointment list could not refresh. It will appear after reload."
+          : refreshError,
+      );
+      return;
+    }
+    setAppointmentsByShift((previous) => ({
+      ...previous,
+      [appointmentsShiftInstanceId]: refreshedAppointments[appointmentsShiftInstanceId] ?? [],
+    }));
   }, [
     appointmentForm,
     appointmentsShift,
     appointmentsShiftInstanceId,
     canModifyAppointments,
-    fetchWeekAppointments,
-    formatAppointmentNotificationBody,
     session.user.id,
     toShiftDateTimeIso,
   ]);
@@ -3844,33 +4041,28 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         });
       }
       if (appointmentsShiftInstanceId) {
-        const deletedKindLabel = deletedAppointment
-          ? (() => {
-              const kind = getAppointmentKindFromColor(deletedAppointment.color);
-              return kind === "foster"
-                ? "Foster"
-                : kind === "adoption"
-                  ? "Adoption"
-                  : kind === "vax"
-                    ? "Vax"
-                    : kind === "orientation"
-                      ? "Orientation"
-                      : "Other";
-            })()
-          : "Other";
-        const notificationBody = formatAppointmentNotificationBody(
-          "Deleted",
-          appointmentsShift,
-          deletedKindLabel,
+        const notificationTitle = formatAppointmentNotificationTitle(
+          "deleted",
+          deletedAppointment?.starts_at ?? appointmentsShift?.start,
         );
+        const notificationBody = deletedAppointment
+          ? formatAppointmentDisplayLabel(deletedAppointment)
+          : "Appointment";
+        const adminPushError = await sendAdminPush({
+          title: notificationTitle,
+          body: notificationBody,
+        });
         const leadNotifyError = await notifyLeadsOnShiftInstance({
           shiftInstanceId: appointmentsShiftInstanceId,
           excludeVolunteerIds: [session.user.id],
-          title: "Appointment deleted",
+          title: notificationTitle,
           body: notificationBody,
           notificationType: "shift_removed",
         });
-        const notificationErrors = [leadNotifyError].filter((value): value is string => Boolean(value));
+        const notificationErrors = [
+          adminPushError ? `admin notification failed: ${adminPushError}` : null,
+          leadNotifyError,
+        ].filter((value): value is string => Boolean(value));
         if (notificationErrors.length > 0) {
           setAppointmentsMessage(`Appointment deleted, but ${notificationErrors.join(" | ")}`);
         }
@@ -3884,11 +4076,86 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       appointmentsShiftInstanceId,
       canModifyAppointments,
       fetchWeekAppointments,
-      formatAppointmentNotificationBody,
       selectedShiftAppointments,
       session.user.id,
     ],
   );
+
+  const handleAppointmentChecklistSave = useCallback(
+    async (appointment: ShiftAppointment, completed: boolean, noteOverride?: string) => {
+      if (!canUpdateAppointmentChecklist) {
+        setAppointmentsMessage("Only leads or admins can update appointment checklists.");
+        return;
+      }
+      const note = noteOverride ?? appointmentNoteDrafts[appointment.id] ?? appointment.completion_note ?? "";
+      setAppointmentChecklistSavingId(appointment.id);
+      setAppointmentsMessage("");
+
+      const { error } = await updateAppointmentChecklist({
+        appointmentId: appointment.id,
+        completed,
+        note,
+        userId: session.user.id,
+      });
+
+      if (error) {
+        setAppointmentsMessage(error);
+        setAppointmentChecklistSavingId(null);
+        return;
+      }
+
+      const completedAt = completed ? new Date().toISOString() : null;
+      setAppointmentsByShift((previous) => {
+        const next = { ...previous };
+        Object.entries(next).forEach(([instanceId, appointments]) => {
+          next[Number(instanceId)] = appointments.map((item) =>
+            item.id === appointment.id
+              ? {
+                  ...item,
+                  completed_at: completedAt,
+                  completed_by: completed ? session.user.id : null,
+                  completion_note: note.trim() || null,
+                  updated_at: completedAt ?? new Date().toISOString(),
+                }
+              : item,
+          );
+        });
+        return next;
+      });
+      setAppointmentNoteDrafts((previous) => ({
+        ...previous,
+        [appointment.id]: note,
+      }));
+      setAppointmentChecklistSavingId(null);
+      if (completed) {
+        const notificationTitle = formatAppointmentNotificationTitle(
+          "completed",
+          appointment.starts_at ?? appointmentsShift?.start,
+        );
+        const adminPushError = await sendAdminPush({
+          title: notificationTitle,
+          body: formatAppointmentNotificationBodyWithNote(appointment, note),
+        });
+        if (adminPushError) {
+          setAppointmentsMessage(`Appointment marked complete, but admin notification failed: ${adminPushError}`);
+        }
+        setAppointmentChecklistTarget(null);
+        setAppointmentChecklistNoteDraft("");
+      }
+    },
+    [appointmentNoteDrafts, appointmentsShift?.start, canUpdateAppointmentChecklist, session.user.id],
+  );
+
+  const openAppointmentChecklistPrompt = useCallback((appointment: ShiftAppointment) => {
+    setAppointmentsMessage("");
+    setAppointmentChecklistTarget(appointment);
+    setAppointmentChecklistNoteDraft(appointmentNoteDrafts[appointment.id] ?? appointment.completion_note ?? "");
+  }, [appointmentNoteDrafts]);
+
+  const closeAppointmentChecklistPrompt = useCallback(() => {
+    setAppointmentChecklistTarget(null);
+    setAppointmentChecklistNoteDraft("");
+  }, []);
 
   const toggleAppointmentExpanded = useCallback((appointmentId: string) => {
     setExpandedAppointmentIds((previous) => {
@@ -3948,6 +4215,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const shiftTime = assignedShift ? formatTimeRangeFromInstance(assignedShift.start, assignedShift.end) : "—";
     const shiftNotificationSummary = `${shiftDate} (${shiftTime})`;
     const notificationErrors: string[] = [];
+
+    const adminPushError = await sendAdminPush({
+      title: "Shift added",
+      body: `${volunteerName} was added to ${shiftNotificationSummary}`,
+    });
+    if (adminPushError) {
+      notificationErrors.push(`admin notification failed: ${adminPushError}`);
+    }
 
     const leadNotifyError = await notifyLeadsOnShiftInstance({
       shiftInstanceId: assignShiftInstanceId,
@@ -4070,6 +4345,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
     const shiftTitle = assignedShift?.title ?? "Shift";
+    const shiftDate = assignedShift
+      ? assignedShift.start.toLocaleDateString("en-US", {
+          weekday: "long",
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })
+      : "an upcoming date";
+    const shiftTime = assignedShift ? formatTimeRangeFromInstance(assignedShift.start, assignedShift.end) : "—";
+    const adminPushError = await sendAdminPush({
+      title: "Shift updated",
+      body: `Other: ${label} was added to ${shiftTitle}, ${shiftDate} (${shiftTime}).`,
+    });
     const leadNotifyError = await notifyLeadsOnShiftInstance({
       shiftInstanceId: assignShiftInstanceId,
       excludeVolunteerIds: [session.user.id],
@@ -4078,7 +4366,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       notificationType: "shift_added",
     });
 
-    const notificationErrors = [leadNotifyError].filter((value): value is string => Boolean(value));
+    const notificationErrors = [
+      adminPushError ? `admin notification failed: ${adminPushError}` : null,
+      leadNotifyError,
+    ].filter((value): value is string => Boolean(value));
 
     closeAssignVolunteerModal();
     addWeekAssignmentLocally({
@@ -4178,6 +4469,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     if (approvedShiftInstanceId) {
+      const adminPushError = await sendAdminPush({
+        title: "Shift approved",
+        body: `${approvedVolunteerName} was added to ${approvedShiftTitle}`,
+      });
+      if (adminPushError) {
+        approvalNotificationErrors.push(`admin notification failed: ${adminPushError}`);
+      }
       const leadNotifyError = await notifyLeadsOnShiftInstance({
         shiftInstanceId: approvedShiftInstanceId,
         excludeVolunteerIds: [approvedVolunteerId, session.user.id].filter(
@@ -4235,8 +4533,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setDenyReason("");
 
     const deniedVolunteerId = deniedRequest?.volunteer?.id;
+    const deniedVolunteerName =
+      deniedRequest?.volunteer?.preferred_name ||
+      deniedRequest?.volunteer?.full_name ||
+      "A volunteer";
+    const deniedShiftTitle = deniedRequest?.shift_instance?.template?.title ?? "your shift";
+    const denyNotificationErrors: string[] = [];
+    const adminPushError = await sendAdminPush({
+      title: "Shift denied",
+      body: `${deniedVolunteerName}'s request for ${deniedShiftTitle} was denied.`,
+    });
+    if (adminPushError) {
+      denyNotificationErrors.push(`admin notification failed: ${adminPushError}`);
+    }
     if (deniedVolunteerId) {
-      const deniedShiftTitle = deniedRequest?.shift_instance?.template?.title ?? "your shift";
       const pushError = await sendVolunteerPush({
         userId: deniedVolunteerId,
         title: "Shift denied",
@@ -4245,8 +4555,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         shiftInstanceId: deniedRequest?.shift_instance?.id ?? undefined,
       });
       if (pushError) {
-        setNotificationsMessage(`Denied, but push notification failed: ${pushError}`);
+        denyNotificationErrors.push(`push notification failed: ${pushError}`);
       }
+    }
+    if (denyNotificationErrors.length > 0) {
+      setNotificationsMessage(`Denied, but ${denyNotificationErrors.join(" | ")}`);
     }
 
     removeAssignmentLocally(denyTargetId);
@@ -4289,22 +4602,30 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       "A volunteer";
     const removedVolunteerId = removeTarget.volunteer?.id;
     const removedShiftInstanceId = removeTarget.shift_instance?.id;
+    const removalNotificationErrors: string[] = [];
+    const removedShiftTitle = removeTarget.shift_instance?.template?.title ?? "Shift";
+    const adminPushError = await sendAdminPush({
+      title: "Shift dropped",
+      body: `${volunteerName} left ${removedShiftTitle}`,
+    });
+    if (adminPushError) {
+      removalNotificationErrors.push(`admin notification failed: ${adminPushError}`);
+    }
     if (removedVolunteerId) {
       const shiftDateValue = removeTarget.shift_instance?.starts_at ?? removeTarget.shift_instance?.shift_date;
       const shiftDate = formatDateWithWeekday(shiftDateValue);
       const templateId = removeTarget.shift_instance?.template?.id;
       const template = templateId ? templateMap[templateId] : undefined;
       const shiftTime = formatResolvedShiftTimeRange(removeTarget.shift_instance, template?.title ?? null);
-      const shiftTitle = removeTarget.shift_instance?.template?.title ?? "Shift";
       const volunteerPushError = await sendVolunteerPush({
         userId: removedVolunteerId,
         title: "Shift removed",
-        body: `${adminName} removed you from ${shiftDate}, ${shiftTime}, ${shiftTitle}.`,
+        body: `${adminName} removed you from ${shiftDate}, ${shiftTime}, ${removedShiftTitle}.`,
         notificationType: "shift_removed",
         shiftInstanceId: removedShiftInstanceId ?? undefined,
       });
       if (volunteerPushError) {
-        setAssignmentsMessage(`Volunteer removed, but push notification failed: ${volunteerPushError}`);
+        removalNotificationErrors.push(`push notification failed: ${volunteerPushError}`);
       }
     }
     if (removedShiftInstanceId) {
@@ -4318,8 +4639,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         notificationType: "shift_dropped",
       });
       if (leadNotifyError) {
-        setAssignmentsMessage(`Volunteer removed, but ${leadNotifyError}`);
+        removalNotificationErrors.push(leadNotifyError);
       }
+    }
+    if (removalNotificationErrors.length > 0) {
+      setAssignmentsMessage(`Volunteer removed, but ${removalNotificationErrors.join(" | ")}`);
     }
 
     setShowRemovePrompt(false);
@@ -4379,6 +4703,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const actorName =
       displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "A volunteer";
     const isVolunteerDrop = profile?.role !== "Admin";
+    const dropNotificationErrors: string[] = [];
+    const adminPushError = await sendAdminPush({
+      title: "Shift dropped",
+      body: `${actorName} left ${targetAssignment?.shift_instance?.template?.title ?? "a shift"}`,
+    });
+    if (adminPushError) {
+      dropNotificationErrors.push(`admin notification failed: ${adminPushError}`);
+    }
     if (isVolunteerDrop && targetShiftInstanceId) {
       const leadNotifyError = await notifyLeadsOnShiftInstance({
         shiftInstanceId: targetShiftInstanceId,
@@ -4388,8 +4720,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         notificationType: "shift_dropped",
       });
       if (leadNotifyError) {
-        setAssignmentsMessage(`Shift dropped, but ${leadNotifyError}`);
+        dropNotificationErrors.push(leadNotifyError);
       }
+    }
+    if (dropNotificationErrors.length > 0) {
+      setAssignmentsMessage(`Shift dropped, but ${dropNotificationErrors.join(" | ")}`);
     }
     setDropReason("");
     setDropTargetShiftContext(null);
@@ -4985,6 +5320,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowPendingDecisionPrompt(false);
     setShowRemovePrompt(false);
     setShowAssignmentNotes(false);
+    setAppointmentChecklistTarget(null);
+    setAppointmentChecklistNoteDraft("");
     setShowVolunteers(false);
     setShowProfile(false);
     setShowTraining(false);
@@ -6280,20 +6617,23 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     ) : null}
                     <label className="form-label">
                       Start time (optional)
-                      <input
+                      <select
                         className="form-input appointment-time-input"
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="HH:MM"
-                        maxLength={5}
                         value={appointmentForm.starts_at}
                         onChange={(event) =>
                           setAppointmentForm((prev) => ({
                             ...prev,
-                            starts_at: event.target.value.replace(/[^\d:]/g, "").slice(0, 5),
+                            starts_at: event.target.value,
                           }))
                         }
-                      />
+                      >
+                        <option value="">No time set</option>
+                        {APPOINTMENT_TIME_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                   </div>
                   <div className="modal-row">
@@ -6303,29 +6643,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       onClick={handleSaveAppointment}
                       disabled={appointmentSaving}
                     >
-                      {appointmentSaving ? "Saving..." : appointmentForm.id ? "Save changes" : "Add appointment"}
+                      {appointmentSaving ? "Saving..." : "Save"}
                     </button>
                     {appointmentForm.id ? (
                       <button
-                        className="account-button"
-                        type="button"
-                        onClick={() =>
-                          setAppointmentForm({
-                            id: null,
-                            kind: "other",
-                            title: "",
-                            description: "",
-                            color: APPOINTMENT_COLOR_OTHER_DEFAULT,
-                            starts_at: "",
-                          })
-                        }
-                      >
-                        Cancel edit
-                      </button>
-                    ) : null}
-                    {appointmentForm.id ? (
-                      <button
-                        className="account-button"
+                        className="account-button appointment-delete-button"
                         type="button"
                         onClick={() => {
                           if (!appointmentForm.id) return;
@@ -6340,57 +6662,170 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 </div>
               ) : null}
 
-              {!appointmentForm.id ? (
-                <div className="appointments-list">
-                  {selectedShiftAppointments.length === 0 ? (
-                    <div className="empty-banner">No appointments on this shift yet.</div>
-                  ) : (
-                    selectedShiftAppointments.map((appointment) => (
-                      <div
-                        key={appointment.id}
-                        className="appointment-card"
-                        style={{
-                          borderColor: appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT,
-                          background: `${appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT}22`,
-                        }}
-                      >
-                        <div className="appointment-card-header">
-                          <p className="appointment-title">{appointment.title}</p>
-                          <p className="appointment-time">
-                            {appointment.starts_at ? format24HourTime(appointment.starts_at) : "No time set"}
+              <div className="appointments-list">
+                {selectedShiftAppointments.length === 0 ? (
+                  <div className="empty-banner">No appointments on this shift yet.</div>
+                ) : (
+                  selectedShiftAppointments.map((appointment) => (
+                    <div
+                      key={appointment.id}
+                      className={`appointment-card ${canModifyAppointments ? "appointment-card-editable" : ""} ${
+                        appointment.completed_at ? "appointment-card-completed" : ""
+                      }`}
+                      role={canModifyAppointments ? "button" : undefined}
+                      tabIndex={canModifyAppointments ? 0 : undefined}
+                      onClick={canModifyAppointments ? () => handleEditAppointment(appointment) : undefined}
+                      onKeyDown={
+                        canModifyAppointments
+                          ? (event) => {
+                              if (event.key !== "Enter" && event.key !== " ") return;
+                              event.preventDefault();
+                              handleEditAppointment(appointment);
+                            }
+                          : undefined
+                      }
+                      style={{
+                        borderColor: appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT,
+                        background: `${appointment.color ?? APPOINTMENT_COLOR_OTHER_DEFAULT}22`,
+                      }}
+                    >
+                      <div className="appointment-card-header">
+                        <div>
+                          <p className="appointment-title">
+                            {`${appointment.completed_at ? "Done · " : ""}${appointment.title?.trim() || "Appointment"}`}
                           </p>
+                          <p className="appointment-card-meta">{formatAppointmentMetaLabel(appointment)}</p>
                         </div>
-                        {appointment.description ? (
-                          <button
-                            className="appointment-expand-button"
-                            type="button"
-                            onClick={() => toggleAppointmentExpanded(appointment.id)}
+                        {canUpdateAppointmentChecklist ? (
+                          <label
+                            className="appointment-check-box"
+                            aria-label={
+                              appointment.completed_at
+                                ? "Mark appointment incomplete"
+                                : "Mark appointment complete"
+                            }
+                            onClick={(event) => event.stopPropagation()}
                           >
-                            {expandedAppointmentIds.has(appointment.id)
-                              ? "Hide details"
-                              : "Show details"}
-                          </button>
-                        ) : null}
-                        {appointment.description && expandedAppointmentIds.has(appointment.id) ? (
-                          <p className="appointment-description">{appointment.description}</p>
-                        ) : null}
-                        {canModifyAppointments ? (
-                          <div className="appointment-actions">
-                            <button
-                              className="nav-button"
-                              type="button"
-                              onClick={() => handleDeleteAppointment(appointment.id)}
-                              disabled={appointmentDeleteId === appointment.id}
-                            >
-                              {appointmentDeleteId === appointment.id ? "Deleting..." : "Delete"}
-                            </button>
-                          </div>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(appointment.completed_at)}
+                              disabled={appointmentChecklistSavingId === appointment.id}
+                              onChange={(event) => {
+                                if (event.currentTarget.checked) {
+                                  openAppointmentChecklistPrompt(appointment);
+                                  return;
+                                }
+                                void handleAppointmentChecklistSave(
+                                  appointment,
+                                  false,
+                                  appointmentNoteDrafts[appointment.id] ?? appointment.completion_note ?? "",
+                                );
+                              }}
+                            />
+                          </label>
                         ) : null}
                       </div>
-                    ))
-                  )}
-                </div>
-              ) : null}
+                      {!canUpdateAppointmentChecklist && !appointment.starts_at ? (
+                        <p className="appointment-time">No time set</p>
+                      ) : null}
+                      {appointmentChecklistSavingId === appointment.id ? (
+                        <p className="appointment-save-status">Saving...</p>
+                      ) : null}
+                      {!canUpdateAppointmentChecklist && (appointment.completed_at || appointment.completion_note) ? (
+                          <div className="appointment-checklist">
+                            {appointment.completed_at ? (
+                              <p className="appointment-save-status">Appointment completed</p>
+                            ) : null}
+                            {appointment.completion_note ? (
+                              <p className="appointment-description">{appointment.completion_note}</p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      {appointment.description ? (
+                        <p className="appointment-description">{appointment.description}</p>
+                      ) : null}
+                      {canModifyAppointments ? (
+                        <div className="appointment-actions">
+                          <button
+                            className="appointment-trash-button"
+                            type="button"
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleDeleteAppointment(appointment.id);
+                            }}
+                            disabled={appointmentDeleteId === appointment.id}
+                            aria-label="Delete appointment"
+                            title="Delete appointment"
+                          >
+                            <Trash2 size={18} strokeWidth={2} aria-hidden="true" />
+                          </button>
+                        </div>
+                      ) : null}
+                      </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {appointmentChecklistTarget ? (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          onClick={(event) => {
+            if (event.target !== event.currentTarget) return;
+            closeAppointmentChecklistPrompt();
+          }}
+        >
+          <div className="modal-panel take-shift-panel appointment-note-panel">
+            <div className="modal-header">
+              <div>
+                <p className="modal-eyebrow">Appointment checklist</p>
+                <h3 className="modal-title">Appointment notes</h3>
+              </div>
+              <button
+                className="appointment-note-icon-button"
+                type="button"
+                onClick={closeAppointmentChecklistPrompt}
+                aria-label="Close"
+                title="Close"
+              >
+                <X size={20} strokeWidth={2.25} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="modal-body">
+              <label className="form-label">
+                Notes (optional)
+                <textarea
+                  className="form-input form-textarea appointment-note-input"
+                  placeholder="Add anything"
+                  value={appointmentChecklistNoteDraft}
+                  onChange={(event) => setAppointmentChecklistNoteDraft(event.target.value)}
+                />
+              </label>
+              <div className="modal-actions">
+                <button
+                  className="account-button"
+                  type="button"
+                  onClick={() => {
+                    void handleAppointmentChecklistSave(
+                      appointmentChecklistTarget,
+                      true,
+                      appointmentChecklistNoteDraft,
+                    );
+                  }}
+                  disabled={appointmentChecklistSavingId === appointmentChecklistTarget.id}
+                >
+                  <Check size={20} strokeWidth={2.25} aria-hidden="true" />
+                  <span className="sr-only">
+                    {appointmentChecklistSavingId === appointmentChecklistTarget.id ? "Saving" : "Save"}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -6512,25 +6947,28 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                 shift.instanceId === (shiftInstance?.id ?? request.shift_instance_id ?? -1),
                             )
                           : null);
-                      const appointmentShiftLabel = formatShortShiftRequestLabel(
-                        shiftInstance?.starts_at || shiftInstance?.shift_date
-                          ? shiftInstance
-                          : fallbackNotificationShiftFromQuery
-                            ? fallbackNotificationShiftFromQuery
-                            : fallbackNotificationShiftFromCalendar
-                              ? {
-                                  starts_at: fallbackNotificationShiftFromCalendar.start.toISOString(),
-                                  title: fallbackNotificationShiftFromCalendar.title,
-                                }
-                              : null,
+                      const appointmentLabel = formatAppointmentNotificationBodyWithNote(
+                        request,
+                        request.event_type === "completed" ? request.completion_note : null,
                       );
-                      const appointmentTimeLabel = request.starts_at
-                        ? formatDateTime(request.starts_at)
-                        : appointmentShiftLabel;
-                      const appointmentShiftTitle = shiftInstance?.template?.title ?? "Shift";
-                      const appointmentMeta = `${appointmentTimeLabel} · ${appointmentShiftTitle}`;
-                      const appointmentActionLabel =
-                        request.event_type === "updated" ? "Appointment updated" : "New appointment";
+                      const appointmentDateValue =
+                        request.starts_at ??
+                        shiftInstance?.starts_at ??
+                        shiftInstance?.shift_date ??
+                        fallbackNotificationShiftFromQuery?.starts_at ??
+                        fallbackNotificationShiftFromQuery?.shift_date ??
+                        fallbackNotificationShiftFromCalendar?.start.toISOString() ??
+                        null;
+                      const appointmentAction =
+                        request.event_type === "completed"
+                          ? "completed"
+                          : request.event_type === "updated"
+                            ? "updated"
+                            : "added";
+                      const appointmentNotificationTitle = formatAppointmentNotificationTitle(
+                        appointmentAction,
+                        appointmentDateValue,
+                      );
 
                       return renderNotificationCard(
                         request,
@@ -6538,13 +6976,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         isLatest,
                         <>
                           {isLatest ? <span className="notification-tag">Latest</span> : null}
-                          <p className="notification-meta">{appointmentMeta}</p>
-                          <p className="notification-name">
-                            {appointmentActionLabel}: {request.title || "Appointment"}
-                          </p>
-                          {request.description ? (
-                            <p className="notification-reason">{request.description}</p>
-                          ) : null}
+                          <p className="notification-name">{appointmentNotificationTitle}</p>
+                          <p className="notification-reason">{appointmentLabel}</p>
                         </>,
                       );
                     }
@@ -7185,26 +7618,40 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           <div className="modal-panel take-shift-panel remove-volunteer-panel">
             <div className="modal-header">
               <div>
-                <p className="modal-eyebrow">Admin</p>
+                <p className="modal-eyebrow">Info</p>
                 <h3 className="modal-title">
                   {removeTarget?.volunteer?.id ? "Remove Volunteer?" : "Remove Other Entry?"}
                 </h3>
               </div>
               <button
-                className="modal-close"
+                className="appointment-note-icon-button"
                 type="button"
                 onClick={() => setShowRemovePrompt(false)}
+                aria-label="Close"
+                title="Close"
               >
-                Close
+                <X size={20} strokeWidth={2.25} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
               <p className="modal-text">
                 Remove{" "}
-                {removeTarget?.volunteer?.preferred_name ||
-                  removeTarget?.volunteer?.full_name ||
-                  (removeTarget?.notes ?? "").split(" — ")[0] ||
-                  "this entry"}{" "}
+                <span
+                  className={
+                    removeTarget?.volunteer?.role === "Admin"
+                      ? "volunteer-name-admin"
+                      : removeTarget?.volunteer?.role === "Lead"
+                        ? "volunteer-name-lead"
+                        : removeTarget?.volunteer?.id
+                          ? "volunteer-name-regular"
+                          : "volunteer-name-other"
+                  }
+                >
+                  {removeTarget?.volunteer?.preferred_name ||
+                    removeTarget?.volunteer?.full_name ||
+                    (removeTarget?.notes ?? "").split(" — ")[0] ||
+                    "this entry"}
+                </span>{" "}
                 from this shift?
               </p>
               {removeMessage ? (
@@ -7212,20 +7659,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               ) : null}
               <div className="modal-actions">
                 <button
-                  className="nav-button"
-                  type="button"
-                  onClick={() => setShowRemovePrompt(false)}
-                  disabled={removeLoading}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="account-button"
+                  className="volunteer-note-icon-action volunteer-note-trash-action"
                   type="button"
                   onClick={handleRemoveVolunteer}
                   disabled={removeLoading}
+                  aria-label={removeLoading ? "Removing" : "Delete"}
+                  title={removeLoading ? "Removing" : "Delete"}
                 >
-                  {removeLoading ? "Removing..." : "Delete"}
+                  <Trash2 size={20} strokeWidth={2} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -7238,11 +7679,26 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           <div className="modal-panel take-shift-panel volunteer-note-panel">
             <div className="modal-header">
               <div>
-                <p className="modal-eyebrow">Admin</p>
-                <h3 className="modal-title">Volunteer shift note</h3>
+                <p className="modal-eyebrow">Info</p>
+                <h3 className="modal-title">
+                  Volunteer -{" "}
+                  <span
+                    className={
+                      notesTarget?.volunteer?.role === "Admin"
+                        ? "volunteer-name-admin"
+                        : notesTarget?.volunteer?.role === "Lead"
+                          ? "volunteer-name-lead"
+                          : "volunteer-name-regular"
+                    }
+                  >
+                    {notesTarget?.volunteer?.preferred_name ||
+                      notesTarget?.volunteer?.full_name ||
+                      "Volunteer"}
+                  </span>
+                </h3>
               </div>
               <button
-                className="modal-close"
+                className="appointment-note-icon-button"
                 type="button"
                 onClick={() => {
                   setShowAssignmentNotes(false);
@@ -7250,16 +7706,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   setNotesDraft("");
                   setNotesMessage("");
                 }}
+                aria-label="Close"
+                title="Close"
               >
-                Close
+                <X size={20} strokeWidth={2.25} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
-              <p className="modal-text">
-                {notesTarget?.volunteer?.preferred_name ||
-                  notesTarget?.volunteer?.full_name ||
-                  "Volunteer"}
-              </p>
               <label className="form-field">
                 <span className="form-label">Shift note</span>
                 <textarea
@@ -7272,15 +7725,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               {notesMessage ? <div className="error-banner">{notesMessage}</div> : null}
               <div className="modal-actions">
                 <button
-                  className="account-button"
+                  className="account-button volunteer-note-icon-action"
                   type="button"
                   onClick={handleAssignmentNotesSave}
                   disabled={notesSaving}
+                  aria-label={notesSaving ? "Saving note" : "Save note"}
+                  title={notesSaving ? "Saving note" : "Save note"}
                 >
-                  {notesSaving ? "Saving..." : "Save note"}
+                  <Check size={20} strokeWidth={2.25} aria-hidden="true" />
                 </button>
                 <button
-                  className="account-button"
+                  className="volunteer-note-icon-action volunteer-note-trash-action"
                   type="button"
                   onClick={() => {
                     if (!notesTarget) return;
@@ -7288,8 +7743,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     setRemoveTarget(notesTarget);
                     setShowRemovePrompt(true);
                   }}
+                  aria-label="Remove volunteer"
+                  title="Remove volunteer"
                 >
-                  Remove volunteer
+                  <Trash2 size={20} strokeWidth={2} aria-hidden="true" />
                 </button>
               </div>
             </div>
