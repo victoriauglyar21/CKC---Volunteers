@@ -2636,7 +2636,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     setWeekAssignments((previous) => {
       const currentItems = previous[instanceId] ?? [];
-      const nextItems = [...currentItems.filter((item) => item.id !== assignment.id), assignment].sort(
+      const assignmentVolunteerId = assignment.volunteer?.id ?? null;
+      const nextItems = [
+        ...currentItems.filter((item) => {
+          if (item.id === assignment.id) return false;
+          if (!assignmentVolunteerId) return true;
+          return item.volunteer?.id !== assignmentVolunteerId;
+        }),
+        assignment,
+      ].sort(
         (left, right) => (left.created_at ?? "").localeCompare(right.created_at ?? ""),
       );
       return {
@@ -4169,7 +4177,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setAssignLoading(true);
     setAssignMessage("");
     const assignmentRole = volunteer.role === "Lead" ? "lead" : "regular";
-    const { error } = await supabase
+    const { data: savedAssignments, error } = await supabase
       .from("shift_assignments")
       .upsert(
         {
@@ -4181,7 +4189,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           dropped_reason: null,
         },
         { onConflict: "shift_instance_id,volunteer_id" },
-      );
+      )
+      .select("id, created_at");
 
     if (error) {
       setAssignMessage(error.message);
@@ -4202,6 +4211,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const shiftTime = assignedShift ? formatTimeRangeFromInstance(assignedShift.start, assignedShift.end) : "—";
     const shiftNotificationSummary = `${shiftDate} (${shiftTime})`;
     const notificationErrors: string[] = [];
+    const savedAssignment = Array.isArray(savedAssignments) ? (savedAssignments[0] ?? null) : null;
+    const savedAssignmentId = savedAssignment?.id ?? `${assignShiftInstanceId}-${volunteerId}`;
+    const savedAssignmentCreatedAt = savedAssignment?.created_at ?? new Date().toISOString();
 
     const adminPushError = await sendAdminPush({
       title: "Shift added",
@@ -4237,9 +4249,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setAssignLoading(false);
       closeAssignVolunteerModal();
       addWeekAssignmentLocally({
-        id: `${assignShiftInstanceId}-${volunteerId}-${Date.now()}`,
+        id: savedAssignmentId,
         shift_instance_id: assignShiftInstanceId,
-        created_at: new Date().toISOString(),
+        created_at: savedAssignmentCreatedAt,
         status: "active",
         assignment_role: assignmentRole,
         volunteer: {
@@ -4269,9 +4281,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     closeAssignVolunteerModal();
     addWeekAssignmentLocally({
-      id: `${assignShiftInstanceId}-${volunteerId}-${Date.now()}`,
+      id: savedAssignmentId,
       shift_instance_id: assignShiftInstanceId,
-      created_at: new Date().toISOString(),
+      created_at: savedAssignmentCreatedAt,
       status: "active",
       assignment_role: assignmentRole,
       volunteer: {
