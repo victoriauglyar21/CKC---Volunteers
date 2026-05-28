@@ -72,6 +72,37 @@ type ActiveAssignmentRow = {
     | null;
 };
 
+type ShadowAssignmentRow = {
+  id: string;
+  volunteer_id: string | null;
+  notes: string | null;
+  shift_instance_id: number | null;
+  volunteer:
+    | {
+        full_name: string | null;
+        preferred_name: string | null;
+      }
+    | {
+        full_name: string | null;
+        preferred_name: string | null;
+      }[]
+    | null;
+  shift_instance:
+    | {
+        id: number | null;
+        starts_at: string | null;
+        ends_at: string | null;
+        shift_date: string | null;
+      }
+    | {
+        id: number | null;
+        starts_at: string | null;
+        ends_at: string | null;
+        shift_date: string | null;
+      }[]
+    | null;
+};
+
 function jsonResponse(body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -119,6 +150,20 @@ function getShiftPeriodLabel(startsAt: string | null, timeZone: string) {
   const start = new Date(startsAt);
   if (Number.isNaN(start.getTime())) return "AM";
   return getZonedParts(start, timeZone).hour >= 12 ? "PM" : "AM";
+}
+
+function isShadowShiftNote(notes: string | null | undefined) {
+  return (notes ?? "").trim().toLowerCase().startsWith("shadow shift:");
+}
+
+function getShiftEndMs(shiftInstance: {
+  ends_at?: string | null;
+  starts_at?: string | null;
+  shift_date?: string | null;
+} | null | undefined) {
+  const value = shiftInstance?.ends_at ?? shiftInstance?.starts_at ?? shiftInstance?.shift_date ?? "";
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
 }
 
 async function recordNotificationSend({
@@ -689,6 +734,116 @@ async function sendLeadNeededAlerts(
   return { sent, failed, matched: uncoveredShifts.length };
 }
 
+async function sendShadowShiftDoneAlerts(now: Date) {
+  const { data: assignments, error } = await supabaseAdmin
+    .from("shift_assignments")
+    .select(
+      `
+      id,
+      volunteer_id,
+      notes,
+      shift_instance_id,
+      volunteer:profiles (
+        full_name,
+        preferred_name
+      ),
+      shift_instance:shift_instances (
+        id,
+        starts_at,
+        ends_at,
+        shift_date
+      )
+    `,
+    )
+    .eq("status", "active")
+    .not("volunteer_id", "is", null)
+    .ilike("notes", "Shadow Shift:%");
+
+  if (error || !assignments) {
+    return { sent: 0, failed: 0, matched: 0 };
+  }
+
+  const completedByVolunteer = new Map<string, ShadowAssignmentRow[]>();
+  ((assignments ?? []) as ShadowAssignmentRow[]).forEach((assignment) => {
+    if (!assignment.volunteer_id || !isShadowShiftNote(assignment.notes)) return;
+    const shiftInstance = Array.isArray(assignment.shift_instance)
+      ? (assignment.shift_instance[0] ?? null)
+      : assignment.shift_instance;
+    const endMs = getShiftEndMs(shiftInstance);
+    if (!endMs || endMs > now.getTime()) return;
+    const rows = completedByVolunteer.get(assignment.volunteer_id) ?? [];
+    rows.push(assignment);
+    completedByVolunteer.set(assignment.volunteer_id, rows);
+  });
+
+  const readyAssignments = Array.from(completedByVolunteer.values())
+    .map((rows) =>
+      rows.sort((left, right) => {
+        const leftShift = Array.isArray(left.shift_instance) ? (left.shift_instance[0] ?? null) : left.shift_instance;
+        const rightShift = Array.isArray(right.shift_instance) ? (right.shift_instance[0] ?? null) : right.shift_instance;
+        const leftEndMs = getShiftEndMs(leftShift) ?? Number.POSITIVE_INFINITY;
+        const rightEndMs = getShiftEndMs(rightShift) ?? Number.POSITIVE_INFINITY;
+        return leftEndMs - rightEndMs || left.id.localeCompare(right.id);
+      })[1] ?? null,
+    )
+    .filter((assignment): assignment is ShadowAssignmentRow => Boolean(assignment));
+
+  if (readyAssignments.length === 0) {
+    return { sent: 0, failed: 0, matched: 0 };
+  }
+
+  const { data: adminProfiles, error: adminError } = await supabaseAdmin
+    .from("profiles")
+    .select("id")
+    .eq("role", "Admin");
+
+  if (adminError || !adminProfiles) {
+    return { sent: 0, failed: 0, matched: readyAssignments.length };
+  }
+
+  const adminIds = ((adminProfiles ?? []) as Array<{ id: string }>).map((admin) => admin.id);
+  const subsByAdmin = await fetchSubscriptionsForUsers(adminIds);
+  let sent = 0;
+  let failed = 0;
+
+  for (const assignment of readyAssignments) {
+    const shiftInstance = Array.isArray(assignment.shift_instance)
+      ? (assignment.shift_instance[0] ?? null)
+      : assignment.shift_instance;
+    const shiftInstanceId = assignment.shift_instance_id ?? shiftInstance?.id ?? null;
+    if (!shiftInstanceId) continue;
+    const sendKey = `shadow_shifts_done:${assignment.volunteer_id}:${assignment.id}`;
+    const shouldSend = await recordNotificationSend({
+      shiftInstanceId,
+      volunteerId: assignment.volunteer_id,
+      notificationType: "shadow_shifts_done",
+      sendKey,
+    });
+    if (!shouldSend) continue;
+
+    const volunteer = Array.isArray(assignment.volunteer)
+      ? (assignment.volunteer[0] ?? null)
+      : assignment.volunteer;
+    const volunteerName = volunteer?.preferred_name || volunteer?.full_name || "Volunteer";
+
+    for (const adminId of adminIds) {
+      const subscriptions = subsByAdmin.get(adminId) ?? [];
+      if (subscriptions.length === 0) continue;
+      const result = await sendPushToSubscriptions({
+        subscriptions,
+        userId: adminId,
+        title: "Shadow Shifts Done",
+        body: `${volunteerName} completed 2 shadow shifts.`,
+        url: "/?view=notifications",
+      });
+      sent += result.sent;
+      failed += result.failed;
+    }
+  }
+
+  return { sent, failed, matched: readyAssignments.length };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -773,6 +928,7 @@ serve(async (req) => {
   try {
     const reminderResults = await sendUpcomingShiftReminders(now);
     const leadNeededResults = await sendLeadNeededAlerts(now);
+    const shadowShiftDoneResults = await sendShadowShiftDoneAlerts(now);
 
     return jsonResponse({
       reminder_sent: reminderResults.sent,
@@ -781,8 +937,11 @@ serve(async (req) => {
       lead_needed_sent: leadNeededResults.sent,
       lead_needed_failed: leadNeededResults.failed,
       lead_needed_matched: leadNeededResults.matched,
-      sent: reminderResults.sent + leadNeededResults.sent,
-      failed: reminderResults.failed + leadNeededResults.failed,
+      shadow_shifts_done_sent: shadowShiftDoneResults.sent,
+      shadow_shifts_done_failed: shadowShiftDoneResults.failed,
+      shadow_shifts_done_matched: shadowShiftDoneResults.matched,
+      sent: reminderResults.sent + leadNeededResults.sent + shadowShiftDoneResults.sent,
+      failed: reminderResults.failed + leadNeededResults.failed + shadowShiftDoneResults.failed,
     });
   } catch (error) {
     console.error("send-shift-reminders failed", error);

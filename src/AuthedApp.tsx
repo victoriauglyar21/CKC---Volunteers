@@ -10,7 +10,7 @@ import {
   type TouchEvent as ReactTouchEvent,
 } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Check, Trash2, X } from "lucide-react";
+import { Check, Search, Trash2, X } from "lucide-react";
 import { signOutSafely, supabase } from "./supabaseClient";
 import {
   APPOINTMENT_COLOR_ADOPTION,
@@ -52,6 +52,7 @@ import type {
   ProfileRecord,
   RecurringAssignment,
   LeadNeededNotificationItem,
+  ShadowFollowUpNotificationItem,
   ShiftAppointment,
   ShiftAssignment,
   ShiftAssignmentDetail,
@@ -63,6 +64,9 @@ import type {
 import {
   addDays,
   addMonths,
+  buildOtherAssignmentNote,
+  buildShadowShiftAssignmentNote,
+  buildVolunteerShadowShiftNote,
   buildMonthCells,
   buildVirtualInstanceId,
   buildWeekCells,
@@ -94,12 +98,14 @@ import {
   isLeadRole,
   isSelfDropReason,
   normalizeDropReason,
+  parseOtherAssignmentNote,
   normalizePhoneLink,
   parseDateOnly,
   rankShiftForDisplay,
   resolveTemplateEndTime,
   resolveTemplateStartTime,
   startOfDay,
+  stripShadowShiftAssignmentNote,
   toDateInputValue,
   toIsoForDateAndTime,
   toTimeInputValue,
@@ -130,6 +136,16 @@ function compareAppointmentsByTime(left: ShiftAppointment, right: ShiftAppointme
   const timeDiff = getAppointmentStartMs(left) - getAppointmentStartMs(right);
   if (timeDiff !== 0) return timeDiff;
   return (left.created_at ?? "").localeCompare(right.created_at ?? "");
+}
+
+function getShadowShiftSortMs(shiftInstance: {
+  ends_at?: string | null;
+  starts_at?: string | null;
+  shift_date?: string | null;
+} | null | undefined) {
+  const value = shiftInstance?.ends_at ?? shiftInstance?.starts_at ?? shiftInstance?.shift_date ?? "";
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
 }
 
 function getAppointmentKindLabelFromColor(color: string | null | undefined) {
@@ -411,6 +427,33 @@ function deserializeShiftInstances(cached: CachedShiftInstance[] | null | undefi
     .filter((shift): shift is ShiftInstance => Boolean(shift));
 }
 
+function rankAssignmentForDedupe(assignment: ShiftAssignmentDetail) {
+  const statusRank = assignment.status === "active" ? 0 : assignment.status === "pending" ? 1 : 2;
+  const roleRank =
+    isAdminRole(assignment.volunteer?.role) ||
+    isLeadAssignmentRole(assignment.assignment_role) ||
+    isLeadRole(assignment.volunteer?.role)
+      ? 0
+      : 1;
+  return statusRank * 10 + roleRank;
+}
+
+function dedupeShiftAssignmentsByVolunteer(assignments: ShiftAssignmentDetail[]) {
+  const byKey = new Map<string, ShiftAssignmentDetail>();
+
+  assignments.forEach((assignment) => {
+    const key = assignment.volunteer?.id ? `volunteer:${assignment.volunteer.id}` : `assignment:${assignment.id}`;
+    const existing = byKey.get(key);
+    if (!existing || rankAssignmentForDedupe(assignment) < rankAssignmentForDedupe(existing)) {
+      byKey.set(key, assignment);
+    }
+  });
+
+  return Array.from(byKey.values()).sort(
+    (left, right) => (left.created_at ?? "").localeCompare(right.created_at ?? ""),
+  );
+}
+
 export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [today, setToday] = useState(() => startOfDay(new Date()));
   const [templates, setTemplates] = useState<ShiftTemplate[]>(() => readCachedTemplates());
@@ -421,6 +464,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [weekAssignments, setWeekAssignments] = useState<
     Record<number, ShiftAssignmentDetail[]>
   >({});
+  const [shadowShiftNumbersByAssignmentId, setShadowShiftNumbersByAssignmentId] = useState<Record<string, number>>({});
   const [showTakeShiftPrompt, setShowTakeShiftPrompt] = useState(false);
   const [isTakeShiftClosing, setIsTakeShiftClosing] = useState(false);
   const [takeShiftLoading, setTakeShiftLoading] = useState(false);
@@ -451,6 +495,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [assignLoading, setAssignLoading] = useState(false);
   const [assignMessage, setAssignMessage] = useState("");
   const [showAssignOtherForm, setShowAssignOtherForm] = useState(false);
+  const [assignOtherMode, setAssignOtherMode] = useState<"other" | "shadow">("other");
   const [assignOtherName, setAssignOtherName] = useState("");
   const [assignOtherDetails, setAssignOtherDetails] = useState("");
   const [assignOtherLoading, setAssignOtherLoading] = useState(false);
@@ -1324,7 +1369,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           visibleShiftKeys.forEach((instanceId, slotKey) => {
             const cachedAssignments = parsed[slotKey];
             if (cachedAssignments?.length) {
-              cachedMap[instanceId] = cachedAssignments;
+              cachedMap[instanceId] = dedupeShiftAssignmentsByVolunteer(cachedAssignments);
             }
           });
           if (Object.keys(cachedMap).length > 0) {
@@ -1395,6 +1440,90 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       from += pageSize;
     }
 
+    const assignmentIdsInView = new Set(allAssignments.map((assignment) => assignment.id));
+    const volunteerIdsInView = Array.from(
+      new Set(
+        allAssignments
+          .map((assignment) => {
+            const normalizedVolunteer = Array.isArray((assignment as { volunteer?: unknown }).volunteer)
+              ? ((((assignment as { volunteer?: unknown }).volunteer ?? null) as unknown as Array<
+                  ShiftAssignmentDetail["volunteer"]
+                >)?.[0] ?? null)
+              : assignment.volunteer;
+            return normalizedVolunteer?.id ?? (assignment as ShiftAssignmentDetail & { volunteer_id?: string | null }).volunteer_id ?? null;
+          })
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    if (volunteerIdsInView.length > 0) {
+      const { data: shadowRows } = await supabase
+        .from("shift_assignments")
+        .select(
+          `
+          id,
+          volunteer_id,
+          notes,
+          shift_instance:shift_instances (
+            shift_date,
+            starts_at,
+            ends_at
+          )
+        `,
+        )
+        .in("volunteer_id", volunteerIdsInView)
+        .eq("status", "active")
+        .ilike("notes", "Shadow Shift:%");
+
+      const shadowNumbers: Record<string, number> = {};
+      const rowsByVolunteer = new Map<
+        string,
+        Array<{
+          id: string;
+          volunteer_id: string | null;
+          notes: string | null;
+          shift_instance:
+            | { shift_date: string | null; starts_at: string | null; ends_at: string | null }
+            | Array<{ shift_date: string | null; starts_at: string | null; ends_at: string | null }>
+            | null;
+        }>
+      >();
+      ((shadowRows ?? []) as Array<{
+        id: string;
+        volunteer_id: string | null;
+        notes: string | null;
+        shift_instance:
+          | { shift_date: string | null; starts_at: string | null; ends_at: string | null }
+          | Array<{ shift_date: string | null; starts_at: string | null; ends_at: string | null }>
+          | null;
+      }>).forEach((row) => {
+        if (!row.volunteer_id || !parseOtherAssignmentNote(row.notes).isShadowShift) return;
+        const rows = rowsByVolunteer.get(row.volunteer_id) ?? [];
+        rows.push(row);
+        rowsByVolunteer.set(row.volunteer_id, rows);
+      });
+      rowsByVolunteer.forEach((rows) => {
+        rows
+          .sort((left, right) => {
+            const leftShift = Array.isArray(left.shift_instance)
+              ? (left.shift_instance[0] ?? null)
+              : left.shift_instance;
+            const rightShift = Array.isArray(right.shift_instance)
+              ? (right.shift_instance[0] ?? null)
+              : right.shift_instance;
+            const timeDiff = getShadowShiftSortMs(leftShift) - getShadowShiftSortMs(rightShift);
+            return timeDiff || left.id.localeCompare(right.id);
+          })
+          .forEach((row, index) => {
+            if (assignmentIdsInView.has(row.id)) {
+              shadowNumbers[row.id] = index + 1;
+            }
+          });
+      });
+      setShadowShiftNumbersByAssignmentId(shadowNumbers);
+    } else {
+      setShadowShiftNumbersByAssignmentId({});
+    }
+
     const map: Record<number, ShiftAssignmentDetail[]> = {};
     const cacheMap: Record<string, ShiftAssignmentDetail[]> = {};
     allAssignments.forEach((rawAssignment) => {
@@ -1461,9 +1590,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
     });
 
-    setWeekAssignments(map);
+    const dedupedMap = Object.fromEntries(
+      Object.entries(map).map(([instanceId, assignments]) => [
+        Number(instanceId),
+        dedupeShiftAssignmentsByVolunteer(assignments),
+      ]),
+    );
+    const dedupedCacheMap = Object.fromEntries(
+      Object.entries(cacheMap).map(([slotKey, assignments]) => [
+        slotKey,
+        dedupeShiftAssignmentsByVolunteer(assignments),
+      ]),
+    );
+
+    setWeekAssignments(dedupedMap);
     if (typeof window !== "undefined") {
-      writeStoredJson(assignmentCacheKey, cacheMap, [
+      writeStoredJson(assignmentCacheKey, dedupedCacheMap, [
         WEEK_ASSIGNMENTS_CACHE_PREFIX,
         SHIFT_INSTANCE_CACHE_PREFIX,
       ]);
@@ -2462,6 +2604,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           void fetchNotificationsRef.current();
         },
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "recurring_assignments",
+        },
+        () => {
+          void fetchNotificationsRef.current();
+        },
+      )
       .subscribe();
 
     return () => {
@@ -2637,16 +2790,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setWeekAssignments((previous) => {
       const currentItems = previous[instanceId] ?? [];
       const assignmentVolunteerId = assignment.volunteer?.id ?? null;
-      const nextItems = [
+      const nextItems = dedupeShiftAssignmentsByVolunteer([
         ...currentItems.filter((item) => {
           if (item.id === assignment.id) return false;
           if (!assignmentVolunteerId) return true;
           return item.volunteer?.id !== assignmentVolunteerId;
         }),
         assignment,
-      ].sort(
-        (left, right) => (left.created_at ?? "").localeCompare(right.created_at ?? ""),
-      );
+      ]);
       return {
         ...previous,
         [instanceId]: nextItems,
@@ -2679,6 +2830,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setAssignShiftInstanceId(null);
     setAssignMessage("");
     setShowAssignOtherForm(false);
+    setAssignOtherMode("other");
     setAssignOtherName("");
     setAssignOtherDetails("");
   }, []);
@@ -3327,7 +3479,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             {slotAssignments.map((assignment, index) => {
               const name = assignment?.volunteer?.preferred_name || assignment?.volunteer?.full_name || null;
               const hasVolunteer = Boolean(assignment?.volunteer?.id);
-              const hasOtherLabel = Boolean(!hasVolunteer && (assignment?.notes ?? "").trim());
+              const parsedOtherNote = parseOtherAssignmentNote(assignment?.notes);
+              const shadowShiftNumber =
+                assignment && parsedOtherNote.isShadowShift ? shadowShiftNumbersByAssignmentId[assignment.id] : null;
+              const volunteerNoteDisplay =
+                assignment && hasVolunteer
+                  ? parsedOtherNote.isShadowShift
+                    ? parsedOtherNote.details
+                    : (assignment.notes ?? "")
+                  : "";
+              const hasOtherLabel = Boolean(!hasVolunteer && parsedOtherNote.display);
               const isLeadCoverageSlot = index === 0 && !hasVolunteer;
               const canClaimLeadCoverage = profile?.role === "Lead" || profile?.role === "Admin";
               const isVolunteerPastLocked = profile?.role !== "Admin" && isPastShiftDay;
@@ -3340,6 +3501,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     : "none"
                   : assignment.status === "pending"
                     ? "pending"
+                    : parsedOtherNote.isShadowShift
+                      ? "shadow"
                     : assignment.volunteer?.role === "Admin"
                       ? "admin"
                       : assignment.assignment_role === "lead"
@@ -3373,6 +3536,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         setAssignMessage("");
                         setAssignVolunteerSearchInput("");
                         setShowAssignOtherForm(false);
+                        setAssignOtherMode("other");
                         setAssignOtherName("");
                         setAssignOtherDetails("");
                         setAssignShiftInstanceId(resolvedInstanceId);
@@ -3414,7 +3578,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         setShowPendingDecisionPrompt(true);
                       } else {
                         setNotesTarget(assignment);
-                        setNotesDraft(assignment.notes ?? "");
+                        setNotesDraft(stripShadowShiftAssignmentNote(assignment.notes) ?? "");
                         setNotesMessage("");
                         setShowAssignmentNotes(true);
                       }
@@ -3425,27 +3589,32 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     "Pending"
                   ) : assignment && hasOtherLabel ? (
                     <div className="capacity-slot-content">
-                      <span className="capacity-slot-name">{assignment.notes}</span>
+                      <span className="capacity-slot-name">
+                        {parsedOtherNote.isShadowShift
+                          ? `Shadow: ${parsedOtherNote.display}`
+                          : parsedOtherNote.display}
+                      </span>
                     </div>
                   ) : assignment && hasVolunteer ? (
                     <div className="capacity-slot-content">
                       <span className="capacity-slot-name">{name ?? "No Volunteer Assigned"}</span>
-                      {assignment.notes ? (
-                        <span className="capacity-slot-phone">{assignment.notes}</span>
+                      {parsedOtherNote.isShadowShift ? (
+                        <span className="capacity-slot-phone">
+                          Shadow Shift {shadowShiftNumber ? `(${shadowShiftNumber})` : ""}
+                        </span>
+                      ) : volunteerNoteDisplay ? (
+                        <span className="capacity-slot-phone">{volunteerNoteDisplay}</span>
                       ) : (assignment.assignment_role === "lead" || assignment.volunteer?.role === "Admin") &&
                         assignment.volunteer?.phone ? (
-                        isMobile ? (
-                          <span className="capacity-slot-phone">
-                            <a
-                              className="capacity-slot-phone-link"
-                              href={`tel:${normalizePhoneLink(assignment.volunteer.phone)}`}
-                            >
-                              {assignment.volunteer.phone}
-                            </a>
-                          </span>
-                        ) : (
-                          <span className="capacity-slot-phone">{assignment.volunteer.phone}</span>
-                        )
+                        <span className="capacity-slot-phone">
+                          <a
+                            className="capacity-slot-phone-link"
+                            href={`tel:${normalizePhoneLink(assignment.volunteer.phone)}`}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            {assignment.volunteer.phone}
+                          </a>
+                        </span>
                       ) : null}
                     </div>
                   ) : (
@@ -3751,9 +3920,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (!notesTarget) return;
     setNotesSaving(true);
     setNotesMessage("");
+    const isShadowShift = parseOtherAssignmentNote(notesTarget.notes).isShadowShift;
+    const volunteerName =
+      notesTarget.volunteer?.preferred_name || notesTarget.volunteer?.full_name || "Volunteer";
+    const nextNote = isShadowShift
+      ? buildShadowShiftAssignmentNote(volunteerName, notesDraft.trim())
+      : notesDraft.trim() || null;
     const { error } = await supabase
       .from("shift_assignments")
-      .update({ notes: notesDraft.trim() || null })
+      .update({ notes: nextNote })
       .eq("id", notesTarget.id);
     if (error) {
       setNotesMessage(error.message);
@@ -3764,6 +3939,40 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setShowAssignmentNotes(false);
     setNotesTarget(null);
     setNotesDraft("");
+    await fetchWeekAssignments();
+  };
+
+  const handleShadowShiftToggle = async () => {
+    if (!notesTarget?.volunteer?.id) return;
+    setNotesSaving(true);
+    setNotesMessage("");
+
+    const volunteerName =
+      notesTarget.volunteer.preferred_name || notesTarget.volunteer.full_name || "Volunteer";
+    const isShadowShift = parseOtherAssignmentNote(notesTarget.notes).isShadowShift;
+    const nextNote = isShadowShift
+      ? stripShadowShiftAssignmentNote(notesTarget.notes)
+      : buildVolunteerShadowShiftNote(volunteerName, notesDraft);
+    const { error } = await supabase
+      .from("shift_assignments")
+      .update({ notes: nextNote })
+      .eq("id", notesTarget.id);
+
+    if (error) {
+      setNotesMessage(error.message);
+      setNotesSaving(false);
+      return;
+    }
+
+    const updatedTarget = { ...notesTarget, notes: nextNote };
+    setNotesTarget(updatedTarget);
+    setNotesDraft(isShadowShift ? (nextNote ?? "") : stripShadowShiftAssignmentNote(nextNote) ?? "");
+    updateWeekAssignmentsLocally(notesTarget.id, (assignment) => ({
+      ...assignment,
+      notes: nextNote,
+    }));
+    setNotesMessage(isShadowShift ? "Shadow shift removed." : "Marked as shadow shift.");
+    setNotesSaving(false);
     await fetchWeekAssignments();
   };
 
@@ -4177,20 +4386,40 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setAssignLoading(true);
     setAssignMessage("");
     const assignmentRole = volunteer.role === "Lead" ? "lead" : "regular";
+    const isShadowAssignment = assignOtherMode === "shadow";
+    const volunteerName = volunteer.preferred_name || volunteer.full_name || "A volunteer";
+    const existingLocalAssignment = (weekAssignments[assignShiftInstanceId] ?? []).find(
+      (assignment) => assignment.volunteer?.id === volunteerId,
+    );
+    const notes = isShadowAssignment
+      ? buildVolunteerShadowShiftNote(volunteerName, existingLocalAssignment?.notes ?? null)
+      : undefined;
+    const assignmentPayload: {
+      shift_instance_id: number;
+      volunteer_id: string;
+      status: "active";
+      assignment_role: "lead" | "regular";
+      dropped_at: null;
+      dropped_reason: null;
+      notes?: string | null;
+    } = {
+      shift_instance_id: assignShiftInstanceId,
+      volunteer_id: volunteerId,
+      status: "active",
+      assignment_role: assignmentRole,
+      dropped_at: null,
+      dropped_reason: null,
+    };
+    if (isShadowAssignment) {
+      assignmentPayload.notes = notes ?? null;
+    }
     const { data: savedAssignments, error } = await supabase
       .from("shift_assignments")
       .upsert(
-        {
-          shift_instance_id: assignShiftInstanceId,
-          volunteer_id: volunteerId,
-          status: "active",
-          assignment_role: assignmentRole,
-          dropped_at: null,
-          dropped_reason: null,
-        },
+        assignmentPayload,
         { onConflict: "shift_instance_id,volunteer_id" },
       )
-      .select("id, created_at");
+      .select("id, created_at, notes");
 
     if (error) {
       setAssignMessage(error.message);
@@ -4199,7 +4428,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
-    const volunteerName = volunteer.preferred_name || volunteer.full_name || "A volunteer";
     const shiftDate = assignedShift
       ? assignedShift.start.toLocaleDateString("en-US", {
           weekday: "long",
@@ -4214,9 +4442,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const savedAssignment = Array.isArray(savedAssignments) ? (savedAssignments[0] ?? null) : null;
     const savedAssignmentId = savedAssignment?.id ?? `${assignShiftInstanceId}-${volunteerId}`;
     const savedAssignmentCreatedAt = savedAssignment?.created_at ?? new Date().toISOString();
+    const savedAssignmentNotes = isShadowAssignment
+      ? (savedAssignment?.notes ?? notes ?? null)
+      : null;
+    const assignmentLabel = isShadowAssignment ? "Shadow shift" : "Shift";
 
     const adminPushError = await sendAdminPush({
-      title: "Shift added",
+      title: `${assignmentLabel} added`,
       body: `${volunteerName} was added to ${shiftNotificationSummary}`,
     });
     if (adminPushError) {
@@ -4226,7 +4458,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const leadNotifyError = await notifyLeadsOnShiftInstance({
       shiftInstanceId: assignShiftInstanceId,
       excludeVolunteerIds: [volunteerId],
-      title: "Shift added",
+      title: `${assignmentLabel} added`,
       body: `${volunteerName} was added to your shift`,
       notificationType: "shift_added",
     });
@@ -4236,7 +4468,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const pushError = await sendVolunteerPush({
       userId: volunteerId,
-      title: "Shift added",
+      title: `${assignmentLabel} added`,
       body: shiftNotificationSummary,
       notificationType: "shift_added",
       shiftInstanceId: assignShiftInstanceId,
@@ -4245,7 +4477,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       notificationErrors.push(`volunteer notification failed: ${pushError}`);
     }
     if (notificationErrors.length > 0) {
-      setAssignMessage(`Volunteer added, but ${notificationErrors.join(" | ")}`);
+      setAssignMessage(`${assignmentLabel} added, but ${notificationErrors.join(" | ")}`);
       setAssignLoading(false);
       closeAssignVolunteerModal();
       addWeekAssignmentLocally({
@@ -4254,6 +4486,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         created_at: savedAssignmentCreatedAt,
         status: "active",
         assignment_role: assignmentRole,
+        notes: savedAssignmentNotes,
         volunteer: {
           id: volunteer.id,
           full_name: volunteer.full_name,
@@ -4286,6 +4519,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       created_at: savedAssignmentCreatedAt,
       status: "active",
       assignment_role: assignmentRole,
+      notes: savedAssignmentNotes,
       volunteer: {
         id: volunteer.id,
         full_name: volunteer.full_name,
@@ -4325,7 +4559,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setAssignOtherLoading(true);
     setAssignMessage("");
     const details = assignOtherDetails.trim();
-    const notes = details ? `${label} — ${details}` : label;
+    const notes = buildOtherAssignmentNote(label, details);
     const { error } = await supabase.from("shift_assignments").insert({
       shift_instance_id: assignShiftInstanceId,
       volunteer_id: null,
@@ -4353,15 +4587,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         })
       : "an upcoming date";
     const shiftTime = assignedShift ? formatTimeRangeFromInstance(assignedShift.start, assignedShift.end) : "—";
+    const entryLabel = "Other";
     const adminPushError = await sendAdminPush({
       title: "Shift updated",
-      body: `Other: ${label} was added to ${shiftTitle}, ${shiftDate} (${shiftTime}).`,
+      body: `${entryLabel}: ${label} was added to ${shiftTitle}, ${shiftDate} (${shiftTime}).`,
     });
     const leadNotifyError = await notifyLeadsOnShiftInstance({
       shiftInstanceId: assignShiftInstanceId,
       excludeVolunteerIds: [session.user.id],
       title: "Shift updated",
-      body: `Other: ${label} was added to ${shiftTitle}.`,
+      body: `${entryLabel}: ${label} was added to ${shiftTitle}.`,
       notificationType: "shift_added",
     });
 
@@ -4395,11 +4630,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setAssignOtherName("");
     setAssignOtherDetails("");
     setShowAssignOtherForm(false);
+    setAssignOtherMode("other");
     setAssignOtherLoading(false);
     setAssignMessage(
       notificationErrors.length > 0
-        ? `Added Other, but ${notificationErrors.join(" | ")}`
-        : "Added Other to this shift.",
+        ? `Added ${entryLabel}, but ${notificationErrors.join(" | ")}`
+        : `Added ${entryLabel} to this shift.`,
     );
     setShiftInstancesRefreshToken((value) => value + 1);
     refreshShiftViewsInBackground();
@@ -4593,7 +4829,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     const adminName =
       displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
-    const removeTargetLabel = (removeTarget.notes ?? "").split(" — ")[0]?.trim();
+    const removeTargetLabel = parseOtherAssignmentNote(removeTarget.notes).name;
     const volunteerName =
       removeTarget.volunteer?.preferred_name ||
       removeTarget.volunteer?.full_name ||
@@ -5559,7 +5795,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               aria-label="Delete notification"
               title="Delete notification"
             >
-              Delete
+              <X size={16} strokeWidth={2.5} aria-hidden="true" />
             </button>
           ) : null}
           <div className="notification-info">{content}</div>
@@ -5575,6 +5811,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   const isLeadNeededNotification = (item: AppNotificationItem): item is LeadNeededNotificationItem =>
     "notification_kind" in item && item.notification_kind === "lead_needed";
+
+  const isShadowFollowUpNotification = (
+    item: AppNotificationItem,
+  ): item is ShadowFollowUpNotificationItem =>
+    "notification_kind" in item && item.notification_kind === "shadow_follow_up";
 
   return (
     <div className="calendar-shell">
@@ -6134,7 +6375,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <h3 className="modal-title">My shifts</h3>
               </div>
               <button className="modal-close" type="button" onClick={() => setShowMyShifts(false)}>
-                Close
+                <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
 
@@ -6330,7 +6571,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </div>
               <div className="modal-header-actions">
                 <button className="modal-close" type="button" onClick={() => setShowWeekGlance(false)}>
-                  Close
+                  <X size={22} strokeWidth={2.4} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -6474,7 +6715,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 </p>
               </div>
               <button className="modal-close" type="button" onClick={() => setShowMonthDayDetails(false)}>
-                Close
+                <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
@@ -6507,7 +6748,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 </p>
               </div>
               <button className="modal-close" type="button" onClick={() => setShowAppointments(false)}>
-                Close
+                <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
@@ -6828,7 +7069,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 type="button"
                 onClick={() => closeTakeShiftPrompt()}
               >
-                Close
+                <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
@@ -6846,20 +7087,32 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   type="button"
                   onClick={() => closeTakeShiftPrompt()}
                   disabled={takeShiftLoading}
+                  aria-label="No"
+                  title="No"
                 >
-                  No
+                  <X size={18} strokeWidth={2.4} aria-hidden="true" />
                 </button>
                 <button
                   className="account-button"
                   type="button"
                   onClick={handleConfirmTakeShift}
                   disabled={takeShiftLoading}
+                  aria-label={
+                    takeShiftLoading
+                      ? "Saving"
+                      : takeShiftMode === "join"
+                        ? "Join shift"
+                        : "Request to be added"
+                  }
+                  title={
+                    takeShiftLoading
+                      ? "Saving"
+                      : takeShiftMode === "join"
+                        ? "Join shift"
+                        : "Request to be added"
+                  }
                 >
-                  {takeShiftLoading
-                    ? "Saving..."
-                    : takeShiftMode === "join"
-                      ? "Join shift"
-                      : "Request to be Added"}
+                  <Check size={18} strokeWidth={2.4} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -7014,6 +7267,69 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         </>,
                       );
                     }
+                    if (isShadowFollowUpNotification(request)) {
+                      const volunteerName =
+                        request.shadow_name ||
+                        request.volunteer?.preferred_name ||
+                        request.volunteer?.full_name ||
+                        "Shadow volunteer";
+                      const volunteerNameClass =
+                        request.volunteer?.role === "Admin"
+                          ? "volunteer-name volunteer-name-admin"
+                          : request.volunteer?.role === "Lead"
+                            ? "volunteer-name volunteer-name-lead"
+                            : "volunteer-name volunteer-name-regular";
+
+                      return renderNotificationCard(
+                        request,
+                        index,
+                        isLatest,
+                        <>
+                          {isLatest ? <span className="notification-tag">Latest</span> : null}
+                          <p className="notification-name">
+                            Second shadow shift done for{" "}
+                            <span className={volunteerNameClass}>{volunteerName}</span>
+                          </p>
+                          <p className="notification-reason">
+                            Reach out to ask what weekly shift they want.
+                          </p>
+                        </>,
+                        isMobile ? null : (
+                          <>
+                            <button
+                              className="account-button notification-icon-action"
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setVolunteerSearchInput(volunteerName);
+                                setSelectedVolunteer(null);
+                                setShowVolunteers(true);
+                              }}
+                              aria-label="Find volunteer"
+                              title="Find volunteer"
+                            >
+                              <Search size={18} strokeWidth={2.25} aria-hidden="true" />
+                            </button>
+                            <button
+                              className="account-button notification-icon-action"
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleDismissNotification(request, index);
+                              }}
+                              disabled={notificationDeletingIds.has(request.id)}
+                              aria-label="Delete notification"
+                              title="Delete notification"
+                            >
+                              <X size={18} strokeWidth={2.5} aria-hidden="true" />
+                            </button>
+                          </>
+                        ),
+                        {
+                          hideCornerDelete: true,
+                        },
+                      );
+                    }
 
                     const volunteerName =
                       request.volunteer?.preferred_name ||
@@ -7131,8 +7447,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                 event.stopPropagation();
                                 void handleNotificationDecision(request.id, "deny");
                               }}
+                              aria-label="Deny"
+                              title="Deny"
                             >
-                              Deny
+                              <X size={18} strokeWidth={2.4} aria-hidden="true" />
                             </button>
                             <button
                               className="account-button"
@@ -7141,8 +7459,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                 event.stopPropagation();
                                 void handleNotificationDecision(request.id, "approve");
                               }}
+                              aria-label="Approve"
+                              title="Approve"
                             >
-                              Approve
+                              <Check size={18} strokeWidth={2.4} aria-hidden="true" />
                             </button>
                           </>
                         ),
@@ -7194,14 +7514,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             <div className="modal-header">
               <div>
                 <p className="modal-eyebrow">Admin</p>
-                <h3 className="modal-title">Add volunteer to shift</h3>
+                <h3 className="modal-title">
+                  {assignOtherMode === "shadow" ? "Add shadow shift" : "Add volunteer to shift"}
+                </h3>
               </div>
               <button
                 className="modal-close"
                 type="button"
                 onClick={closeAssignVolunteerModal}
               >
-                Close
+                <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
@@ -7272,15 +7594,30 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <button
                   className="account-button"
                   type="button"
-                  onClick={() => setShowAssignOtherForm((current) => !current)}
+                  onClick={() => {
+                    setAssignOtherMode("other");
+                    setShowAssignOtherForm((current) => !(current && assignOtherMode === "other"));
+                  }}
                 >
-                  {showAssignOtherForm ? "Cancel Add Other" : "Add Other"}
+                  {showAssignOtherForm && assignOtherMode === "other" ? "Cancel Add Other" : "Add Other"}
+                </button>
+                <button
+                  className={`account-button ${assignOtherMode === "shadow" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => {
+                    setShowAssignOtherForm(false);
+                    setAssignOtherMode((current) => (current === "shadow" ? "other" : "shadow"));
+                  }}
+                >
+                  {assignOtherMode === "shadow" ? "Cancel Shadow Shift" : "Add Shadow Shift"}
                 </button>
               </div>
               {showAssignOtherForm ? (
                 <div className="account-section">
                   <label className="form-field">
-                    <span className="form-label">Other name</span>
+                        <span className="form-label">
+                      Other name
+                    </span>
                     <input
                       className="form-input"
                       type="text"
@@ -7305,7 +7642,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       disabled={assignOtherLoading}
                       onClick={() => void handleAssignOther()}
                     >
-                      {assignOtherLoading ? "Adding..." : "Save Other"}
+                      {assignOtherLoading
+                        ? "Adding..."
+                        : "Save Other"}
                     </button>
                   </div>
                 </div>
@@ -7338,7 +7677,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       >
                         <div className="volunteer-main">
                           <p className={nameClass}>{name}</p>
-                          <p className="volunteer-meta">{roleLabel}</p>
+                          <p className="volunteer-meta">
+                            {assignOtherMode === "shadow" ? `Shadow shift · ${roleLabel}` : roleLabel}
+                          </p>
                         </div>
                         <span className="volunteer-joined">
                           Joined {formatDate(volunteer.joined_at)}
@@ -7364,7 +7705,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 type="button"
                 onClick={() => setShowHelpfulLinks(false)}
               >
-                Close
+                <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
@@ -7428,7 +7769,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 type="button"
                 onClick={() => setShowDropConfirm(false)}
               >
-                Close
+                <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
@@ -7437,8 +7778,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   className="nav-button"
                   type="button"
                   onClick={() => setShowDropConfirm(false)}
+                  aria-label="No"
+                  title="No"
                 >
-                  Cancel
+                  <X size={18} strokeWidth={2.4} aria-hidden="true" />
                 </button>
                 <button
                   className="account-button"
@@ -7451,8 +7794,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       setShowDropReason(true);
                     }
                   }}
+                  aria-label="Drop shift"
+                  title="Drop shift"
                 >
-                  Drop Shift
+                  <Check size={18} strokeWidth={2.4} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -7473,7 +7818,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 type="button"
                 onClick={() => setShowDropReason(false)}
               >
-                Close
+                <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
@@ -7491,11 +7836,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   className="nav-button"
                   type="button"
                   onClick={() => setShowDropReason(false)}
+                  aria-label="No"
+                  title="No"
                 >
-                  Cancel
+                  <X size={18} strokeWidth={2.4} aria-hidden="true" />
                 </button>
-                <button className="account-button" type="button" onClick={handleDropShift}>
-                  Submit drop
+                <button
+                  className="account-button"
+                  type="button"
+                  onClick={handleDropShift}
+                  aria-label="Submit drop"
+                  title="Submit drop"
+                >
+                  <Check size={18} strokeWidth={2.4} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -7516,7 +7869,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 type="button"
                 onClick={() => setShowDenyPrompt(false)}
               >
-                Close
+                <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
@@ -7534,15 +7887,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   className="nav-button"
                   type="button"
                   onClick={() => setShowDenyPrompt(false)}
+                  aria-label="No"
+                  title="No"
                 >
-                  Cancel
+                  <X size={18} strokeWidth={2.4} aria-hidden="true" />
                 </button>
                 <button
                   className="account-button"
                   type="button"
                   onClick={handleConfirmDeny}
+                  aria-label="Deny request"
+                  title="Deny request"
                 >
-                  Deny request
+                  <Check size={18} strokeWidth={2.4} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -7566,7 +7923,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   setPendingDecisionTarget(null);
                 }}
               >
-                Close
+                <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
@@ -7586,8 +7943,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     setPendingDecisionTarget(null);
                     void handleNotificationDecision(targetId, "deny");
                   }}
+                  aria-label="Deny"
+                  title="Deny"
                 >
-                  Deny
+                  <X size={18} strokeWidth={2.4} aria-hidden="true" />
                 </button>
                 <button
                   className="account-button"
@@ -7599,8 +7958,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     setPendingDecisionTarget(null);
                     void handleNotificationDecision(targetId, "approve");
                   }}
+                  aria-label="Approve"
+                  title="Approve"
                 >
-                  Approve
+                  <Check size={18} strokeWidth={2.4} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -7644,7 +8005,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 >
                   {removeTarget?.volunteer?.preferred_name ||
                     removeTarget?.volunteer?.full_name ||
-                    (removeTarget?.notes ?? "").split(" — ")[0] ||
+                    parseOtherAssignmentNote(removeTarget?.notes).name ||
                     "this entry"}
                 </span>{" "}
                 from this shift?
@@ -7708,6 +8069,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </button>
             </div>
             <div className="modal-body">
+              {notesTarget?.volunteer?.id ? (
+                <button
+                  className="account-button"
+                  type="button"
+                  onClick={() => void handleShadowShiftToggle()}
+                  disabled={notesSaving}
+                >
+                  {parseOtherAssignmentNote(notesTarget.notes).isShadowShift
+                    ? "Remove Shadow Shift"
+                    : "Make Shadow Shift"}
+                </button>
+              ) : null}
               <label className="form-field">
                 <span className="form-label">Shift note</span>
                 <textarea
@@ -8034,7 +8407,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           }}
                           disabled={recurringSaving}
                         >
-                          Cancel
+                          <X size={18} strokeWidth={2.4} aria-hidden="true" />
+                          <span>Cancel</span>
                         </button>
                         <button
                           className="account-button"
@@ -8182,7 +8556,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 </h3>
               </div>
               <button className="modal-close" type="button" onClick={() => setShowProfile(false)}>
-                Close
+                <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body account-body">

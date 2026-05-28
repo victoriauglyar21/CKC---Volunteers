@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import "./App.css";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
+import type { ProfileRecord } from "./authedApp/types";
 import { signOutSafely, supabase } from "./supabaseClient";
 
 const Auth = lazy(() => import("./Auth"));
@@ -17,25 +18,6 @@ function getInitialTheme(): ThemeMode {
   if (savedTheme === "light" || savedTheme === "dark") return savedTheme;
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
-
-type ProfileRecord = {
-  id: string;
-  role: "Regular Volunteer" | "Lead" | "Admin";
-  full_name: string | null;
-  preferred_name: string | null;
-  pronouns: string | null;
-  date_of_birth: string | null;
-  phone: string | null;
-  emergency_contact_name: string | null;
-  emergency_contact_phone: string | null;
-  status: string | null;
-  joined_at: string | null;
-  internal_notes: string | null;
-  interests: string[] | null;
-  training_completed: boolean | null;
-  training_completed_at: string | null;
-  notification_pref?: "email_only" | "push_and_email" | null;
-};
 
 function isProfileComplete(profile: ProfileRecord) {
   const hasText = (value: string | null) => Boolean(value && value.trim());

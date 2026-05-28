@@ -1,10 +1,16 @@
 import { supabase } from "../../supabaseClient";
 import { ADMIN_DROPPED_NOTIFICATION_WINDOW_MS, APPOINTMENT_NOTIFICATION_WINDOW_MS } from "../constants";
-import { getNotificationDismissToken, getNotificationSortTimestamp } from "../utils";
+import {
+  getNotificationDismissToken,
+  getNotificationSortTimestamp,
+  normalizeOtherAssignmentName,
+  parseOtherAssignmentNote,
+} from "../utils";
 import type {
   AppNotificationItem,
   AppointmentNotificationItem,
   LeadNeededNotificationItem,
+  ShadowFollowUpNotificationItem,
   ShiftAssignmentDetail,
 } from "../types";
 
@@ -74,6 +80,8 @@ const LEAD_NEEDED_NOTIFICATION_SELECT = `
     )
   )
 `;
+
+const SHADOW_FOLLOW_UP_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 export type FetchNotificationsInput = {
   sessionUserId: string;
@@ -155,11 +163,132 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
     return { items: [] as AppNotificationItem[], error: leadNeededError };
   }
 
-  const items = [...assignmentItems, ...appointmentItems, ...leadNeededItems].sort(
+  const { items: shadowFollowUpItems, error: shadowFollowUpError } =
+    await fetchShadowFollowUpNotificationItems(input);
+  if (shadowFollowUpError) {
+    return { items: [] as AppNotificationItem[], error: shadowFollowUpError };
+  }
+
+  const items = [...assignmentItems, ...appointmentItems, ...leadNeededItems, ...shadowFollowUpItems].sort(
     (left, right) => getNotificationSortTimestamp(right) - getNotificationSortTimestamp(left),
   );
 
   return { items, error: null };
+}
+
+type ShadowFollowUpAssignmentRow = {
+  id: string;
+  shift_instance_id: number | null;
+  created_at: string | null;
+  volunteer_id: string | null;
+  notes: string | null;
+  volunteer:
+    | ShadowFollowUpNotificationItem["volunteer"]
+    | ShadowFollowUpNotificationItem["volunteer"][];
+  shift_instance:
+    | ShadowFollowUpNotificationItem["shift_instance"]
+    | ShadowFollowUpNotificationItem["shift_instance"][];
+};
+
+function getShiftEndMs(shiftInstance: ShadowFollowUpNotificationItem["shift_instance"]) {
+  const endValue = shiftInstance?.ends_at ?? shiftInstance?.starts_at ?? shiftInstance?.shift_date ?? "";
+  const parsed = Date.parse(endValue);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+async function fetchShadowFollowUpNotificationItems(input: FetchNotificationsInput) {
+  if (!input.isAdminAccount) {
+    return { items: [] as ShadowFollowUpNotificationItem[], error: null as string | null };
+  }
+
+  const { data, error } = await supabase
+    .from("shift_assignments")
+    .select(
+      `
+      id,
+      shift_instance_id,
+      created_at,
+      volunteer_id,
+      notes,
+      volunteer:profiles (
+        id,
+        full_name,
+        preferred_name,
+        role,
+        phone
+      ),
+      shift_instance:shift_instances (
+        id,
+        shift_date,
+        starts_at,
+        ends_at,
+        template:shift_templates (
+          id,
+          title
+        )
+      )
+    `,
+    )
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+    .limit(1000);
+
+  if (error) {
+    return { items: [] as ShadowFollowUpNotificationItem[], error: error.message };
+  }
+
+  const now = Date.now();
+  const byShadowName = new Map<
+    string,
+    { count: number; latest: ShadowFollowUpNotificationItem | null }
+  >();
+  ((data as ShadowFollowUpAssignmentRow[] | null) ?? []).forEach((row) => {
+    const parsedNote = parseOtherAssignmentNote(row.notes);
+    const volunteer = Array.isArray(row.volunteer) ? (row.volunteer[0] ?? null) : row.volunteer;
+    const volunteerName = volunteer?.preferred_name || volunteer?.full_name || null;
+    const shadowName = volunteerName ?? parsedNote.name;
+    if (!parsedNote.isShadowShift || !shadowName) return;
+
+    const shiftInstance = Array.isArray(row.shift_instance)
+      ? (row.shift_instance[0] ?? null)
+      : row.shift_instance;
+
+    const shiftEndMs = getShiftEndMs(shiftInstance);
+    if (!shiftEndMs || shiftEndMs > now) return;
+
+    const shadowNameKey = row.volunteer_id
+      ? `volunteer:${row.volunteer_id}`
+      : `name:${normalizeOtherAssignmentName(parsedNote.name)}`;
+    if (!shadowNameKey) return;
+    const item: ShadowFollowUpNotificationItem = {
+      notification_kind: "shadow_follow_up",
+      id: `shadow-follow-up:${shadowNameKey}:${row.shift_instance_id ?? shiftInstance?.id ?? row.id}`,
+      created_at: row.created_at,
+      shift_instance_id: row.shift_instance_id ?? shiftInstance?.id ?? null,
+      shadow_name: shadowName,
+      shadow_count: 0,
+      volunteer,
+      shift_instance: shiftInstance,
+    };
+    const current = byShadowName.get(shadowNameKey) ?? { count: 0, latest: null };
+    current.count += 1;
+    if (!current.latest || getNotificationSortTimestamp(item) > getNotificationSortTimestamp(current.latest)) {
+      current.latest = item;
+    }
+    byShadowName.set(shadowNameKey, current);
+  });
+
+  const items = Array.from(byShadowName.values())
+    .map(({ count, latest }) => {
+      if (!latest || count < 2) return null;
+      const latestEndMs = getShiftEndMs(latest.shift_instance);
+      if (!latestEndMs || now - latestEndMs > SHADOW_FOLLOW_UP_WINDOW_MS) return null;
+      return { ...latest, shadow_count: count };
+    })
+    .filter((item): item is ShadowFollowUpNotificationItem => Boolean(item))
+    .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
+
+  return { items, error: null as string | null };
 }
 
 type AppointmentNotificationRow = {

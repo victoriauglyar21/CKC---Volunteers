@@ -189,10 +189,37 @@ export type LeadNeededNotificationItem = {
   } | null;
 };
 
+export type ShadowFollowUpNotificationItem = {
+  notification_kind: "shadow_follow_up";
+  id: string;
+  created_at: string | null;
+  shift_instance_id?: number | null;
+  shadow_name?: string | null;
+  shadow_count?: number;
+  volunteer: {
+    id: string;
+    full_name: string | null;
+    preferred_name: string | null;
+    role?: "Regular Volunteer" | "Lead" | "Admin" | null;
+    phone?: string | null;
+  } | null;
+  shift_instance?: {
+    id: number;
+    shift_date: string | null;
+    starts_at: string | null;
+    ends_at: string | null;
+    template?: {
+      id?: string;
+      title: string;
+    } | null;
+  } | null;
+};
+
 export type AppNotificationItem =
   | ShiftAssignmentDetail
   | AppointmentNotificationItem
-  | LeadNeededNotificationItem;
+  | LeadNeededNotificationItem
+  | ShadowFollowUpNotificationItem;
 
 export type AppointmentKind = "foster" | "adoption" | "vax" | "orientation" | "other";
 

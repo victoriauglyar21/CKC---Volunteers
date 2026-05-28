@@ -1,7 +1,7 @@
 import { supabase } from "../../supabaseClient";
 import type { NotificationSettingKey } from "../constants";
 import type { DropDayLeadAssignment } from "../types";
-import { getDropAssignmentVolunteerRole, isAdminRole, isLeadAssignmentRole, isLeadRole } from "../utils";
+import { getDropAssignmentVolunteerRole, isLeadAssignmentRole, isLeadRole } from "../utils";
 
 export async function getFunctionAuthHeaders() {
   const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? "";
@@ -39,10 +39,14 @@ export async function sendAdminPush({
   title,
   body,
   url = "/?view=notifications",
+  actions,
+  data,
 }: {
   title: string;
   body: string;
   url?: string;
+  actions?: { action: string; title: string }[];
+  data?: Record<string, unknown>;
 }) {
   const authHeaders = await getFunctionAuthHeaders();
   if (!authHeaders) {
@@ -51,7 +55,7 @@ export async function sendAdminPush({
 
   const { error } = await supabase.functions.invoke("send-admin-push", {
     headers: authHeaders,
-    body: { title, body, url },
+    body: { title, body, url, actions, data },
   });
   if (error) {
     console.warn("Failed to send admin push:", error.message);
@@ -166,8 +170,7 @@ export async function notifyLeadsOnShiftInstance({
           (assignment) =>
             !excluded.has(assignment.volunteer_id) &&
             (isLeadAssignmentRole(assignment.assignment_role) ||
-              isLeadRole(getDropAssignmentVolunteerRole(assignment)) ||
-              isAdminRole(getDropAssignmentVolunteerRole(assignment))),
+              isLeadRole(getDropAssignmentVolunteerRole(assignment))),
         )
         .map((assignment) => assignment.volunteer_id),
     ),

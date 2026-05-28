@@ -111,8 +111,7 @@ serve(async (req) => {
   const { data: admins, error: adminsError } = await supabaseAdmin
     .from("profiles")
     .select("id")
-    .eq("role", "Admin")
-    .eq("notification_pref", "push_and_email");
+    .eq("role", "Admin");
 
   if (adminsError) {
     return new Response(adminsError.message, { status: 500, headers: corsHeaders });

@@ -1647,18 +1647,25 @@ html[data-theme="dark"] .weekday-today {
 }
 
 .modal-close {
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--rose-400) 85%, #0000);
-  background: var(--rose-100);
+  border: 0;
+  background: transparent;
   color: var(--ink-primary);
-  height: 36px;
-  padding: 0 12px;
-  font-size: 0.9rem;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  font-size: 1rem;
   font-weight: 600;
   font-family: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  line-height: 1;
+}
+
+.modal-close svg {
+  display: block;
 }
 
 .modal-body {
@@ -2179,6 +2186,12 @@ html[data-theme="dark"] .capacity-slot.needs-lead {
 .capacity-slot.other {
   background: rgba(168, 85, 247, 0.24);
   border-color: rgba(168, 85, 247, 0.66);
+}
+
+.capacity-slot.shadow {
+  background: rgba(168, 85, 247, 0.34);
+  border-color: rgba(168, 85, 247, 0.82);
+  color: inherit;
 }
 
 .capacity-slot:disabled {
@@ -2828,6 +2841,7 @@ html[data-theme="dark"] .capacity-slot-extra {
   display: flex;
   gap: 10px;
   align-items: center;
+  justify-content: flex-start;
   flex-wrap: wrap;
   margin-top: 2px;
 }
@@ -2836,14 +2850,18 @@ html[data-theme="dark"] .capacity-slot-extra {
   position: absolute;
   top: 10px;
   right: 10px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--rose-400) 78%, transparent);
-  background: color-mix(in srgb, var(--rose-50) 82%, #fff 18%);
+  border-radius: 6px;
+  border: 0;
+  background: transparent;
   color: var(--ink-primary);
-  min-height: 26px;
-  padding: 0 8px;
-  font-size: 0.72rem;
-  font-weight: 700;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
   transition:
     background-color 140ms ease,
@@ -2854,8 +2872,7 @@ html[data-theme="dark"] .capacity-slot-extra {
 }
 
 .notification-corner-delete-button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--rose-50) 68%, #fff 32%);
-  border-color: color-mix(in srgb, var(--rose-400) 92%, transparent);
+  background: color-mix(in srgb, var(--rose-400) 12%, transparent);
 }
 
 .notification-corner-delete-button:active:not(:disabled) {
@@ -2883,6 +2900,35 @@ html[data-theme="dark"] .capacity-slot-extra {
   align-items: center;
   justify-content: center;
   font-size: 0.9rem;
+}
+
+.notification-actions .nav-button,
+.notification-actions .account-button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  gap: 7px;
+}
+
+.notification-actions .nav-button:hover,
+.notification-actions .account-button:hover {
+  transform: none;
+  background: color-mix(in srgb, var(--rose-400) 12%, transparent);
+}
+
+.notification-actions .notification-icon-action {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  min-height: 38px;
+  padding: 0;
+  flex: 0 0 38px;
+}
+
+.notification-actions .notification-icon-action svg,
+.notification-corner-delete-button svg {
+  display: block;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3111,6 +3157,39 @@ html[data-theme="dark"] .capacity-slot-extra {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.modal-panel .modal-actions > .nav-button,
+.modal-panel .modal-actions > .account-button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  min-height: 38px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.modal-panel .modal-actions > .nav-button:hover,
+.modal-panel .modal-actions > .account-button:hover {
+  transform: none;
+  background: color-mix(in srgb, var(--rose-400) 12%, transparent);
+}
+
+.modal-panel .modal-actions > .nav-button svg,
+.modal-panel .modal-actions > .account-button svg {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.modal-panel .modal-actions > .account-button svg {
+  color: #3f8f58;
 }
 
 .pill-row {

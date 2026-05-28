@@ -1,22 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent, type ChangeEvent } from "react";
+import { sendAdminPush } from "./authedApp/services/pushNotificationService";
+import type { ProfileRecord } from "./authedApp/types";
 import { supabase } from "./supabaseClient";
-
-type ProfileRecord = {
-  id: string;
-  role: "Regular Volunteer" | "Lead" | "Admin";
-  full_name: string | null;
-  preferred_name: string | null;
-  pronouns: string | null;
-  date_of_birth: string | null;
-  phone: string | null;
-  joined_at: string | null;
-  internal_notes: string | null;
-  interests: string[] | null;
-  training_completed: boolean | null;
-  training_completed_at: string | null;
-  notification_pref?: "email_only" | "push_and_email" | null;
-  created_at?: string | null;
-};
 
 type Props = {
   userId: string;
@@ -31,11 +16,16 @@ const DEFAULT_PROFILE: Omit<ProfileRecord, "id"> = {
   pronouns: "",
   date_of_birth: "",
   phone: "",
+  emergency_contact_name: "",
+  emergency_contact_phone: "",
+  status: "",
   joined_at: "",
   internal_notes: "",
   interests: [],
   training_completed: false,
   training_completed_at: "",
+  notification_pref: null,
+  notification_settings: null,
   created_at: "",
 };
 
@@ -194,13 +184,14 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
     if (!initialProfile) {
       const newVolunteerName =
         normalizeText(form.preferred_name) || normalizeText(form.full_name) || "A volunteer";
-      await supabase.functions.invoke("send-admin-push", {
-        body: {
-          title: "New volunteer signup",
-          body: `${newVolunteerName} signed up!`,
-          url: "/?view=notifications",
-        },
+      const pushError = await sendAdminPush({
+        title: "New volunteer signup",
+        body: `${newVolunteerName} signed up!`,
+        url: "/?view=notifications",
       });
+      if (pushError) {
+        console.warn("New volunteer admin push failed:", pushError);
+      }
     }
 
     onComplete(data as ProfileRecord);

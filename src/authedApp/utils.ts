@@ -13,6 +13,7 @@ import type {
   CalendarCell,
   DropDayLeadAssignment,
   LeadNeededNotificationItem,
+  ShadowFollowUpNotificationItem,
   ShiftAssignmentDetail,
   ShiftInstance,
   ShiftTemplate,
@@ -67,11 +68,23 @@ function isLeadNeededNotificationItem(item: AppNotificationItem): item is LeadNe
   return "notification_kind" in item && item.notification_kind === "lead_needed";
 }
 
+function isShadowFollowUpNotificationItem(
+  item: AppNotificationItem,
+): item is ShadowFollowUpNotificationItem {
+  return "notification_kind" in item && item.notification_kind === "shadow_follow_up";
+}
+
 export function getNotificationSortTimestamp(item: AppNotificationItem) {
   const value = isAppointmentNotificationItem(item)
     ? item.updated_at ?? item.created_at ?? ""
     : isLeadNeededNotificationItem(item)
       ? item.created_at ?? ""
+      : isShadowFollowUpNotificationItem(item)
+        ? item.shift_instance?.ends_at ??
+          item.shift_instance?.starts_at ??
+          item.shift_instance?.shift_date ??
+          item.created_at ??
+          ""
       : item.dropped_at ?? item.created_at ?? "";
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
@@ -85,6 +98,11 @@ export function getNotificationDismissToken(item: AppNotificationItem) {
   if (isLeadNeededNotificationItem(item)) {
     return `lead-needed:${item.shift_instance_id ?? "unknown"}:${item.notification_type}:${item.created_at ?? ""}`;
   }
+  if (isShadowFollowUpNotificationItem(item)) {
+    return `shadow-follow-up:${normalizeOtherAssignmentName(
+      item.shadow_name ?? item.volunteer?.preferred_name ?? item.volunteer?.full_name ?? "unknown",
+    )}:${item.shift_instance_id ?? "unknown"}`;
+  }
   const status = item.status ?? "unknown";
   const changeMoment = item.dropped_at ?? item.created_at ?? "";
   return `${item.id}:${status}:${changeMoment}`;
@@ -97,6 +115,52 @@ export function isSelfDropReason(reason: string | null | undefined) {
 export function normalizeDropReason(reason: string | null | undefined) {
   if (!reason) return "";
   return isSelfDropReason(reason) ? reason.slice(SELF_DROP_REASON_PREFIX.length).trim() : reason;
+}
+
+const SHADOW_SHIFT_NOTE_PREFIX = "Shadow Shift:";
+
+export function buildOtherAssignmentNote(name: string, details: string) {
+  const cleanName = name.trim();
+  const cleanDetails = details.trim();
+  return cleanDetails ? `${cleanName} — ${cleanDetails}` : cleanName;
+}
+
+export function buildShadowShiftAssignmentNote(name: string, details: string) {
+  return `${SHADOW_SHIFT_NOTE_PREFIX} ${buildOtherAssignmentNote(name, details)}`;
+}
+
+export function buildVolunteerShadowShiftNote(volunteerName: string, existingNote: string | null | undefined) {
+  const parsed = parseOtherAssignmentNote(existingNote);
+  if (parsed.isShadowShift) return existingNote?.trim() || buildShadowShiftAssignmentNote(volunteerName, "");
+  return buildShadowShiftAssignmentNote(volunteerName, existingNote?.trim() ?? "");
+}
+
+export function stripShadowShiftAssignmentNote(note: string | null | undefined) {
+  const parsed = parseOtherAssignmentNote(note);
+  if (!parsed.isShadowShift) return note?.trim() || null;
+  return parsed.details || null;
+}
+
+export function parseOtherAssignmentNote(note: string | null | undefined) {
+  const raw = (note ?? "").trim();
+  const isShadowShift = raw.toLowerCase().startsWith(SHADOW_SHIFT_NOTE_PREFIX.toLowerCase());
+  const withoutPrefix = isShadowShift ? raw.slice(SHADOW_SHIFT_NOTE_PREFIX.length).trim() : raw;
+  const [namePart, ...detailParts] = withoutPrefix.split(" — ");
+  return {
+    isShadowShift,
+    name: (namePart ?? "").trim(),
+    details: detailParts.join(" — ").trim(),
+    display: withoutPrefix,
+  };
+}
+
+export function normalizeOtherAssignmentName(noteOrName: string | null | undefined) {
+  const parsed = parseOtherAssignmentNote(noteOrName);
+  return parsed.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 export function parseDateOnly(value: string) {
@@ -209,12 +273,7 @@ export function formatTimeOnly(value: string | null | undefined) {
 }
 
 export function format24HourTime(value: string | null | undefined) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
+  return formatTimeOnly(value);
 }
 
 export function toTimeInputValue(value: string | null | undefined) {
