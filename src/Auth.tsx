@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent, type ChangeEvent } from "react";
 import { signOutSafely, supabase } from "./supabaseClient";
-import type { AuthError } from "@supabase/supabase-js";
+import type { AuthError, Session } from "@supabase/supabase-js";
 
 type AuthProps = {
   resetOnly?: boolean;
   onResetDone?: () => void;
+  onSignedIn?: (session: Session) => void;
   defaultMode?: "signin" | "signup";
 };
 
@@ -34,7 +35,12 @@ function mapSignupError(error: AuthError) {
   return error.message;
 }
 
-export default function Auth({ resetOnly = false, onResetDone, defaultMode = "signin" }: AuthProps) {
+export default function Auth({
+  resetOnly = false,
+  onResetDone,
+  onSignedIn,
+  defaultMode = "signin",
+}: AuthProps) {
   const [isSignup, setIsSignup] = useState(defaultMode === "signup");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -149,6 +155,7 @@ export default function Auth({ resetOnly = false, onResetDone, defaultMode = "si
     if (error) return setMsg(error.message);
 
     if (!data.session) return setMsg("Signed in, but no session returned.");
+    onSignedIn?.(data.session);
     return setMsg("Signed in!");
   };
 

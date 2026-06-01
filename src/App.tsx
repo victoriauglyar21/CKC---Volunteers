@@ -99,11 +99,19 @@ function hasAuthType(targetType: string) {
   return searchParams.get("type") === targetType || hashParams.get("type") === targetType;
 }
 
+function replaceRoute(path: string) {
+  if (typeof window === "undefined") return;
+  if (window.location.pathname !== path || window.location.search || window.location.hash) {
+    window.history.replaceState({}, "", path);
+  }
+}
+
 function MainApp() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [profileChecked, setProfileChecked] = useState(false);
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [profileMissing, setProfileMissing] = useState(false);
@@ -116,6 +124,15 @@ function MainApp() {
   const useNewUi = isNewUiEnabled();
   const hasUsableProfile = Boolean(profile);
 
+  const handleSignedIn = useCallback((nextSession: Session) => {
+    setProfile(null);
+    setNeedsOnboarding(false);
+    setProfileMissing(false);
+    setProfileChecked(false);
+    setProfileLoading(true);
+    setSession(nextSession);
+  }, []);
+
   const goToCompleteProfile = useCallback(() => {
     if (typeof window === "undefined") return;
     if (window.location.pathname !== "/complete-profile") {
@@ -126,6 +143,7 @@ function MainApp() {
   useEffect(() => {
     let mounted = true;
     const signupConfirmation = hasAuthType("signup");
+    let signupConfirmationPending = signupConfirmation;
 
     const isResetRoute =
       typeof window !== "undefined" && window.location.pathname === "/reset-password";
@@ -134,18 +152,20 @@ function MainApp() {
       setPasswordRecovery(true);
     }
 
-    if (signupConfirmation && typeof window !== "undefined" && window.location.pathname !== "/signin") {
-      window.history.replaceState({}, "", "/signin");
+    if (signupConfirmation) {
+      replaceRoute("/signin");
     }
 
     supabase.auth.getSession().then(async ({ data }) => {
       if (!mounted) return;
 
-      if (signupConfirmation && data.session) {
+      if (signupConfirmationPending && data.session) {
+        signupConfirmationPending = false;
         await signOutSafely();
         if (!mounted) return;
         setSession(null);
       } else {
+        signupConfirmationPending = false;
         setSession(data.session ?? null);
       }
       setLoading(false);
@@ -157,7 +177,8 @@ function MainApp() {
         if (event === "PASSWORD_RECOVERY") {
           setPasswordRecovery(true);
         }
-        if (event === "SIGNED_IN" && signupConfirmation) {
+        if (event === "SIGNED_IN" && signupConfirmationPending) {
+          signupConfirmationPending = false;
           void signOutSafely();
           setSession(null);
           setLoading(false);
@@ -186,9 +207,11 @@ function MainApp() {
         setProfile(null);
         setNeedsOnboarding(false);
         setProfileMissing(false);
+        setProfileChecked(false);
         setProfileLoading(false);
         return;
       }
+      setProfileChecked(false);
       setProfileLoading(true);
       const { data, error } = await supabase
         .from("profiles")
@@ -202,6 +225,7 @@ function MainApp() {
         setProfile(null);
         setNeedsOnboarding(false);
         setProfileMissing(true);
+        setProfileChecked(true);
         setProfileLoading(false);
         return;
       }
@@ -210,6 +234,7 @@ function MainApp() {
         setProfile(null);
         setNeedsOnboarding(true);
         setProfileMissing(false);
+        setProfileChecked(true);
         setProfileLoading(false);
         goToCompleteProfile();
         return;
@@ -220,6 +245,7 @@ function MainApp() {
       setProfile(fetchedProfile);
       setNeedsOnboarding(!profileComplete);
       setProfileMissing(false);
+      setProfileChecked(true);
 
       setProfileLoading(false);
       if (!profileComplete) {
@@ -242,8 +268,9 @@ function MainApp() {
     !loading &&
     !passwordRecovery &&
     !!session &&
+    profileChecked &&
     !profileMissing &&
-    (hasUsableProfile || !profileLoading) &&
+    hasUsableProfile &&
     !needsOnboarding &&
     useNewUi &&
     canAccessNewUi(profile?.role);
@@ -252,15 +279,16 @@ function MainApp() {
     !loading &&
     !passwordRecovery &&
     !!session &&
+    profileChecked &&
     !profileMissing &&
-    (hasUsableProfile || !profileLoading) &&
+    hasUsableProfile &&
     !needsOnboarding &&
     !willRenderNewUi;
 
   const showStartupLogo =
     loading ||
     (!!session &&
-      profileLoading &&
+      (!profileChecked || profileLoading) &&
       !hasUsableProfile &&
       !profileMissing &&
       !needsOnboarding &&
@@ -309,14 +337,19 @@ function MainApp() {
   }
 
   if (!loading && !passwordRecovery && !session) {
-    content = <Auth defaultMode={isSignupRoute ? "signup" : "signin"} />;
+    content = (
+      <Auth
+        defaultMode={isSignupRoute ? "signup" : "signin"}
+        onSignedIn={handleSignedIn}
+      />
+    );
   }
 
-  if (!loading && !passwordRecovery && session && profileMissing && !profileLoading) {
+  if (!loading && !passwordRecovery && session && profileChecked && profileMissing && !profileLoading) {
     content = <div style={{ padding: 16 }}>Oops Profile Not Found</div>;
   }
 
-  if (!loading && !passwordRecovery && session && !profileMissing && needsOnboarding) {
+  if (!loading && !passwordRecovery && session && profileChecked && !profileMissing && needsOnboarding) {
     content = (
       <ProfileOnboarding
         userId={session.user.id}
@@ -336,8 +369,9 @@ function MainApp() {
     !loading &&
     !passwordRecovery &&
     session &&
+    profileChecked &&
     !profileMissing &&
-    (hasUsableProfile || !profileLoading) &&
+    hasUsableProfile &&
     !needsOnboarding &&
     useNewUi &&
     canAccessNewUi(profile?.role)
@@ -349,8 +383,9 @@ function MainApp() {
     !loading &&
     !passwordRecovery &&
     session &&
+    profileChecked &&
     !profileMissing &&
-    (hasUsableProfile || !profileLoading) &&
+    hasUsableProfile &&
     !needsOnboarding &&
     !content
   ) {
