@@ -7590,7 +7590,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   onChange={(event) => setAssignVolunteerSearchInput(event.target.value)}
                 />
               </label>
-              <div className="modal-actions">
+              <div className="modal-actions assign-volunteer-actions">
                 <button
                   className="account-button"
                   type="button"
