@@ -1027,6 +1027,41 @@ html[data-theme="dark"] .weekday-today {
   opacity: 0.4;
 }
 
+.day-cell.shelter-closed {
+  border-color: rgba(95, 95, 95, 0.42);
+}
+
+.shelter-closed-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: rgba(86, 86, 86, 0.68);
+  color: #ffffff;
+  text-align: center;
+  pointer-events: auto;
+  backdrop-filter: grayscale(1);
+}
+
+.shelter-closed-overlay span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  max-width: calc(100% - 16px);
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: rgba(34, 34, 34, 0.78);
+  font-size: 0.88rem;
+  font-weight: 800;
+  line-height: 1.05;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
 .day-number {
   font-weight: 700;
   font-size: 1.15rem;
@@ -2743,6 +2778,28 @@ html[data-theme="dark"] .capacity-slot-extra {
   margin-top: 8px;
 }
 
+.recurring-form-actions {
+  align-items: center;
+  gap: 18px;
+}
+
+.modal-panel .modal-actions.recurring-form-actions > .account-button.recurring-save-button,
+.recurring-form-actions > .recurring-save-button {
+  background: rgba(80, 200, 120, 0.22);
+  border: 1px solid rgba(80, 200, 120, 0.56);
+  color: #207844;
+}
+
+.modal-panel .modal-actions.recurring-form-actions > .account-button.recurring-save-button:hover,
+.recurring-form-actions > .recurring-save-button:hover {
+  background: rgba(80, 200, 120, 0.34);
+  border-color: rgba(80, 200, 120, 0.78);
+}
+
+.recurring-form-actions > .nav-button span {
+  display: none;
+}
+
 .volunteer-phone-link {
   color: #ffb6c9;
   text-decoration: none;
@@ -2761,6 +2818,19 @@ html[data-theme="dark"] .capacity-slot-extra {
 @media (max-width: 720px) {
   .form-grid.form-grid-compact {
     grid-template-columns: 1fr;
+  }
+
+  .recurring-form-actions {
+    justify-content: space-between;
+    gap: 24px;
+  }
+
+  .modal-panel .modal-actions.recurring-form-actions > .nav-button,
+  .modal-panel .modal-actions.recurring-form-actions > .account-button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
   }
 }
 
@@ -3394,6 +3464,14 @@ html[data-theme="dark"] .capacity-slot-extra {
     border-radius: 8px;
     gap: 4px;
     overflow: hidden;
+  }
+
+  .calendar-grid.month-mode .shelter-closed-overlay span {
+    min-height: 28px;
+    max-width: calc(100% - 8px);
+    padding: 5px 7px;
+    font-size: 0.56rem;
+    letter-spacing: 0.04em;
   }
 
   .calendar-grid.month-mode .day-header-row {

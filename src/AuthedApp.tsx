@@ -115,6 +115,7 @@ import {
 const SHIFT_TEMPLATE_CACHE_KEY = "ckc:shift-templates";
 const SHIFT_INSTANCE_CACHE_PREFIX = "ckc:shift-instances";
 const WEEK_ASSIGNMENTS_CACHE_PREFIX = "weekAssignments:";
+const RECURRING_ASSIGNMENT_BLACKOUT_DATES = new Set(["2026-07-08", "2026-07-09"]);
 
 type CachedShiftInstance = {
   id: string;
@@ -555,6 +556,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [recurringDeleteId, setRecurringDeleteId] = useState<string | null>(null);
   const [recurringEditId, setRecurringEditId] = useState<string | null>(null);
   const [recurringDays, setRecurringDays] = useState<string[]>([]);
+  const recurringContinuationSyncedRef = useRef(false);
   const [showMyShifts, setShowMyShifts] = useState(false);
   const [showWeekGlance, setShowWeekGlance] = useState(false);
   const [weekGlanceMode, setWeekGlanceMode] = useState<"volunteers" | "appointments">("volunteers");
@@ -2011,6 +2013,232 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     [],
   );
 
+  const syncRecurringAssignmentsForward = useCallback(async () => {
+    if (!isAdminAccount || templates.length === 0) return;
+
+    const { data: recurringRows, error: recurringError } = await supabase
+      .from("recurring_assignments")
+      .select("id, volunteer_id, template_id, starts_on, ends_on, byday, repeat_interval_weeks");
+
+    if (recurringError || !recurringRows || recurringRows.length === 0) {
+      if (recurringError && import.meta.env.DEV) {
+        console.warn("Unable to load recurring assignments for continuation", recurringError.message);
+      }
+      return;
+    }
+
+    const recurringAssignments = recurringRows as unknown as RecurringAssignment[];
+    const volunteerIds = Array.from(
+      new Set(recurringAssignments.map((row) => row.volunteer_id).filter(Boolean)),
+    );
+    if (volunteerIds.length === 0) return;
+
+    const { data: profileRows, error: profilesError } = await supabase
+      .from("profiles")
+      .select("id, role")
+      .in("id", volunteerIds);
+
+    if (profilesError) {
+      if (import.meta.env.DEV) {
+        console.warn("Unable to load recurring volunteer roles", profilesError.message);
+      }
+      return;
+    }
+
+    const roleByVolunteerId = new Map(
+      ((profileRows ?? []) as Pick<VolunteerRow, "id" | "role">[]).map((row) => [row.id, row.role]),
+    );
+    const templateById = new Map(templates.map((template) => [template.id, template]));
+    const todayKey = getDateKey(today);
+    const horizonKey = getDateKey(addMonths(today, 12));
+    const targetByTemplate = new Map<string, Set<string>>();
+    const assignmentTargets: {
+      recurring: RecurringAssignment;
+      dayKey: string;
+      assignment_role: "lead" | "regular";
+    }[] = [];
+
+    recurringAssignments.forEach((recurring) => {
+      const template = templateById.get(recurring.template_id);
+      if (!template || template.is_active === false) return;
+      const startsOn = parseDateOnly(recurring.starts_on);
+      if (!startsOn) return;
+      const endsOn = recurring.ends_on ? parseDateOnly(recurring.ends_on) : parseDateOnly(horizonKey);
+      if (!endsOn) return;
+
+      const rangeStart = startsOn > today ? startsOn : parseDateOnly(todayKey);
+      const rangeEnd = endsOn < (parseDateOnly(horizonKey) ?? endsOn) ? endsOn : parseDateOnly(horizonKey);
+      if (!rangeStart || !rangeEnd || rangeStart > rangeEnd) return;
+
+      const allowedDays = recurring.byday ?? [];
+      const repeatIntervalWeeks = getRecurringIntervalWeeks(recurring);
+      const assignmentRole = roleByVolunteerId.get(recurring.volunteer_id) === "Lead" ? "lead" : "regular";
+      let cursor: Date | null = rangeStart;
+      while (cursor && cursor <= rangeEnd) {
+        const dayKey = getDateKey(cursor);
+        if (RECURRING_ASSIGNMENT_BLACKOUT_DATES.has(dayKey)) {
+          cursor = addDays(cursor, 1);
+          continue;
+        }
+        const dayCode = getDayCode(dayKey);
+        const matchesDay = allowedDays.length === 0 || (dayCode ? allowedDays.includes(dayCode) : false);
+        if (matchesDay && matchesRecurringWeek(dayKey, recurring.starts_on, repeatIntervalWeeks)) {
+          if (!targetByTemplate.has(recurring.template_id)) {
+            targetByTemplate.set(recurring.template_id, new Set());
+          }
+          targetByTemplate.get(recurring.template_id)?.add(dayKey);
+          assignmentTargets.push({ recurring, dayKey, assignment_role: assignmentRole });
+        }
+        cursor = addDays(cursor, 1);
+      }
+    });
+
+    if (assignmentTargets.length === 0) return;
+
+    const templateIds = Array.from(targetByTemplate.keys());
+    const startIso = new Date(`${todayKey}T00:00:00`).toISOString();
+    const horizonEndExclusive = addDays(parseDateOnly(horizonKey) ?? today, 1).toISOString();
+    const { data: existingInstances, error: instancesError } = await supabase
+      .from("shift_instances")
+      .select("id, template_id, shift_date, starts_at")
+      .in("template_id", templateIds)
+      .or(
+        `starts_at.gte.${startIso},starts_at.lt.${horizonEndExclusive},shift_date.gte.${todayKey},shift_date.lte.${horizonKey}`,
+      );
+
+    if (instancesError) {
+      if (import.meta.env.DEV) {
+        console.warn("Unable to load recurring shift instances", instancesError.message);
+      }
+      return;
+    }
+
+    type ExistingInstance = {
+      id: number;
+      template_id: string;
+      shift_date: string | null;
+      starts_at: string | null;
+    };
+    let instancesForRange = ((existingInstances ?? []) as ExistingInstance[]).filter((instance) => {
+      const dayKey = instance.shift_date ?? (instance.starts_at ? getDateKey(new Date(instance.starts_at)) : null);
+      return Boolean(dayKey && targetByTemplate.get(instance.template_id)?.has(dayKey));
+    });
+    const existingSlotKeys = new Set(
+      instancesForRange
+        .map((instance) => {
+          const dayKey = instance.shift_date ?? (instance.starts_at ? getDateKey(new Date(instance.starts_at)) : null);
+          return dayKey ? `${instance.template_id}:${dayKey}` : null;
+        })
+        .filter((slotKey): slotKey is string => Boolean(slotKey)),
+    );
+    const instanceRowsToInsert: {
+      template_id: string;
+      shift_date: string;
+      starts_at: string;
+      ends_at: string;
+    }[] = [];
+
+    targetByTemplate.forEach((dayKeys, templateId) => {
+      const template = templateById.get(templateId);
+      if (!template) return;
+      dayKeys.forEach((dayKey) => {
+        if (existingSlotKeys.has(`${templateId}:${dayKey}`)) return;
+        const day = parseDateOnly(dayKey);
+        if (!day) return;
+        const startsAt = toIsoForDateAndTime(day, resolveTemplateStartTime(template));
+        const endsAt = toIsoForDateAndTime(day, resolveTemplateEndTime(template));
+        if (!startsAt || !endsAt) return;
+        existingSlotKeys.add(`${templateId}:${dayKey}`);
+        instanceRowsToInsert.push({
+          template_id: templateId,
+          shift_date: dayKey,
+          starts_at: startsAt,
+          ends_at: endsAt,
+        });
+      });
+    });
+
+    if (instanceRowsToInsert.length > 0) {
+      const { data: insertedInstances, error: insertError } = await supabase
+        .from("shift_instances")
+        .upsert(instanceRowsToInsert, { onConflict: "template_id,shift_date" })
+        .select("id, template_id, shift_date, starts_at");
+
+      if (insertError) {
+        if (import.meta.env.DEV) {
+          console.warn("Unable to create recurring shift instances", insertError.message);
+        }
+        return;
+      }
+      instancesForRange = [...instancesForRange, ...((insertedInstances ?? []) as ExistingInstance[])];
+    }
+
+    const instanceIdBySlot = new Map<string, number>();
+    instancesForRange.forEach((instance) => {
+      const dayKey = instance.shift_date ?? (instance.starts_at ? getDateKey(new Date(instance.starts_at)) : null);
+      if (!dayKey) return;
+      instanceIdBySlot.set(`${instance.template_id}:${dayKey}`, instance.id);
+    });
+
+    const assignmentRowsBySlot = new Map<
+      string,
+      {
+        shift_instance_id: number;
+        volunteer_id: string;
+        status: "active";
+        assignment_role: "lead" | "regular";
+        dropped_at: null;
+        dropped_reason: null;
+      }
+    >();
+    assignmentTargets.forEach((target) => {
+      const shiftInstanceId = instanceIdBySlot.get(`${target.recurring.template_id}:${target.dayKey}`);
+      if (!shiftInstanceId) return;
+      assignmentRowsBySlot.set(`${shiftInstanceId}:${target.recurring.volunteer_id}`, {
+        shift_instance_id: shiftInstanceId,
+        volunteer_id: target.recurring.volunteer_id,
+        status: "active",
+        assignment_role: target.assignment_role,
+        dropped_at: null,
+        dropped_reason: null,
+      });
+    });
+    const assignmentRows = Array.from(assignmentRowsBySlot.values());
+
+    for (let index = 0; index < assignmentRows.length; index += 500) {
+      const chunk = assignmentRows.slice(index, index + 500);
+      const { error: assignmentError } = await supabase
+        .from("shift_assignments")
+        .upsert(chunk, { onConflict: "shift_instance_id,volunteer_id" });
+      if (assignmentError) {
+        if (import.meta.env.DEV) {
+          console.warn("Unable to continue recurring shift assignments", assignmentError.message);
+        }
+        return;
+      }
+    }
+
+    setShiftInstancesRefreshToken((value) => value + 1);
+    fetchMyShifts();
+    fetchWeekAssignments();
+    fetchPersonalAssignments();
+  }, [
+    isAdminAccount,
+    templates,
+    today,
+    getRecurringIntervalWeeks,
+    matchesRecurringWeek,
+    fetchMyShifts,
+    fetchWeekAssignments,
+    fetchPersonalAssignments,
+  ]);
+
+  useEffect(() => {
+    if (recurringContinuationSyncedRef.current || !isAdminAccount || templates.length === 0) return;
+    recurringContinuationSyncedRef.current = true;
+    void syncRecurringAssignmentsForward();
+  }, [isAdminAccount, templates.length, syncRecurringAssignmentsForward]);
+
   const handleRecurringSave = useCallback(async () => {
     if (!isAdminAccount) {
       setRecurringMessage("Only admins can add or edit recurring shifts.");
@@ -2060,6 +2288,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const endCursor = parseDateOnly(rangeEnd);
     while (cursor && endCursor && cursor.getTime() <= endCursor.getTime()) {
       const dayKey = getDateKey(cursor);
+      if (RECURRING_ASSIGNMENT_BLACKOUT_DATES.has(dayKey)) {
+        cursor = addDays(cursor, 1);
+        continue;
+      }
       const dayCode = getDayCode(dayKey);
       const matchesDay = allowedDays.length === 0 || (dayCode ? allowedDays.includes(dayCode) : false);
       if (
@@ -6165,6 +6397,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               );
             }
             const isPastDay = startOfDay(cell.date).getTime() < todayStartMs;
+            const isShelterClosedDay = RECURRING_ASSIGNMENT_BLACKOUT_DATES.has(dateKey);
             const isCollapsed =
               isMobile && calendarRangeMode !== "month" && collapsedDayKeys.has(dateKey);
             const weekdayLabel = weekdayLabels[(cell.date.getDay() + 6) % 7];
@@ -6179,6 +6412,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   calendarRangeMode === "month" ? "month-cell-clickable" : ""
                 } ${
                   isOutsideMonth ? "outside" : ""
+                } ${
+                  isShelterClosedDay ? "shelter-closed" : ""
                 }`}
                 data-date={dateKey}
                 id={`day-${dateKey}`}
@@ -6296,6 +6531,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       {sortedDayShifts.map((shift) => renderInteractiveShiftBlock(shift))}
                     </div>
                   )
+                ) : null}
+                {isShelterClosedDay ? (
+                  <div className="shelter-closed-overlay" aria-label="Shelter Closed">
+                    <span>Shelter Closed</span>
+                  </div>
                 ) : null}
               </div>
             );
@@ -8395,10 +8635,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       {recurringMessage ? (
                         <div className="error-banner">{recurringMessage}</div>
                       ) : null}
-                      <div className="modal-actions">
+                      <div className="modal-actions recurring-form-actions">
                         <button
                           className="nav-button"
                           type="button"
+                          aria-label="Cancel recurring shift"
                           onClick={() => {
                             setShowAddRecurring(false);
                             setRecurringEditId(null);
@@ -8411,16 +8652,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           <span>Cancel</span>
                         </button>
                         <button
-                          className="account-button"
+                          className="account-button recurring-save-button"
                           type="button"
                           onClick={handleRecurringSave}
                           disabled={recurringSaving}
+                          aria-label={
+                            recurringSaving
+                              ? "Saving recurring shift"
+                              : recurringEditId
+                                ? "Save recurring shift changes"
+                                : "Save recurring shift"
+                          }
                         >
-                          {recurringSaving
-                            ? "Saving..."
-                            : recurringEditId
-                              ? "Save changes"
-                              : "Save recurring"}
+                          <Check size={20} strokeWidth={2.8} aria-hidden="true" />
                         </button>
                       </div>
                     </div>
