@@ -2229,7 +2229,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const chunk = assignmentRows.slice(index, index + 500);
       const { error: assignmentError } = await supabase
         .from("shift_assignments")
-        .upsert(chunk, { onConflict: "shift_instance_id,volunteer_id" });
+        .upsert(chunk, { onConflict: "shift_instance_id,volunteer_id", ignoreDuplicates: true });
       if (assignmentError) {
         if (import.meta.env.DEV) {
           console.warn("Unable to continue recurring shift assignments", assignmentError.message);
@@ -2508,10 +2508,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const assignmentRole = selectedVolunteer.role === "Lead" ? "lead" : "regular";
       let assignedCount = 0;
       let skippedFullCount = 0;
+      let skippedExistingCount = 0;
       const assignmentErrors: string[] = [];
 
       for (const instance of filteredInstances) {
-        const { error: assignmentError } = await supabase
+        const { data: savedAssignment, error: assignmentError } = await supabase
           .from("shift_assignments")
           .upsert(
             {
@@ -2522,13 +2523,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               dropped_at: null,
               dropped_reason: null,
             },
-            { onConflict: "shift_instance_id,volunteer_id" },
+            { onConflict: "shift_instance_id,volunteer_id", ignoreDuplicates: true },
           )
           .select("id")
-          .single();
+          .maybeSingle();
 
         if (!assignmentError) {
-          assignedCount += 1;
+          if (savedAssignment?.id) {
+            assignedCount += 1;
+          } else {
+            skippedExistingCount += 1;
+          }
           continue;
         }
 
@@ -2556,15 +2561,21 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         setRecurringMessage(
           `Recurring shifts saved, but some assignments failed: ${assignmentErrors.join(" | ")}`,
         );
-      } else if (skippedFullCount > 0) {
+      } else if (skippedFullCount > 0 || skippedExistingCount > 0) {
         const assignedLabel =
           assignedCount > 0
             ? `${assignedCount} shift${assignedCount === 1 ? "" : "s"} added`
             : "no shifts added yet";
+        const skippedParts = [
+          skippedFullCount > 0
+            ? `${skippedFullCount} full shift${skippedFullCount === 1 ? " was" : "s were"} skipped`
+            : null,
+          skippedExistingCount > 0
+            ? `${skippedExistingCount} existing shift${skippedExistingCount === 1 ? " was" : "s were"} left unchanged`
+            : null,
+        ].filter((value): value is string => Boolean(value));
         setRecurringMessage(
-          `Recurring shifts saved. ${assignedLabel}; ${skippedFullCount} full shift${
-            skippedFullCount === 1 ? " was" : "s were"
-          } skipped.`,
+          `Recurring shifts saved. ${assignedLabel}; ${skippedParts.join("; ")}.`,
         );
       }
     } else {

@@ -82,6 +82,7 @@ const LEAD_NEEDED_NOTIFICATION_SELECT = `
 `;
 
 const SHADOW_FOLLOW_UP_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const ASSIGNMENT_NOTIFICATION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type FetchNotificationsInput = {
   sessionUserId: string;
@@ -149,7 +150,7 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
       if (item.status !== "active") return false;
       const createdAt = item.created_at ? Date.parse(item.created_at) : NaN;
       if (Number.isNaN(createdAt)) return false;
-      return Date.now() - createdAt <= 5 * 60 * 1000;
+      return Date.now() - createdAt <= ASSIGNMENT_NOTIFICATION_WINDOW_MS;
     })
     .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
 
