@@ -623,6 +623,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [shiftInstancesRefreshToken, setShiftInstancesRefreshToken] = useState(0);
   const scrollYRef = useRef(0);
   const liveRefreshInFlightRef = useRef(false);
+  const weekAssignmentsFetchSeqRef = useRef(0);
+  const weekAssignmentsHydratedRef = useRef(false);
+  const weekAppointmentsFetchSeqRef = useRef(0);
+  const weekAppointmentsHydratedRef = useRef(false);
   const pushSubscriptionSyncInFlightRef = useRef(false);
   const initialTodayScrollDoneRef = useRef(false);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -1338,8 +1342,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   // Shift assignments are shown inline per shift; no modal fetch needed.
 
   const fetchWeekAssignments = useCallback(async () => {
+    const fetchSeq = (weekAssignmentsFetchSeqRef.current += 1);
     if (instanceShifts.length === 0) {
-      setWeekAssignments({});
+      if (!weekAssignmentsHydratedRef.current) {
+        setWeekAssignments({});
+      }
       return;
     }
 
@@ -1362,7 +1369,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const sortedTemplateIds = Array.from(visibleTemplateIds).sort();
     const assignmentCacheKey = `weekAssignments:${session.user.id}:${rangeStartDate}:${rangeEndDate}:${sortedTemplateIds.join(",")}`;
 
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && !weekAssignmentsHydratedRef.current) {
       const cachedValue = window.localStorage.getItem(assignmentCacheKey);
       if (cachedValue) {
         try {
@@ -1374,7 +1381,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               cachedMap[instanceId] = dedupeShiftAssignmentsByVolunteer(cachedAssignments);
             }
           });
-          if (Object.keys(cachedMap).length > 0) {
+          if (Object.keys(cachedMap).length > 0 && fetchSeq === weekAssignmentsFetchSeqRef.current) {
             setWeekAssignments(cachedMap);
           }
         } catch {
@@ -1393,7 +1400,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       })
       .filter((id): id is number => Boolean(id) && id > 0);
     if (instanceIds.length === 0) {
-      setWeekAssignments({});
+      if (fetchSeq === weekAssignmentsFetchSeqRef.current && !weekAssignmentsHydratedRef.current) {
+        setWeekAssignments({});
+      }
       return;
     }
 
@@ -1521,8 +1530,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             }
           });
       });
+      if (fetchSeq !== weekAssignmentsFetchSeqRef.current) return;
       setShadowShiftNumbersByAssignmentId(shadowNumbers);
     } else {
+      if (fetchSeq !== weekAssignmentsFetchSeqRef.current) return;
       setShadowShiftNumbersByAssignmentId({});
     }
 
@@ -1605,6 +1616,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ]),
     );
 
+    if (fetchSeq !== weekAssignmentsFetchSeqRef.current) return;
+    weekAssignmentsHydratedRef.current = true;
     setWeekAssignments(dedupedMap);
     if (typeof window !== "undefined") {
       writeStoredJson(assignmentCacheKey, dedupedCacheMap, [
@@ -1615,15 +1628,21 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [instanceShifts, session.user.id, visibleRealInstanceIdsBySlot]);
 
   const fetchWeekAppointments = useCallback(async () => {
+    const fetchSeq = (weekAppointmentsFetchSeqRef.current += 1);
     if (instanceShifts.length === 0) {
-      setAppointmentsByShift({});
+      if (!weekAppointmentsHydratedRef.current) {
+        setAppointmentsByShift({});
+      }
       setAppointmentsLoading(false);
       return;
     }
 
-    setAppointmentsLoading(true);
+    if (!weekAppointmentsHydratedRef.current) {
+      setAppointmentsLoading(true);
+    }
     const instanceIds = instanceShifts.map((shift) => shift.instanceId).filter((id) => id > 0);
     const { data, error } = await fetchWeekAppointmentsByInstanceIds(instanceIds);
+    if (fetchSeq !== weekAppointmentsFetchSeqRef.current) return;
 
     if (error) {
       setAppointmentsMessage(error);
@@ -1631,6 +1650,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
+    weekAppointmentsHydratedRef.current = true;
     setAppointmentsByShift(data);
     setAppointmentsLoading(false);
   }, [instanceShifts]);
@@ -2732,10 +2752,28 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "shift_assignments" },
-        () => {
-          fetchWeekAssignments();
-          fetchMyShifts();
-          fetchPersonalAssignments();
+        (payload) => {
+          const changedRow = (payload.new ?? payload.old ?? null) as {
+            id?: string | null;
+            status?: string | null;
+            volunteer_id?: string | null;
+          } | null;
+          if (changedRow?.id && (payload.eventType === "DELETE" || changedRow.status === "dropped")) {
+            setWeekAssignments((previous) => {
+              let didChange = false;
+              const next: Record<number, ShiftAssignmentDetail[]> = {};
+              Object.entries(previous).forEach(([instanceId, assignments]) => {
+                const filtered = assignments.filter((assignment) => assignment.id !== changedRow.id);
+                if (filtered.length !== assignments.length) didChange = true;
+                if (filtered.length > 0) next[Number(instanceId)] = filtered;
+              });
+              return didChange ? next : previous;
+            });
+            setAssignments((previous) => previous.filter((assignment) => assignment.id !== changedRow.id));
+          }
+          void fetchWeekAssignments();
+          void fetchMyShifts();
+          void fetchPersonalAssignments();
         },
       )
       .subscribe();
@@ -2834,6 +2872,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         },
         () => {
           void fetchNotificationsRef.current();
+          void fetchWeekAppointments();
         },
       )
       .on(
@@ -2852,7 +2891,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [session.user.id, isAdminAccount]);
+  }, [session.user.id, isAdminAccount, fetchWeekAppointments]);
 
   useEffect(() => {
     setDismissedNotificationTokensLoaded(false);
@@ -4542,21 +4581,24 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       const completedAt = completed ? new Date().toISOString() : null;
       setAppointmentsByShift((previous) => {
-        const next = { ...previous };
-        Object.entries(next).forEach(([instanceId, appointments]) => {
-          next[Number(instanceId)] = appointments.map((item) =>
+        const instanceId = appointment.shift_instance_id;
+        const currentAppointments = previous[instanceId] ?? [];
+        if (currentAppointments.length === 0) return previous;
+        const updatedAt = new Date().toISOString();
+        return {
+          ...previous,
+          [instanceId]: currentAppointments.map((item) =>
             item.id === appointment.id
               ? {
                   ...item,
                   completed_at: completedAt,
                   completed_by: completed ? session.user.id : null,
                   completion_note: note.trim() || null,
-                  updated_at: completedAt ?? new Date().toISOString(),
+                  updated_at: updatedAt,
                 }
               : item,
-          );
-        });
-        return next;
+          ),
+        };
       });
       setAppointmentNoteDrafts((previous) => ({
         ...previous,
