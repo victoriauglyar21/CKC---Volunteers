@@ -116,7 +116,7 @@ export async function saveAppointment(input: SaveAppointmentInput) {
       .from("shift_appointments")
       .update(payload)
       .eq("id", input.id)
-      .select(APPOINTMENT_SELECT_BASE)
+      .select(APPOINTMENT_SELECT_WITH_CHECKLIST)
       .maybeSingle();
     return { data: data ? normalizeAppointment(data as Partial<ShiftAppointment>) : null, error: error?.message ?? null };
   }
@@ -127,7 +127,7 @@ export async function saveAppointment(input: SaveAppointmentInput) {
       ...payload,
       created_by: input.userId,
     })
-    .select(APPOINTMENT_SELECT_BASE)
+    .select(APPOINTMENT_SELECT_WITH_CHECKLIST)
     .maybeSingle();
   return { data: data ? normalizeAppointment(data as Partial<ShiftAppointment>) : null, error: error?.message ?? null };
 }

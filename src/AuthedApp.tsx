@@ -2440,6 +2440,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       const oldRepeatIntervalWeeks = getRecurringIntervalWeeks(targetRecurring);
       const oldAllowedDays = targetRecurring.byday ?? [];
+      const nextInstanceIds = new Set(filteredInstances.map((item) => item.id));
       const oldInstanceIds = (oldInstances ?? [])
         .filter((item) => {
           const dayCode = getDayCode(item.shift_date ?? item.starts_at ?? undefined);
@@ -2452,11 +2453,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             oldRepeatIntervalWeeks,
           );
         })
+        .filter((item) => !nextInstanceIds.has(item.id))
         .map((item) => item.id);
       if (oldInstanceIds.length > 0) {
         const { error: oldAssignmentDeleteError } = await supabase
           .from("shift_assignments")
-          .delete()
+          .update({
+            status: "dropped",
+            dropped_at: new Date().toISOString(),
+            dropped_reason: "Recurring shift changed",
+          })
           .eq("volunteer_id", selectedVolunteer.id)
           .in("shift_instance_id", oldInstanceIds);
         if (oldAssignmentDeleteError) {
@@ -2662,7 +2668,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       if (instanceIds.length > 0) {
         const { error: assignmentError } = await supabase
           .from("shift_assignments")
-          .delete()
+          .update({
+            status: "dropped",
+            dropped_at: new Date().toISOString(),
+            dropped_reason: "Recurring shift deleted",
+          })
           .eq("volunteer_id", selectedVolunteer.id)
           .in("shift_instance_id", instanceIds);
 
@@ -3751,6 +3761,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           ) : (
                             <p className="shift-appointment-description">No details added.</p>
                           )}
+                          {appointment.completion_note ? (
+                            <p className="shift-appointment-description">
+                              Completion note: {appointment.completion_note}
+                            </p>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>
@@ -4006,6 +4021,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         ) : (
                           <p className="shift-appointment-description">No details added.</p>
                         )}
+                        {appointment.completion_note ? (
+                          <p className="shift-appointment-description">
+                            Completion note: {appointment.completion_note}
+                          </p>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -4043,19 +4063,41 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const assignmentRole = profile?.role === "Lead" ? "lead" : "regular";
     const nextStatus = takeShiftMode === "join" ? "active" : "pending";
 
+    const { data: previousAssignments, error: previousAssignmentError } = await supabase
+      .from("shift_assignments")
+      .select("id, status")
+      .eq("shift_instance_id", activeShiftInstanceId)
+      .eq("volunteer_id", session.user.id)
+      .limit(1);
+
+    if (previousAssignmentError) {
+      setTakeShiftMessage(previousAssignmentError.message);
+      setTakeShiftLoading(false);
+      return;
+    }
+
+    const previousAssignment = previousAssignments?.[0] ?? null;
+    if (previousAssignment?.status === "dropped") {
+      setTakeShiftMessage("This shift was previously dropped and will stay removed.");
+      setTakeShiftLoading(false);
+      return;
+    }
+    if (previousAssignment) {
+      setTakeShiftMessage("You are already on this shift!");
+      setTakeShiftLoading(false);
+      return;
+    }
+
     const { data: savedAssignments, error } = await supabase
       .from("shift_assignments")
-      .upsert(
-        {
-          shift_instance_id: activeShiftInstanceId,
-          volunteer_id: session.user.id,
-          status: nextStatus,
-          assignment_role: assignmentRole,
-          dropped_at: null,
-          dropped_reason: null,
-        },
-        { onConflict: "shift_instance_id,volunteer_id" },
-      )
+      .insert({
+        shift_instance_id: activeShiftInstanceId,
+        volunteer_id: session.user.id,
+        status: nextStatus,
+        assignment_role: assignmentRole,
+        dropped_at: null,
+        dropped_reason: null,
+      })
       .select("id");
 
     if (error) {
@@ -4698,12 +4740,34 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (isShadowAssignment) {
       assignmentPayload.notes = notes ?? null;
     }
+    const { data: previousAssignments, error: previousAssignmentError } = await supabase
+      .from("shift_assignments")
+      .select("id, status")
+      .eq("shift_instance_id", assignShiftInstanceId)
+      .eq("volunteer_id", volunteerId)
+      .limit(1);
+
+    if (previousAssignmentError) {
+      setAssignMessage(previousAssignmentError.message);
+      setAssignLoading(false);
+      return;
+    }
+
+    const previousAssignment = previousAssignments?.[0] ?? null;
+    if (previousAssignment?.status === "dropped") {
+      setAssignMessage("This volunteer was previously removed from this shift, so it will stay removed.");
+      setAssignLoading(false);
+      return;
+    }
+    if (previousAssignment) {
+      setAssignMessage("This volunteer is already on this shift.");
+      setAssignLoading(false);
+      return;
+    }
+
     const { data: savedAssignments, error } = await supabase
       .from("shift_assignments")
-      .upsert(
-        assignmentPayload,
-        { onConflict: "shift_instance_id,volunteer_id" },
-      )
+      .insert(assignmentPayload)
       .select("id, created_at, notes");
 
     if (error) {
@@ -5454,6 +5518,64 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     return hour < 11 ? ("morning" as const) : ("evening" as const);
   };
 
+  const getShiftScrollPreference = (shiftTitle: string) =>
+    /morning/i.test(shiftTitle)
+      ? ("morning" as const)
+      : /evening/i.test(shiftTitle)
+        ? ("evening" as const)
+        : getTodayShiftScrollPreference();
+
+  const getClosestUpcomingShiftTarget = () => {
+    const now = new Date();
+    const visibleUpcomingShift = instanceShifts
+      .filter((shift) => shift.start.getTime() >= now.getTime())
+      .sort((left, right) => {
+        const startDiff = left.start.getTime() - right.start.getTime();
+        if (startDiff !== 0) return startDiff;
+        return left.title.localeCompare(right.title);
+      })[0];
+
+    if (visibleUpcomingShift) {
+      return {
+        dateKey: getDateKey(startOfDay(visibleUpcomingShift.start)),
+        preference: getShiftScrollPreference(visibleUpcomingShift.title),
+      };
+    }
+
+    const activeTemplates = templates.filter((template) => template.is_active !== false);
+    let bestTarget: { startsAt: Date; title: string } | null = null;
+    for (let dayOffset = 0; dayOffset <= 366; dayOffset += 1) {
+      const day = addDays(startOfDay(now), dayOffset);
+      activeTemplates.forEach((template) => {
+        const startsAtIso = toIsoForDateAndTime(day, resolveTemplateStartTime(template));
+        if (!startsAtIso) return;
+        const startsAt = new Date(startsAtIso);
+        if (Number.isNaN(startsAt.getTime()) || startsAt.getTime() < now.getTime()) return;
+        if (
+          !bestTarget ||
+          startsAt.getTime() < bestTarget.startsAt.getTime() ||
+          (startsAt.getTime() === bestTarget.startsAt.getTime() &&
+            template.title.localeCompare(bestTarget.title) < 0)
+        ) {
+          bestTarget = { startsAt, title: template.title };
+        }
+      });
+      if (bestTarget && getDateKey(bestTarget.startsAt) === getDateKey(day)) break;
+    }
+
+    if (!bestTarget) {
+      return {
+        dateKey: getDateKey(startOfDay(now)),
+        preference: getTodayShiftScrollPreference(),
+      };
+    }
+
+    return {
+      dateKey: getDateKey(startOfDay(bestTarget.startsAt)),
+      preference: getShiftScrollPreference(bestTarget.title),
+    };
+  };
+
   const scrollDayCardToShiftSection = (
     dayCard: HTMLDivElement,
     preference: "morning" | "evening",
@@ -5558,22 +5680,36 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   useEffect(() => {
     if (initialTodayScrollDoneRef.current) return;
     if (loading) return;
-    if (calendarRangeMode !== "week" || weekOffset !== 0) return;
+    if (templates.length > 0 && instanceShifts.length === 0) return;
+    if (calendarRangeMode !== "week") {
+      setCalendarRangeMode("week");
+      return;
+    }
+
+    const target = getClosestUpcomingShiftTarget();
+    const parsedTargetDate = parseDateOnly(target.dateKey);
+    if (!parsedTargetDate) return;
+    const targetWeekStart = getWeekStart(startOfDay(parsedTargetDate), true);
+    const currentWeekStart = getWeekStart(startOfDay(today), true);
+    const rawOffset = Math.floor(diffInDays(currentWeekStart, targetWeekStart) / 7);
+    const clampedOffset = Math.min(maxWeekOffset, Math.max(0, rawOffset));
+    if (weekOffset !== clampedOffset) {
+      setWeekOffset(clampedOffset);
+      return;
+    }
 
     initialTodayScrollDoneRef.current = true;
-    const targetKey = getDateKey(startOfDay(new Date()));
-    const shiftSectionPreference = getTodayShiftScrollPreference();
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        scrollToDateKey(targetKey, 0, { focusShiftSection: shiftSectionPreference });
+        scrollToDateKey(target.dateKey, 0, { focusShiftSection: target.preference });
         window.setTimeout(
-          () => scrollToDateKey(targetKey, 0, { focusShiftSection: shiftSectionPreference }),
+          () => scrollToDateKey(target.dateKey, 0, { focusShiftSection: target.preference }),
           200,
         );
       });
     });
-  }, [calendarRangeMode, weekOffset, loading]);
+  }, [calendarRangeMode, weekOffset, loading, instanceShifts, templates, today, maxWeekOffset]);
 
   const handleTodayClick = () => {
     const now = startOfDay(new Date());
@@ -7247,16 +7383,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       {appointmentChecklistSavingId === appointment.id ? (
                         <p className="appointment-save-status">Saving...</p>
                       ) : null}
-                      {!canUpdateAppointmentChecklist && (appointment.completed_at || appointment.completion_note) ? (
-                          <div className="appointment-checklist">
-                            {appointment.completed_at ? (
-                              <p className="appointment-save-status">Appointment completed</p>
-                            ) : null}
-                            {appointment.completion_note ? (
-                              <p className="appointment-description">{appointment.completion_note}</p>
-                            ) : null}
-                          </div>
-                        ) : null}
+                      {appointment.completed_at || appointment.completion_note ? (
+                        <div className="appointment-checklist">
+                          {appointment.completed_at ? (
+                            <p className="appointment-save-status">Appointment completed</p>
+                          ) : null}
+                          {appointment.completion_note ? (
+                            <p className="appointment-description">
+                              Completion note: {appointment.completion_note}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {appointment.description ? (
                         <p className="appointment-description">{appointment.description}</p>
                       ) : null}
