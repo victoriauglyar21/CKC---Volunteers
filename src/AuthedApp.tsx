@@ -10,7 +10,7 @@ import {
   type TouchEvent as ReactTouchEvent,
 } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Check, Search, Trash2, X } from "lucide-react";
+import { Check, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { signOutSafely, supabase } from "./supabaseClient";
 import {
   APPOINTMENT_COLOR_ADOPTION,
@@ -59,6 +59,8 @@ import type {
   ShiftInstance,
   ShiftInstanceRow,
   ShiftTemplate,
+  VolunteerHourBaseline,
+  VolunteerHoursSummary,
   VolunteerRow,
 } from "./authedApp/types";
 import {
@@ -85,6 +87,7 @@ import {
   formatTemplateTime,
   formatTimeOnly,
   formatTimeRangeFromInstance,
+  formatVolunteerHours,
   getAppointmentKindFromColor,
   getDateKey,
   getDayCode,
@@ -116,6 +119,7 @@ const SHIFT_TEMPLATE_CACHE_KEY = "ckc:shift-templates";
 const SHIFT_INSTANCE_CACHE_PREFIX = "ckc:shift-instances";
 const WEEK_ASSIGNMENTS_CACHE_PREFIX = "weekAssignments:";
 const RECURRING_ASSIGNMENT_BLACKOUT_DATES = new Set(["2026-07-08", "2026-07-09"]);
+const VOLUNTEER_HOURS_AUTOMATIC_START_AT = "2026-07-17T00:00:00-06:00";
 
 type CachedShiftInstance = {
   id: string;
@@ -455,6 +459,125 @@ function dedupeShiftAssignmentsByVolunteer(assignments: ShiftAssignmentDetail[])
   );
 }
 
+type VolunteerHoursShiftInstance = {
+  id?: number | null;
+  shift_date: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  template?: {
+    id?: string | null;
+    title?: string | null;
+    start_time?: string | null;
+    end_time?: string | null;
+  } | null;
+};
+
+type VolunteerHoursAssignmentRow = {
+  shift_instance: VolunteerHoursShiftInstance | VolunteerHoursShiftInstance[] | null;
+};
+
+function isMissingVolunteerHourBaselinesTableError(error: { code?: string; message?: string } | null | undefined) {
+  const message = error?.message?.toLowerCase() ?? "";
+  return (
+    error?.code === "PGRST205" ||
+    error?.code === "42P01" ||
+    (message.includes("volunteer_hour_baselines") &&
+      (message.includes("schema cache") || message.includes("does not exist")))
+  );
+}
+
+function getCompletedShiftEndMs(shiftInstance: VolunteerHoursShiftInstance) {
+  if (shiftInstance.ends_at) {
+    const endMs = Date.parse(shiftInstance.ends_at);
+    return Number.isFinite(endMs) ? endMs : null;
+  }
+  if (!shiftInstance.shift_date || !shiftInstance.template) return null;
+  const day = parseDateOnly(shiftInstance.shift_date);
+  if (!day) return null;
+  const template = {
+    id: shiftInstance.template.id ?? "",
+    title: shiftInstance.template.title ?? "Shift",
+    start_time: shiftInstance.template.start_time ?? "09:00",
+    end_time: shiftInstance.template.end_time ?? "11:00",
+    rrule: null,
+    capacity: null,
+    timezone: null,
+    description: null,
+    is_active: true,
+  } satisfies ShiftTemplate;
+  const endIso = toIsoForDateAndTime(day, resolveTemplateEndTime(template));
+  if (!endIso) return null;
+  const endMs = Date.parse(endIso);
+  return Number.isFinite(endMs) ? endMs : null;
+}
+
+function calculateVolunteerHoursSummary(
+  rows: VolunteerHoursAssignmentRow[],
+  baselineHours: number,
+  automaticStartAt: string,
+): VolunteerHoursSummary {
+  const completedSlots = new Set<string>();
+  const automaticStartMs = Date.parse(automaticStartAt);
+  const normalizedAutomaticStartMs = Number.isFinite(automaticStartMs)
+    ? automaticStartMs
+    : Number.NEGATIVE_INFINITY;
+
+  const addCompletedSlot = ({
+    templateId,
+    instanceId,
+    dayKey,
+  }: {
+    templateId?: string | null;
+    instanceId?: number | null;
+    dayKey: string | null;
+  }) => {
+    if (!dayKey) return;
+    const day = parseDateOnly(dayKey);
+    if (!day) return;
+    completedSlots.add(templateId ? `template:${templateId}:${dayKey}` : `instance:${instanceId ?? dayKey}`);
+  };
+
+  rows.forEach((row) => {
+    const shiftInstance = Array.isArray(row.shift_instance)
+      ? (row.shift_instance[0] ?? null)
+      : row.shift_instance;
+    if (!shiftInstance) return;
+    const endMs = getCompletedShiftEndMs(shiftInstance);
+    if (endMs == null || endMs > Date.now()) return;
+    if (Number.isFinite(normalizedAutomaticStartMs) && endMs < normalizedAutomaticStartMs) return;
+    const dayKey =
+      shiftInstance.shift_date ??
+      (shiftInstance.starts_at ? getDateKey(new Date(shiftInstance.starts_at)) : null);
+    addCompletedSlot({
+      templateId: shiftInstance.template?.id ?? null,
+      instanceId: shiftInstance.id ?? null,
+      dayKey,
+    });
+  });
+
+  const completedShiftCount = completedSlots.size;
+  const automaticHours = completedShiftCount * 2;
+  const normalizedBaselineHours = Number.isFinite(baselineHours) ? baselineHours : 0;
+
+  return {
+    totalHours: normalizedBaselineHours + automaticHours,
+    totalShiftCount: (normalizedBaselineHours + automaticHours) / 2,
+    baselineHours: normalizedBaselineHours,
+    automaticHours,
+    completedShiftCount,
+    automaticStartAt,
+  };
+}
+
+function formatVolunteerShiftCount(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const rounded = Math.round(value * 10) / 10;
+  return rounded.toLocaleString("en-US", {
+    minimumFractionDigits: Number.isInteger(rounded) ? 0 : 1,
+    maximumFractionDigits: 1,
+  });
+}
+
 export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [today, setToday] = useState(() => startOfDay(new Date()));
   const [templates, setTemplates] = useState<ShiftTemplate[]>(() => readCachedTemplates());
@@ -532,6 +655,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [volunteersLoading, setVolunteersLoading] = useState(false);
   const [volunteersMessage, setVolunteersMessage] = useState("");
   const [volunteers, setVolunteers] = useState<VolunteerRow[]>([]);
+  const [myHoursSummary, setMyHoursSummary] = useState<VolunteerHoursSummary | null>(null);
+  const [myHoursLoading, setMyHoursLoading] = useState(false);
+  const [myHoursMessage, setMyHoursMessage] = useState("");
   const [volunteerSearchInput, setVolunteerSearchInput] = useState("");
   const [volunteerRoleFilter, setVolunteerRoleFilter] = useState<
     "All" | "Admin" | "Lead" | "Regular Volunteer"
@@ -542,6 +668,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [assignVolunteerSearchInput, setAssignVolunteerSearchInput] = useState("");
   const [volunteerRecurringStatusById, setVolunteerRecurringStatusById] = useState<Record<string, boolean>>({});
   const [selectedVolunteer, setSelectedVolunteer] = useState<VolunteerRow | null>(null);
+  const [selectedVolunteerHours, setSelectedVolunteerHours] = useState<VolunteerHoursSummary | null>(null);
+  const [selectedVolunteerHoursLoading, setSelectedVolunteerHoursLoading] = useState(false);
+  const [selectedVolunteerHoursMessage, setSelectedVolunteerHoursMessage] = useState("");
+  const [isEditingVolunteerBaselineHours, setIsEditingVolunteerBaselineHours] = useState(false);
+  const [volunteerBaselineHoursDraft, setVolunteerBaselineHoursDraft] = useState("");
+  const [volunteerBaselineHoursSaving, setVolunteerBaselineHoursSaving] = useState(false);
   const [volunteerRecurring, setVolunteerRecurring] = useState<RecurringAssignment[]>([]);
   const [recurringLoading, setRecurringLoading] = useState(false);
   const [recurringMessage, setRecurringMessage] = useState("");
@@ -1804,6 +1936,154 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setVolunteersLoading(false);
   }, []);
 
+  const fetchVolunteerHoursSummary = useCallback(async (volunteerId: string) => {
+    const [assignmentsResult, baselineResult] = await Promise.all([
+      supabase
+        .from("shift_assignments")
+        .select(
+          `
+          shift_instance:shift_instances (
+            id,
+            shift_date,
+            starts_at,
+            ends_at,
+            template:shift_templates (
+              id,
+              title
+            )
+          )
+        `,
+        )
+        .eq("volunteer_id", volunteerId)
+        .eq("status", "active"),
+      supabase
+        .from("volunteer_hour_baselines")
+        .select("volunteer_id, baseline_hours, automatic_start_at, updated_at, updated_by")
+        .eq("volunteer_id", volunteerId)
+        .maybeSingle(),
+    ]);
+
+    if (assignmentsResult.error || !assignmentsResult.data) {
+      throw new Error(assignmentsResult.error?.message ?? "Unable to load volunteer hours.");
+    }
+    if (
+      baselineResult.error &&
+      !isMissingVolunteerHourBaselinesTableError(baselineResult.error)
+    ) {
+      throw new Error(baselineResult.error.message);
+    }
+
+    const baseline = baselineResult.error
+      ? null
+      : (baselineResult.data as VolunteerHourBaseline | null);
+    const baselineHours = Number(baseline?.baseline_hours ?? 0);
+    const automaticStartAt = baseline?.automatic_start_at ?? VOLUNTEER_HOURS_AUTOMATIC_START_AT;
+
+    return calculateVolunteerHoursSummary(
+      assignmentsResult.data as unknown as VolunteerHoursAssignmentRow[],
+      baselineHours,
+      automaticStartAt,
+    );
+  }, []);
+
+  const fetchMyHoursSummary = useCallback(async () => {
+    setMyHoursLoading(true);
+    setMyHoursMessage("");
+    try {
+      const summary = await fetchVolunteerHoursSummary(session.user.id);
+      setMyHoursSummary(summary);
+    } catch (error) {
+      setMyHoursSummary(null);
+      setMyHoursMessage(error instanceof Error ? error.message : "Unable to load volunteer hours.");
+    } finally {
+      setMyHoursLoading(false);
+    }
+  }, [fetchVolunteerHoursSummary, session.user.id]);
+
+  const fetchSelectedVolunteerHoursSummary = useCallback(
+    async (volunteer: VolunteerRow) => {
+      if (!isAdminAccount) return;
+      setSelectedVolunteerHoursLoading(true);
+      setSelectedVolunteerHoursMessage("");
+      try {
+        const summary = await fetchVolunteerHoursSummary(volunteer.id);
+        setSelectedVolunteerHours(summary);
+      } catch (error) {
+        setSelectedVolunteerHours(null);
+        setSelectedVolunteerHoursMessage(
+          error instanceof Error ? error.message : "Unable to load volunteer hours.",
+        );
+      } finally {
+        setSelectedVolunteerHoursLoading(false);
+      }
+    },
+    [fetchVolunteerHoursSummary, isAdminAccount],
+  );
+
+  const handleVolunteerBaselineHoursSave = useCallback(async () => {
+    if (!isAdminAccount || !selectedVolunteer) return;
+    const nextTotalHours = Number(volunteerBaselineHoursDraft);
+    if (!Number.isFinite(nextTotalHours) || nextTotalHours < 0) {
+      setSelectedVolunteerHoursMessage("Enter a valid number of total hours.");
+      return;
+    }
+    const automaticHours = selectedVolunteerHours?.automaticHours ?? 0;
+    const nextBaselineHours = Math.max(0, nextTotalHours - automaticHours);
+
+    setVolunteerBaselineHoursSaving(true);
+    setSelectedVolunteerHoursMessage("");
+
+    const { error } = await supabase
+      .from("volunteer_hour_baselines")
+      .upsert(
+        {
+          volunteer_id: selectedVolunteer.id,
+          baseline_hours: nextBaselineHours,
+          automatic_start_at:
+            selectedVolunteerHours?.automaticStartAt ??
+            VOLUNTEER_HOURS_AUTOMATIC_START_AT,
+          updated_by: session.user.id,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "volunteer_id" },
+      );
+
+    if (error) {
+      setSelectedVolunteerHoursMessage(
+        isMissingVolunteerHourBaselinesTableError(error)
+          ? "Run the volunteer_hour_baselines Supabase migration before saving starting hours."
+          : error.message,
+      );
+      setVolunteerBaselineHoursSaving(false);
+      return;
+    }
+
+    const completedShiftCount = selectedVolunteerHours?.completedShiftCount ?? 0;
+    const nextSummary = {
+      baselineHours: nextBaselineHours,
+      automaticHours,
+      completedShiftCount,
+      automaticStartAt:
+        selectedVolunteerHours?.automaticStartAt ??
+        VOLUNTEER_HOURS_AUTOMATIC_START_AT,
+      totalHours: nextTotalHours,
+      totalShiftCount: nextTotalHours / 2,
+    };
+
+    setSelectedVolunteerHours(nextSummary);
+    if (selectedVolunteer.id === session.user.id) {
+      setMyHoursSummary(nextSummary);
+    }
+    setIsEditingVolunteerBaselineHours(false);
+    setVolunteerBaselineHoursSaving(false);
+  }, [
+    isAdminAccount,
+    selectedVolunteer,
+    selectedVolunteerHours,
+    session.user.id,
+    volunteerBaselineHoursDraft,
+  ]);
+
   useEffect(() => {
     if (!showAssignVolunteer) return;
     fetchVolunteers();
@@ -2850,9 +3130,42 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [showVolunteers, fetchVolunteers]);
 
   useEffect(() => {
-    if (!selectedVolunteer) return;
+    fetchMyHoursSummary();
+  }, [fetchMyHoursSummary]);
+
+  useEffect(() => {
+    if (!showProfile) return;
+    const intervalId = window.setInterval(() => {
+      fetchMyHoursSummary();
+    }, 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [fetchMyHoursSummary, showProfile]);
+
+  useEffect(() => {
+    if (!selectedVolunteer) {
+      setSelectedVolunteerHours(null);
+      setSelectedVolunteerHoursMessage("");
+      setSelectedVolunteerHoursLoading(false);
+      setIsEditingVolunteerBaselineHours(false);
+      setVolunteerBaselineHoursDraft("");
+      return;
+    }
     fetchVolunteerRecurring(selectedVolunteer.id);
-  }, [selectedVolunteer, fetchVolunteerRecurring]);
+    fetchSelectedVolunteerHoursSummary(selectedVolunteer);
+  }, [fetchSelectedVolunteerHoursSummary, fetchVolunteerRecurring, selectedVolunteer]);
+
+  useEffect(() => {
+    if (!isEditingVolunteerBaselineHours || !selectedVolunteerHours) return;
+    setVolunteerBaselineHoursDraft(String(selectedVolunteerHours.totalHours));
+  }, [isEditingVolunteerBaselineHours, selectedVolunteerHours]);
+
+  useEffect(() => {
+    if (!showVolunteers || !selectedVolunteer || !isAdminAccount) return;
+    const intervalId = window.setInterval(() => {
+      fetchSelectedVolunteerHoursSummary(selectedVolunteer);
+    }, 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [fetchSelectedVolunteerHoursSummary, isAdminAccount, selectedVolunteer, showVolunteers]);
 
   useEffect(() => {
     if (!session.user.id) return;
@@ -6249,6 +6562,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 displayProfile?.full_name ||
                 session.user.email ||
                 "Volunteer"}
+              {myHoursSummary ? (
+                <span className="header-hours-pill">{formatVolunteerHours(myHoursSummary.totalHours)}</span>
+              ) : null}
             </p>
           </div>
           <div className="calendar-title-row">
@@ -8629,34 +8945,121 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         <span>—</span>
                       )}
                     </div>
+                    {isAdminAccount ? (
+                      <div className="volunteer-hours-card">
+                        <div className="modal-row">
+                          <span className="modal-label">Total hours</span>
+                          <span>
+                            {selectedVolunteerHoursLoading
+                              ? "Loading..."
+                              : formatVolunteerHours(selectedVolunteerHours?.totalHours)}
+                          </span>
+                        </div>
+                        <div className="modal-row">
+                          <span className="modal-label">Total shifts completed</span>
+                          <span>
+                            {selectedVolunteerHoursLoading
+                              ? "Loading..."
+                              : formatVolunteerShiftCount(selectedVolunteerHours?.totalShiftCount)}
+                          </span>
+                        </div>
+                        {isEditingVolunteerBaselineHours ? (
+                          <div className="volunteer-hours-edit">
+                            <label className="form-field">
+                              <span className="form-label">Total hours</span>
+                              <input
+                                className="form-input"
+                                type="number"
+                                min="0"
+                                step="0.5"
+                                value={volunteerBaselineHoursDraft}
+                                onChange={(event) => setVolunteerBaselineHoursDraft(event.target.value)}
+                              />
+                            </label>
+                            <div className="volunteer-hours-actions">
+                              <button
+                                className="account-button account-button-small"
+                                type="button"
+                                onClick={handleVolunteerBaselineHoursSave}
+                                disabled={volunteerBaselineHoursSaving || selectedVolunteerHoursLoading}
+                              >
+                                {volunteerBaselineHoursSaving ? "Saving..." : "Save"}
+                              </button>
+                              <button
+                                className="account-button account-button-small"
+                                type="button"
+                                onClick={() => {
+                                  setIsEditingVolunteerBaselineHours(false);
+                                  setVolunteerBaselineHoursDraft(
+                                    selectedVolunteerHours
+                                      ? String(selectedVolunteerHours.totalHours)
+                                      : "",
+                                  );
+                                }}
+                                disabled={volunteerBaselineHoursSaving}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="volunteer-hours-actions">
+                            <button
+                              className="volunteer-hours-icon-button"
+                              type="button"
+                              onClick={() => {
+                                setVolunteerBaselineHoursDraft(
+                                  selectedVolunteerHours
+                                    ? String(selectedVolunteerHours.totalHours)
+                                    : "0",
+                                );
+                                setIsEditingVolunteerBaselineHours(true);
+                              }}
+                              disabled={!selectedVolunteerHours || selectedVolunteerHoursLoading}
+                              aria-label="Edit total hours"
+                              title="Edit total hours"
+                            >
+                              <Pencil size={15} strokeWidth={2.3} aria-hidden="true" />
+                            </button>
+                          </div>
+                        )}
+                        {selectedVolunteerHoursMessage ? (
+                          <div className="error-banner">{selectedVolunteerHoursMessage}</div>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
 
                   {volunteerRecurring.length > 0 || showAddRecurring || profile?.role === "Admin" ? (
                     <div className="volunteer-recurring">
                       <div className="volunteer-recurring-header">
-                        <p className="account-section-title">Recurring shifts</p>
-                        {profile?.role === "Admin" ? (
-                          <button
-                            className="account-button"
-                            type="button"
-                            onClick={() => {
-                              if (showAddRecurring) {
-                                setShowAddRecurring(false);
-                                setRecurringEditId(null);
-                                setRecurringForm({ templateId: "", startsOn: "", endsOn: "", repeatEveryWeeks: "1" });
-                                setRecurringDays([]);
-                                return;
-                              }
-                              setShowAddRecurring(true);
-                            }}
-                          >
-                            {showAddRecurring
-                              ? recurringEditId
-                                ? "Cancel edit"
-                                : "Cancel recurring shift"
-                              : "Add recurring shifts"}
-                          </button>
-                        ) : null}
+                        <div className="recurring-title-actions">
+                          <p className="account-section-title">Recurring shifts</p>
+                          {profile?.role === "Admin" ? (
+                            <button
+                              className="recurring-add-inline"
+                              type="button"
+                              onClick={() => {
+                                if (showAddRecurring) {
+                                  setShowAddRecurring(false);
+                                  setRecurringEditId(null);
+                                  setRecurringForm({ templateId: "", startsOn: "", endsOn: "", repeatEveryWeeks: "1" });
+                                  setRecurringDays([]);
+                                  return;
+                                }
+                                setShowAddRecurring(true);
+                              }}
+                              aria-label={showAddRecurring ? "Cancel recurring shift" : "Add recurring shifts"}
+                              title={showAddRecurring ? "Cancel recurring shift" : "Add recurring shifts"}
+                            >
+                              {showAddRecurring ? (
+                                <X size={14} strokeWidth={2.5} aria-hidden="true" />
+                              ) : (
+                                <Plus size={14} strokeWidth={2.6} aria-hidden="true" />
+                              )}
+                            </button>
+                          ) : null}
+                        </div>
                       </div>
                       {recurringLoading ? (
                         <div className="loading-banner">Loading recurring shifts...</div>
@@ -8688,7 +9091,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             );
                             return (
                               <div key={recurring.id} className="recurring-card">
-                                <div>
+                                <div className="recurring-copy">
                                   <p className="recurring-title">
                                     {(recurring.template?.title ?? "Shift") + ": " + timeRange}
                                   </p>
@@ -8698,22 +9101,26 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                   {profile?.role === "Admin" ? (
                                     <>
                                       <button
-                                        className="recurring-edit"
+                                        className="recurring-icon-button recurring-edit"
                                         type="button"
                                         onClick={() => handleRecurringEdit(recurring)}
                                         disabled={recurringDeleteId === recurring.id}
+                                        aria-label="Edit recurring shift"
+                                        title="Edit recurring shift"
                                       >
-                                        Edit
+                                        <Pencil size={16} strokeWidth={2.25} aria-hidden="true" />
                                       </button>
                                       <button
-                                        className="recurring-delete"
+                                        className="recurring-icon-button recurring-delete"
                                         type="button"
                                         onClick={() => handleRecurringDelete(recurring.id)}
                                         disabled={recurringDeleteId === recurring.id}
+                                        aria-label="Delete recurring shift"
+                                        title="Delete recurring shift"
                                       >
                                         {recurringDeleteId === recurring.id
-                                          ? "Deleting..."
-                                          : "Delete"}
+                                          ? "..."
+                                          : <Trash2 size={16} strokeWidth={2.25} aria-hidden="true" />}
                                       </button>
                                     </>
                                   ) : null}
@@ -8987,7 +9394,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               <div>
                 <p className="modal-eyebrow">Account</p>
                 <h3 className="modal-title">
-                  Welcome, {displayProfile?.preferred_name || displayProfile?.full_name || "Volunteer"}
+                  Welcome,{" "}
+                  <span
+                    className={
+                      displayProfile?.role === "Admin"
+                        ? "volunteer-name-admin"
+                        : displayProfile?.role === "Lead"
+                          ? "volunteer-name-lead"
+                          : displayProfile?.role === "Regular Volunteer"
+                            ? "volunteer-name-regular"
+                            : "volunteer-name-other"
+                    }
+                  >
+                    {displayProfile?.preferred_name || displayProfile?.full_name || "Volunteer"}
+                  </span>
                 </h3>
               </div>
               <button className="modal-close" type="button" onClick={() => setShowProfile(false)}>
@@ -8997,184 +9417,237 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             <div className="modal-body account-body">
               <div className="account-section">
                 <div className="account-section-header">
-                  <p className="account-section-title">Account info</p>
-                  <button className="account-button" type="button" onClick={handleSignOut}>
-                    Log Out
-                  </button>
+                  <p className="account-section-title">Account Info</p>
+                </div>
+                <div className="modal-row">
+                  <span className="modal-label">Name</span>
+                  <span
+                    className={
+                      displayProfile?.role === "Admin"
+                        ? "volunteer-name-admin"
+                        : displayProfile?.role === "Lead"
+                          ? "volunteer-name-lead"
+                          : displayProfile?.role === "Regular Volunteer"
+                            ? "volunteer-name-regular"
+                            : "volunteer-name-other"
+                    }
+                  >
+                    {displayProfile?.preferred_name || displayProfile?.full_name || "—"}
+                  </span>
                 </div>
                 <div className="modal-row">
                   <span className="modal-label">Email</span>
                   <span>{session.user.email ?? "—"}</span>
                 </div>
                 <div className="modal-row">
-                  <span className="modal-label">Created</span>
-                  <span>{formatDateTime(session.user.created_at)}</span>
+                  <span className="modal-label">Phone Number</span>
+                  <span>{displayProfile?.phone ?? "—"}</span>
                 </div>
-              </div>
-
-              <div className="account-section">
-                <p className="account-section-title">Notifications</p>
-                <p className="modal-text">
-                  Enable notifications to get push alerts when this app is installed on your
-                  phone. On iPhone: open in Safari → Share → Add to Home Screen, then open the
-                  app from the icon to enable notifications.
-                </p>
                 <div className="modal-row">
-                  <span className="modal-label">Status</span>
-                  <span>{notificationStatusLabel}</span>
+                  <span className="modal-label">Joined Date</span>
+                  <span>{formatDate(displayProfile?.joined_at)}</span>
                 </div>
-                <div className="modal-row notification-toggle-row">
-                  <span className="modal-label">Push notifications</span>
-                  <label className="notification-switch">
-                    <input
-                      className="notification-switch-input"
-                      type="checkbox"
-                      checked={notificationsEnabled}
-                      onChange={(event) => {
-                        void handleNotificationToggle(event.currentTarget.checked);
-                      }}
-                      disabled={notificationLoading}
-                      aria-label="Toggle push notifications"
-                    />
-                    <span
-                      className={`notification-switch-track ${notificationsEnabled ? "is-on" : "is-off"}`}
-                      aria-hidden="true"
-                    >
-                      <span className="notification-switch-thumb" />
-                    </span>
-                  </label>
-                </div>
-                {notificationMessage ? (
-                  <div className="error-banner">{notificationMessage}</div>
-                ) : null}
               </div>
 
-              <div className="account-section">
-                <div className="account-section-header">
-                  <p className="account-section-title">Profile details</p>
-                  <button
-                    className="account-button"
-                    type="button"
-                    onClick={() => setIsEditingProfile((value) => !value)}
-                  >
-                    {isEditingProfile ? "Cancel" : "Edit profile"}
-                  </button>
-                </div>
-                {isEditingProfile ? (
+              <details className="account-section account-dropdown">
+                <summary className="account-dropdown-summary">
+                  <span className="account-section-title">Notifications</span>
+                  <span className="account-dropdown-caret" aria-hidden="true">⌄</span>
+                </summary>
+                <div className="account-dropdown-body">
+                  <p className="modal-text">
+                    Enable notifications to get push alerts when this app is installed on your
+                    phone. On iPhone: open in Safari, tap Share, Add to Home Screen, then open
+                    the app from the icon to enable notifications.
+                  </p>
                   <div className="modal-row">
-                    <span />
-                    <button
-                      className="account-button"
-                      type="button"
-                      onClick={handleProfileSave}
-                      disabled={profileSaveLoading}
-                    >
-                      {profileSaveLoading ? "Saving..." : "Save"}
-                    </button>
+                    <span className="modal-label">Status</span>
+                    <span>{notificationStatusLabel}</span>
                   </div>
-                ) : null}
-                {profileSaveMessage ? (
-                  <div className="error-banner">{profileSaveMessage}</div>
-                ) : null}
-                <div className="modal-row">
-                  <span className="modal-label">Role</span>
-                  <span>
-                    {profile?.role === "Lead"
-                      ? "Lead Volunteer"
-                      : profile?.role === "Regular Volunteer"
-                        ? "Regular Volunteer"
-                        : profile?.role === "Admin"
-                          ? "Admin"
-                          : "—"}
-                  </span>
+                  <div className="modal-row notification-toggle-row">
+                    <span className="modal-label">Push notifications</span>
+                    <label className="notification-switch">
+                      <input
+                        className="notification-switch-input"
+                        type="checkbox"
+                        checked={notificationsEnabled}
+                        onChange={(event) => {
+                          void handleNotificationToggle(event.currentTarget.checked);
+                        }}
+                        disabled={notificationLoading}
+                        aria-label="Toggle push notifications"
+                      />
+                      <span
+                        className={`notification-switch-track ${notificationsEnabled ? "is-on" : "is-off"}`}
+                        aria-hidden="true"
+                      >
+                        <span className="notification-switch-thumb" />
+                      </span>
+                    </label>
+                  </div>
+                  {notificationMessage ? (
+                    <div className="error-banner">{notificationMessage}</div>
+                  ) : null}
                 </div>
-                <div className="modal-row">
-                  <span className="modal-label">Full name</span>
-                  {isEditingProfile ? (
-                    <input
-                      className="form-input"
-                      type="text"
-                      value={profileForm.full_name}
-                      onChange={(event) =>
-                        setProfileForm((prev) => ({
-                          ...prev,
-                          full_name: event.target.value,
-                        }))
-                      }
-                    />
-                  ) : (
-                    <span>{displayProfile?.full_name ?? "—"}</span>
-                  )}
+              </details>
+
+              <details className="account-section account-dropdown">
+                <summary className="account-dropdown-summary">
+                  <span className="account-section-title">Profile Details</span>
+                  <span className="account-dropdown-caret" aria-hidden="true">⌄</span>
+                </summary>
+                <div className="account-dropdown-body">
+                  {profileSaveMessage ? (
+                    <div className="error-banner">{profileSaveMessage}</div>
+                  ) : null}
+                  <div className="modal-row">
+                    <span className="modal-label">Role</span>
+                    <span>
+                      {profile?.role === "Lead"
+                        ? "Lead Volunteer"
+                        : profile?.role === "Regular Volunteer"
+                          ? "Regular Volunteer"
+                          : profile?.role === "Admin"
+                            ? "Admin"
+                            : "—"}
+                    </span>
+                  </div>
+                  <div className="modal-row">
+                    <span className="modal-label">Full name</span>
+                    {isEditingProfile ? (
+                      <input
+                        className="form-input"
+                        type="text"
+                        value={profileForm.full_name}
+                        onChange={(event) =>
+                          setProfileForm((prev) => ({
+                            ...prev,
+                            full_name: event.target.value,
+                          }))
+                        }
+                      />
+                    ) : (
+                      <span>{displayProfile?.full_name ?? "—"}</span>
+                    )}
+                  </div>
+                  <div className="modal-row">
+                    <span className="modal-label">Preferred name</span>
+                    <span>{displayProfile?.preferred_name ?? "—"}</span>
+                  </div>
+                  <div className="modal-row">
+                    <span className="modal-label">Pronouns</span>
+                    {isEditingProfile ? (
+                      <input
+                        className="form-input"
+                        type="text"
+                        value={profileForm.pronouns}
+                        onChange={(event) =>
+                          setProfileForm((prev) => ({
+                            ...prev,
+                            pronouns: event.target.value,
+                          }))
+                        }
+                      />
+                    ) : (
+                      <span>{displayProfile?.pronouns ?? "—"}</span>
+                    )}
+                  </div>
+                  <div className="modal-row">
+                    <span className="modal-label">Date of birth</span>
+                    <span>{formatDate(profile?.date_of_birth)}</span>
+                  </div>
+                  <div className="modal-row">
+                    <span className="modal-label">Phone</span>
+                    {isEditingProfile ? (
+                      <input
+                        className="form-input"
+                        type="tel"
+                        value={profileForm.phone}
+                        onChange={(event) =>
+                          setProfileForm((prev) => ({
+                            ...prev,
+                            phone: formatPhone(event.target.value),
+                          }))
+                        }
+                      />
+                    ) : (
+                      <span>{displayProfile?.phone ?? "—"}</span>
+                    )}
+                  </div>
+                  <div className="modal-row">
+                    <span className="modal-label">Joined</span>
+                    {isEditingProfile ? (
+                      <input
+                        className="form-input"
+                        type="date"
+                        value={profileForm.joined_at}
+                        onChange={(event) =>
+                          setProfileForm((prev) => ({
+                            ...prev,
+                            joined_at: event.target.value,
+                          }))
+                        }
+                      />
+                    ) : (
+                      <span>{formatDate(displayProfile?.joined_at)}</span>
+                    )}
+                  </div>
+                  <div className="modal-row">
+                    <span className="modal-label">Total hours</span>
+                    <span>
+                      {myHoursLoading ? "Loading..." : formatVolunteerHours(myHoursSummary?.totalHours)}
+                    </span>
+                  </div>
+                  <div className="modal-row">
+                    <span className="modal-label">Total shifts completed</span>
+                    <span>{myHoursLoading ? "Loading..." : formatVolunteerShiftCount(myHoursSummary?.totalShiftCount)}</span>
+                  </div>
+                  {myHoursMessage ? (
+                    <div className="error-banner">{myHoursMessage}</div>
+                  ) : null}
+                  <div className="account-dropdown-footer">
+                    {isEditingProfile ? (
+                      <>
+                        <button
+                          className="account-button account-button-small"
+                          type="button"
+                          onClick={handleProfileSave}
+                          disabled={profileSaveLoading}
+                        >
+                          {profileSaveLoading ? "Saving..." : "Save"}
+                        </button>
+                        <button
+                          className="account-button account-button-small"
+                          type="button"
+                          onClick={() => setIsEditingProfile(false)}
+                          disabled={profileSaveLoading}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="account-button account-button-small"
+                        type="button"
+                        onClick={() => setIsEditingProfile(true)}
+                      >
+                        Edit profile
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="modal-row">
-                  <span className="modal-label">Preferred name</span>
-                  <span>{displayProfile?.preferred_name ?? "—"}</span>
-                </div>
-                <div className="modal-row">
-                  <span className="modal-label">Pronouns</span>
-                  {isEditingProfile ? (
-                    <input
-                      className="form-input"
-                      type="text"
-                      value={profileForm.pronouns}
-                      onChange={(event) =>
-                        setProfileForm((prev) => ({
-                          ...prev,
-                          pronouns: event.target.value,
-                        }))
-                      }
-                    />
-                  ) : (
-                    <span>{displayProfile?.pronouns ?? "—"}</span>
-                  )}
-                </div>
-                <div className="modal-row">
-                  <span className="modal-label">Date of birth</span>
-                  <span>{formatDate(profile?.date_of_birth)}</span>
-                </div>
-                <div className="modal-row">
-                  <span className="modal-label">Phone</span>
-                  {isEditingProfile ? (
-                    <input
-                      className="form-input"
-                      type="tel"
-                      value={profileForm.phone}
-                      onChange={(event) =>
-                        setProfileForm((prev) => ({
-                          ...prev,
-                          phone: formatPhone(event.target.value),
-                        }))
-                      }
-                    />
-                  ) : (
-                    <span>{displayProfile?.phone ?? "—"}</span>
-                  )}
-                </div>
-                <div className="modal-row">
-                  <span className="modal-label">Joined</span>
-                  {isEditingProfile ? (
-                    <input
-                      className="form-input"
-                      type="date"
-                      value={profileForm.joined_at}
-                      onChange={(event) =>
-                        setProfileForm((prev) => ({
-                          ...prev,
-                          joined_at: event.target.value,
-                        }))
-                      }
-                    />
-                  ) : (
-                    <span>{formatDate(displayProfile?.joined_at)}</span>
-                  )}
-                </div>
-              </div>
+              </details>
               <div className="account-section">
                 <div className="account-section-header">
                   <p className="account-section-title">Support</p>
                 </div>
                 <button className="account-button account-link-button" type="button" onClick={handleReportIssueClick}>
                   Report bug/issues
+                </button>
+              </div>
+              <div className="account-footer-actions">
+                <button className="account-button account-button-small account-logout-button" type="button" onClick={handleSignOut}>
+                  Log Out
                 </button>
               </div>
             </div>

@@ -97,6 +97,23 @@ export type VolunteerRow = {
   created_at?: string | null;
 };
 
+export type VolunteerHoursSummary = {
+  totalHours: number;
+  totalShiftCount: number;
+  baselineHours: number;
+  automaticHours: number;
+  completedShiftCount: number;
+  automaticStartAt: string;
+};
+
+export type VolunteerHourBaseline = {
+  volunteer_id: string;
+  baseline_hours: number | string | null;
+  automatic_start_at: string | null;
+  updated_at?: string | null;
+  updated_by?: string | null;
+};
+
 export type RecurringAssignment = {
   id: string;
   volunteer_id: string;

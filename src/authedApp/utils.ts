@@ -262,6 +262,15 @@ export function formatDateTime(value: string | null | undefined) {
   });
 }
 
+export function formatVolunteerHours(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const rounded = Math.round(value * 10) / 10;
+  return `${rounded.toLocaleString("en-US", {
+    minimumFractionDigits: Number.isInteger(rounded) ? 0 : 1,
+    maximumFractionDigits: 1,
+  })} ${rounded === 1 ? "hour" : "hours"}`;
+}
+
 export function formatTimeOnly(value: string | null | undefined) {
   if (!value) return "—";
   const date = new Date(value);
