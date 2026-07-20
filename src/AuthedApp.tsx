@@ -749,6 +749,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationLoading, setNotificationLoading] = useState(false);
   const [notificationAction, setNotificationAction] = useState<"enable" | "disable" | null>(null);
+  const [pushSubscriptionHealthy, setPushSubscriptionHealthy] = useState<boolean | null>(null);
   const [pendingNotificationUrlAction, setPendingNotificationUrlAction] = useState<{
     action: "approve" | "deny";
     assignmentId: string;
@@ -792,7 +793,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ? Notification.permission
       : "default";
   const notificationStatusLabel = notificationsEnabled
-    ? "Enabled"
+    ? pushSubscriptionHealthy === false
+      ? "Needs re-enable"
+      : "Enabled"
     : notificationPermission === "granted"
       ? "Allowed on device (tap Enable to finish setup)"
       : "Disabled";
@@ -964,11 +967,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         { onConflict: "user_id,endpoint" },
       );
       if (subscriptionError) {
+        setPushSubscriptionHealthy(false);
         if (showFeedback) {
           setNotificationMessage(subscriptionError.message);
         }
         return false;
       }
+      setPushSubscriptionHealthy(true);
 
       if (persistPreference) {
         const { error: prefError } = await supabase
@@ -1008,6 +1013,41 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       pushSubscriptionSyncInFlightRef.current = false;
     }
   }, [notificationsEnabled, syncPushSubscription]);
+
+  useEffect(() => {
+    if (!notificationsEnabled || typeof window === "undefined") {
+      setPushSubscriptionHealthy(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        if (!cancelled) setPushSubscriptionHealthy(false);
+        return;
+      }
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        const subscription = await registration.pushManager.getSubscription();
+        if (!subscription) {
+          if (!cancelled) setPushSubscriptionHealthy(false);
+          return;
+        }
+        const { data, error } = await supabase
+          .from("push_subscriptions")
+          .select("endpoint")
+          .eq("user_id", session.user.id)
+          .eq("endpoint", subscription.endpoint)
+          .maybeSingle();
+        if (!cancelled) setPushSubscriptionHealthy(Boolean(data?.endpoint && !error));
+      } catch {
+        if (!cancelled) setPushSubscriptionHealthy(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [notificationsEnabled, session.user.id]);
   const helpfulLinks = useMemo(
     () => [
       {
@@ -8100,15 +8140,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           : request.event_type === "changed"
                             ? "Recurring shifts updated"
                             : "Recurring shifts added";
-                      const shiftCountLabel = `${request.count} shift${request.count === 1 ? "" : "s"}`;
                       const notificationBody = isAdminAccount
                         ? (
                             <>
                               <span className={volunteerNameClass}>{volunteerName}</span>
-                              {` · ${shiftCountLabel}`}
                             </>
                           )
-                        : shiftCountLabel;
+                        : "Your schedule was updated.";
 
                       return renderNotificationCard(
                         request,
