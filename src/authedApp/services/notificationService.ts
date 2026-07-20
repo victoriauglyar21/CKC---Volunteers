@@ -1,5 +1,12 @@
 import { supabase } from "../../supabaseClient";
-import { ADMIN_DROPPED_NOTIFICATION_WINDOW_MS, APPOINTMENT_NOTIFICATION_WINDOW_MS } from "../constants";
+import {
+  ADMIN_DROPPED_NOTIFICATION_WINDOW_MS,
+  APPOINTMENT_NOTIFICATION_WINDOW_MS,
+  RECURRING_SHIFT_ADDED_REASON,
+  RECURRING_SHIFT_CHANGED_DROP_REASON,
+  RECURRING_SHIFT_CONTINUED_REASON,
+  RECURRING_SHIFT_DELETED_DROP_REASON,
+} from "../constants";
 import {
   getNotificationDismissToken,
   getNotificationSortTimestamp,
@@ -83,6 +90,20 @@ const LEAD_NEEDED_NOTIFICATION_SELECT = `
 
 const SHADOW_FOLLOW_UP_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 const ASSIGNMENT_NOTIFICATION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const HIDDEN_ASSIGNMENT_NOTIFICATION_DROP_REASONS = new Set([
+  RECURRING_SHIFT_ADDED_REASON,
+  RECURRING_SHIFT_CHANGED_DROP_REASON,
+  RECURRING_SHIFT_CONTINUED_REASON,
+  RECURRING_SHIFT_DELETED_DROP_REASON,
+]);
+
+type NotificationRecurringRule = {
+  template_id: string;
+  starts_on: string;
+  ends_on: string | null;
+  byday: string[] | null;
+  repeat_interval_weeks?: number | null;
+};
 
 export type FetchNotificationsInput = {
   sessionUserId: string;
@@ -90,6 +111,59 @@ export type FetchNotificationsInput = {
   isAdminAccount: boolean;
   dismissedTokens: Set<string>;
 };
+
+function getDayCode(dateKey: string | null | undefined) {
+  if (!dateKey) return null;
+  const [year, month, day] = dateKey.split("-").map((part) => Number(part));
+  if (!year || !month || !day) return null;
+  return ["SU", "MO", "TU", "WE", "TH", "FR", "SA"][new Date(year, month - 1, day).getDay()] ?? null;
+}
+
+function diffDateKeysInDays(startKey: string, endKey: string) {
+  const [startYear, startMonth, startDay] = startKey.split("-").map((part) => Number(part));
+  const [endYear, endMonth, endDay] = endKey.split("-").map((part) => Number(part));
+  if (!startYear || !startMonth || !startDay || !endYear || !endMonth || !endDay) return null;
+  const startUtc = Date.UTC(startYear, startMonth - 1, startDay);
+  const endUtc = Date.UTC(endYear, endMonth - 1, endDay);
+  return Math.floor((endUtc - startUtc) / (24 * 60 * 60 * 1000));
+}
+
+function getAssignmentShiftDateKey(item: ShiftAssignmentDetail) {
+  if (item.shift_instance?.shift_date) return item.shift_instance.shift_date;
+  if (item.shift_instance?.starts_at) return item.shift_instance.starts_at.slice(0, 10);
+  return null;
+}
+
+function matchesRecurringRule(item: ShiftAssignmentDetail, rule: NotificationRecurringRule) {
+  if (item.shift_instance?.template?.id !== rule.template_id) return false;
+  const dateKey = getAssignmentShiftDateKey(item);
+  if (!dateKey || dateKey < rule.starts_on) return false;
+  if (rule.ends_on && dateKey > rule.ends_on) return false;
+
+  const allowedDays = rule.byday ?? [];
+  const dayCode = getDayCode(dateKey);
+  if (allowedDays.length > 0 && (!dayCode || !allowedDays.includes(dayCode))) return false;
+
+  const repeatIntervalWeeks = rule.repeat_interval_weeks === 2 ? 2 : 1;
+  if (repeatIntervalWeeks <= 1) return true;
+  const daysSinceStart = diffDateKeysInDays(rule.starts_on, dateKey);
+  if (daysSinceStart === null || daysSinceStart < 0) return false;
+  return Math.floor(daysSinceStart / 7) % repeatIntervalWeeks === 0;
+}
+
+async function fetchNotificationRecurringRules(input: FetchNotificationsInput) {
+  if (input.isAdminAccount) return { items: [] as NotificationRecurringRule[], error: null as string | null };
+
+  const { data, error } = await supabase
+    .from("recurring_assignments")
+    .select("template_id,starts_on,ends_on,byday,repeat_interval_weeks")
+    .eq("volunteer_id", input.sessionUserId);
+
+  return {
+    items: ((data as NotificationRecurringRule[] | null) ?? []),
+    error: error?.message ?? null,
+  };
+}
 
 export async function fetchNotificationsData(input: FetchNotificationsInput) {
   let rawItems: ShiftAssignmentDetail[] = [];
@@ -130,8 +204,27 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
     rawItems = (data as ShiftAssignmentDetail[]) ?? [];
   }
 
+  const { items: recurringRules, error: recurringRulesError } = await fetchNotificationRecurringRules(input);
+  if (recurringRulesError) {
+    return { items: [] as AppNotificationItem[], error: recurringRulesError };
+  }
+
   const assignmentItems = rawItems
     .filter((item) => {
+      if (
+        (item.status === "active" || item.status === "dropped") &&
+        item.dropped_reason &&
+        HIDDEN_ASSIGNMENT_NOTIFICATION_DROP_REASONS.has(item.dropped_reason)
+      ) {
+        return false;
+      }
+      if (
+        item.status === "active" &&
+        recurringRules.some((rule) => matchesRecurringRule(item, rule))
+      ) {
+        return false;
+      }
+
       if (input.isAdminAccount) {
         if (item.status === "pending") return true;
         if (item.status !== "dropped") return false;

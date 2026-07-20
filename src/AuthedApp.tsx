@@ -22,6 +22,10 @@ import {
   monthFormatter,
   monthJumpFormatter,
   PRIMARY_ADMIN_EMAIL,
+  RECURRING_SHIFT_ADDED_REASON,
+  RECURRING_SHIFT_CHANGED_DROP_REASON,
+  RECURRING_SHIFT_CONTINUED_REASON,
+  RECURRING_SHIFT_DELETED_DROP_REASON,
   SELF_DROP_REASON_PREFIX,
   timeFormatter,
   WEEKDAYS_MONDAY_FIRST,
@@ -2488,7 +2492,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         status: "active";
         assignment_role: "lead" | "regular";
         dropped_at: null;
-        dropped_reason: null;
+        dropped_reason: string;
       }
     >();
     assignmentTargets.forEach((target) => {
@@ -2500,7 +2504,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         status: "active",
         assignment_role: target.assignment_role,
         dropped_at: null,
-        dropped_reason: null,
+        dropped_reason: RECURRING_SHIFT_CONTINUED_REASON,
       });
     });
     const assignmentRows = Array.from(assignmentRowsBySlot.values());
@@ -2741,7 +2745,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           .update({
             status: "dropped",
             dropped_at: new Date().toISOString(),
-            dropped_reason: "Recurring shift changed",
+            dropped_reason: RECURRING_SHIFT_CHANGED_DROP_REASON,
           })
           .eq("volunteer_id", selectedVolunteer.id)
           .in("shift_instance_id", oldInstanceIds);
@@ -2807,7 +2811,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               status: "active",
               assignment_role: assignmentRole,
               dropped_at: null,
-              dropped_reason: null,
+              dropped_reason: RECURRING_SHIFT_ADDED_REASON,
             },
             { onConflict: "shift_instance_id,volunteer_id", ignoreDuplicates: true },
           )
@@ -2835,7 +2839,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         const recurringPushError = await sendVolunteerPush({
           userId: selectedVolunteer.id,
           title: "Recurring shifts added",
-          body: "Victoria added reaccuring shifts to your schedule",
+          body: "Recurring shifts were added to your schedule.",
           notificationType: "recurring_added",
         });
         if (recurringPushError) {
@@ -2951,7 +2955,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           .update({
             status: "dropped",
             dropped_at: new Date().toISOString(),
-            dropped_reason: "Recurring shift deleted",
+            dropped_reason: RECURRING_SHIFT_DELETED_DROP_REASON,
           })
           .eq("volunteer_id", selectedVolunteer.id)
           .in("shift_instance_id", instanceIds);
@@ -2975,20 +2979,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         return;
       }
 
-      if (volunteerRecurring.length === 1) {
-        const adminName =
-          displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "An admin";
-        const recurringDeletePushError = await sendVolunteerPush({
-          userId: selectedVolunteer.id,
-          title: "Recurring shifts removed",
-          body: "Your reaccuring shifts were deleted",
-          notificationType: "recurring_removed",
-        });
-        if (recurringDeletePushError) {
-          setRecurringMessage(
-            `Recurring shift deleted, but push notification failed: ${recurringDeletePushError}`,
-          );
-        }
+      const recurringDeletePushError = await sendVolunteerPush({
+        userId: selectedVolunteer.id,
+        title: "Recurring shifts removed",
+        body: "Your recurring shifts were deleted.",
+        notificationType: "recurring_removed",
+      });
+      if (recurringDeletePushError) {
+        setRecurringMessage(
+          `Recurring shift deleted, but push notification failed: ${recurringDeletePushError}`,
+        );
       }
 
       setRecurringDeleteId(null);
