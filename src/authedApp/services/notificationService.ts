@@ -17,6 +17,7 @@ import type {
   AppNotificationItem,
   AppointmentNotificationItem,
   LeadNeededNotificationItem,
+  RecurringAssignmentNotificationItem,
   ShadowFollowUpNotificationItem,
   ShiftAssignmentDetail,
 } from "../types";
@@ -165,6 +166,62 @@ async function fetchNotificationRecurringRules(input: FetchNotificationsInput) {
   };
 }
 
+function getRecurringAssignmentEventType(
+  item: ShiftAssignmentDetail,
+  recurringRules: NotificationRecurringRule[],
+) {
+  if (item.dropped_reason === RECURRING_SHIFT_DELETED_DROP_REASON) return "removed" as const;
+  if (item.dropped_reason === RECURRING_SHIFT_CHANGED_DROP_REASON) return "changed" as const;
+  if (
+    item.dropped_reason === RECURRING_SHIFT_ADDED_REASON ||
+    item.dropped_reason === RECURRING_SHIFT_CONTINUED_REASON ||
+    (item.status === "active" && recurringRules.some((rule) => matchesRecurringRule(item, rule)))
+  ) {
+    return "added" as const;
+  }
+  return null;
+}
+
+function buildRecurringAssignmentNotificationItems(
+  items: ShiftAssignmentDetail[],
+  recurringRules: NotificationRecurringRule[],
+) {
+  const byEventAndVolunteer = new Map<string, RecurringAssignmentNotificationItem>();
+
+  items.forEach((item) => {
+    const eventType = getRecurringAssignmentEventType(item, recurringRules);
+    if (!eventType) return;
+
+    const volunteerId = item.volunteer?.id ?? "unknown";
+    const key = `${eventType}:${volunteerId}`;
+    const itemTimestamp = getNotificationSortTimestamp(item);
+    const current = byEventAndVolunteer.get(key);
+    if (!current) {
+      byEventAndVolunteer.set(key, {
+        notification_kind: "recurring_assignment",
+        id: `recurring-assignment:${key}`,
+        created_at: item.dropped_at ?? item.created_at ?? null,
+        event_type: eventType,
+        count: 1,
+        shift_instance_id: item.shift_instance_id ?? item.shift_instance?.id ?? null,
+        volunteer: item.volunteer,
+        shift_instance: item.shift_instance,
+      });
+      return;
+    }
+
+    current.count += 1;
+    const currentTimestamp = getNotificationSortTimestamp(current);
+    if (itemTimestamp > currentTimestamp) {
+      current.created_at = item.dropped_at ?? item.created_at ?? null;
+      current.shift_instance_id = item.shift_instance_id ?? item.shift_instance?.id ?? null;
+      current.shift_instance = item.shift_instance;
+    }
+  });
+
+  return Array.from(byEventAndVolunteer.values());
+}
+
 export async function fetchNotificationsData(input: FetchNotificationsInput) {
   let rawItems: ShiftAssignmentDetail[] = [];
 
@@ -208,6 +265,9 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
   if (recurringRulesError) {
     return { items: [] as AppNotificationItem[], error: recurringRulesError };
   }
+
+  const recurringAssignmentItems = buildRecurringAssignmentNotificationItems(rawItems, recurringRules)
+    .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
 
   const assignmentItems = rawItems
     .filter((item) => {
@@ -263,9 +323,13 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
     return { items: [] as AppNotificationItem[], error: shadowFollowUpError };
   }
 
-  const items = [...assignmentItems, ...appointmentItems, ...leadNeededItems, ...shadowFollowUpItems].sort(
-    (left, right) => getNotificationSortTimestamp(right) - getNotificationSortTimestamp(left),
-  );
+  const items = [
+    ...recurringAssignmentItems,
+    ...assignmentItems,
+    ...appointmentItems,
+    ...leadNeededItems,
+    ...shadowFollowUpItems,
+  ].sort((left, right) => getNotificationSortTimestamp(right) - getNotificationSortTimestamp(left));
 
   return { items, error: null };
 }

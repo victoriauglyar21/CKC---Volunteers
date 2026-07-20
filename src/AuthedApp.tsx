@@ -55,6 +55,7 @@ import type {
   PersonalAssignment,
   ProfileRecord,
   RecurringAssignment,
+  RecurringAssignmentNotificationItem,
   LeadNeededNotificationItem,
   ShadowFollowUpNotificationItem,
   ShiftAppointment,
@@ -6551,6 +6552,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   ): item is ShadowFollowUpNotificationItem =>
     "notification_kind" in item && item.notification_kind === "shadow_follow_up";
 
+  const isRecurringAssignmentNotification = (
+    item: AppNotificationItem,
+  ): item is RecurringAssignmentNotificationItem =>
+    "notification_kind" in item && item.notification_kind === "recurring_assignment";
+
   return (
     <div className="calendar-shell">
       <header className="calendar-header">
@@ -8075,6 +8081,44 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         {
                           hideCornerDelete: true,
                         },
+                      );
+                    }
+                    if (isRecurringAssignmentNotification(request)) {
+                      const volunteerName =
+                        request.volunteer?.preferred_name ||
+                        request.volunteer?.full_name ||
+                        "Volunteer";
+                      const volunteerNameClass =
+                        request.volunteer?.role === "Admin"
+                          ? "volunteer-name volunteer-name-admin"
+                          : request.volunteer?.role === "Lead"
+                            ? "volunteer-name volunteer-name-lead"
+                            : "volunteer-name volunteer-name-regular";
+                      const notificationTitle =
+                        request.event_type === "removed"
+                          ? "Recurring shifts removed"
+                          : request.event_type === "changed"
+                            ? "Recurring shifts updated"
+                            : "Recurring shifts added";
+                      const shiftCountLabel = `${request.count} shift${request.count === 1 ? "" : "s"}`;
+                      const notificationBody = isAdminAccount
+                        ? (
+                            <>
+                              <span className={volunteerNameClass}>{volunteerName}</span>
+                              {` · ${shiftCountLabel}`}
+                            </>
+                          )
+                        : shiftCountLabel;
+
+                      return renderNotificationCard(
+                        request,
+                        index,
+                        isLatest,
+                        <>
+                          {isLatest ? <span className="notification-tag">Latest</span> : null}
+                          <p className="notification-name">{notificationTitle}</p>
+                          <p className="notification-reason">{notificationBody}</p>
+                        </>,
                       );
                     }
 

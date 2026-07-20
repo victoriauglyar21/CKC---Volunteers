@@ -197,7 +197,12 @@ serve(async (req) => {
   }
 
   if (targetProfile?.notification_pref !== "push_and_email") {
-    return new Response(JSON.stringify({ sent: 0, failed: 0, skipped: true }), {
+    return new Response(JSON.stringify({
+      sent: 0,
+      failed: 0,
+      skipped: true,
+      reason: "Push notification skipped because the recipient has push notifications disabled.",
+    }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

@@ -13,6 +13,7 @@ import type {
   CalendarCell,
   DropDayLeadAssignment,
   LeadNeededNotificationItem,
+  RecurringAssignmentNotificationItem,
   ShadowFollowUpNotificationItem,
   ShiftAssignmentDetail,
   ShiftInstance,
@@ -74,6 +75,12 @@ function isShadowFollowUpNotificationItem(
   return "notification_kind" in item && item.notification_kind === "shadow_follow_up";
 }
 
+function isRecurringAssignmentNotificationItem(
+  item: AppNotificationItem,
+): item is RecurringAssignmentNotificationItem {
+  return "notification_kind" in item && item.notification_kind === "recurring_assignment";
+}
+
 export function getNotificationSortTimestamp(item: AppNotificationItem) {
   const value = isAppointmentNotificationItem(item)
     ? item.updated_at ?? item.created_at ?? ""
@@ -85,6 +92,8 @@ export function getNotificationSortTimestamp(item: AppNotificationItem) {
           item.shift_instance?.shift_date ??
           item.created_at ??
           ""
+        : isRecurringAssignmentNotificationItem(item)
+          ? item.created_at ?? ""
       : item.dropped_at ?? item.created_at ?? "";
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
@@ -102,6 +111,9 @@ export function getNotificationDismissToken(item: AppNotificationItem) {
     return `shadow-follow-up:${normalizeOtherAssignmentName(
       item.shadow_name ?? item.volunteer?.preferred_name ?? item.volunteer?.full_name ?? "unknown",
     )}:${item.shift_instance_id ?? "unknown"}`;
+  }
+  if (isRecurringAssignmentNotificationItem(item)) {
+    return `${item.id}:${item.created_at ?? ""}`;
   }
   const status = item.status ?? "unknown";
   const changeMoment = item.dropped_at ?? item.created_at ?? "";

@@ -232,11 +232,23 @@ export type ShadowFollowUpNotificationItem = {
   } | null;
 };
 
+export type RecurringAssignmentNotificationItem = {
+  notification_kind: "recurring_assignment";
+  id: string;
+  created_at: string | null;
+  event_type: "added" | "removed" | "changed";
+  count: number;
+  shift_instance_id?: number | null;
+  volunteer: ShiftAssignmentDetail["volunteer"];
+  shift_instance?: ShiftAssignmentDetail["shift_instance"];
+};
+
 export type AppNotificationItem =
   | ShiftAssignmentDetail
   | AppointmentNotificationItem
   | LeadNeededNotificationItem
-  | ShadowFollowUpNotificationItem;
+  | ShadowFollowUpNotificationItem
+  | RecurringAssignmentNotificationItem;
 
 export type AppointmentKind = "foster" | "adoption" | "vax" | "orientation" | "other";
 

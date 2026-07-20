@@ -121,10 +121,12 @@ export async function sendVolunteerPush({
     return error.message;
   }
   if (data?.skipped) {
-    return null;
+    return typeof data?.reason === "string"
+      ? data.reason
+      : "Push notification skipped. The recipient may not have push notifications enabled.";
   }
   if (typeof data?.sent === "number" && data.sent <= 0) {
-    return null;
+    return "No active push subscription was found for the recipient.";
   }
 
   return null;
