@@ -53,13 +53,19 @@ export async function sendAdminPush({
     return "Unauthorized: missing session token. Please log in again.";
   }
 
-  const { error } = await supabase.functions.invoke("send-admin-push", {
+  const { data: responseData, error } = await supabase.functions.invoke("send-admin-push", {
     headers: authHeaders,
     body: { title, body, url, actions, data },
   });
   if (error) {
     console.warn("Failed to send admin push:", error.message);
     return error.message;
+  }
+  if (typeof responseData?.sent === "number" && responseData.sent <= 0) {
+    return "No active push subscription was found for an admin account.";
+  }
+  if (typeof responseData?.failed === "number" && responseData.failed > 0) {
+    return `${responseData.failed} admin push notification${responseData.failed === 1 ? "" : "s"} failed.`;
   }
   return null;
 }

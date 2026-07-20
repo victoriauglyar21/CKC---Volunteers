@@ -229,7 +229,7 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
     const { data, error } = await supabase
       .from("shift_assignments")
       .select(NOTIFICATION_SELECT)
-      .in("status", ["pending", "dropped"])
+      .in("status", ["pending", "dropped", "active"])
       .order("created_at", { ascending: true });
 
     if (error) {

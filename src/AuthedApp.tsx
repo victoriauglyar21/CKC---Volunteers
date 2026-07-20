@@ -2877,14 +2877,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
 
       if (!recurringEditId) {
-        const recurringPushError = await sendVolunteerPush({
-          userId: selectedVolunteer.id,
+        const recurringPushError = await sendAdminPush({
           title: "Recurring shifts added",
-          body: "Recurring shifts were added to your schedule.",
-          notificationType: "recurring_added",
+          body: `${selectedVolunteer.preferred_name || selectedVolunteer.full_name || "A volunteer"} had recurring shifts added.`,
         });
         if (recurringPushError) {
-          setRecurringMessage(`Recurring shifts saved, but push notification failed: ${recurringPushError}`);
+          setRecurringMessage(`Recurring shifts saved, but admin push notification failed: ${recurringPushError}`);
         }
       }
 
@@ -3020,15 +3018,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         return;
       }
 
-      const recurringDeletePushError = await sendVolunteerPush({
-        userId: selectedVolunteer.id,
+      const recurringDeletePushError = await sendAdminPush({
         title: "Recurring shifts removed",
-        body: "Your recurring shifts were deleted.",
-        notificationType: "recurring_removed",
+        body: `${selectedVolunteer.preferred_name || selectedVolunteer.full_name || "A volunteer"} had recurring shifts removed.`,
       });
       if (recurringDeletePushError) {
         setRecurringMessage(
-          `Recurring shift deleted, but push notification failed: ${recurringDeletePushError}`,
+          `Recurring shift deleted, but admin push notification failed: ${recurringDeletePushError}`,
         );
       }
 
