@@ -7937,8 +7937,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 type="button"
                 onClick={handleDeleteAllNotifications}
                 disabled={notifications.length === 0}
+                aria-label="Hide all notifications"
+                title="Hide all notifications"
               >
-                Hide all
+                <Trash2 size={18} strokeWidth={2.35} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
