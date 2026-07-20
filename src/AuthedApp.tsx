@@ -2554,7 +2554,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const chunk = assignmentRows.slice(index, index + 500);
       const { error: assignmentError } = await supabase
         .from("shift_assignments")
-        .upsert(chunk, { onConflict: "shift_instance_id,volunteer_id" });
+        .upsert(chunk, { onConflict: "shift_instance_id,volunteer_id", ignoreDuplicates: true });
       if (assignmentError) {
         if (import.meta.env.DEV) {
           console.warn("Unable to continue recurring shift assignments", assignmentError.message);
@@ -2841,21 +2841,66 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       let skippedFullCount = 0;
       let skippedExistingCount = 0;
       const assignmentErrors: string[] = [];
+      const recurringCleanupDropReasons = new Set([
+        RECURRING_SHIFT_ADDED_REASON,
+        RECURRING_SHIFT_CHANGED_DROP_REASON,
+        RECURRING_SHIFT_CONTINUED_REASON,
+        RECURRING_SHIFT_DELETED_DROP_REASON,
+      ]);
 
       for (const instance of filteredInstances) {
+        const { data: existingAssignment, error: existingAssignmentError } = await supabase
+          .from("shift_assignments")
+          .select("id,status,dropped_reason")
+          .eq("shift_instance_id", instance.id)
+          .eq("volunteer_id", selectedVolunteer.id)
+          .maybeSingle();
+
+        if (existingAssignmentError) {
+          assignmentErrors.push(existingAssignmentError.message);
+          continue;
+        }
+
+        if (existingAssignment?.id) {
+          if (
+            existingAssignment.status === "dropped" &&
+            recurringCleanupDropReasons.has(existingAssignment.dropped_reason ?? "")
+          ) {
+            const { error: reactivateError } = await supabase
+              .from("shift_assignments")
+              .update({
+                status: "active",
+                assignment_role: assignmentRole,
+                dropped_at: null,
+                dropped_reason: RECURRING_SHIFT_ADDED_REASON,
+              })
+              .eq("id", existingAssignment.id);
+
+            if (reactivateError) {
+              if (reactivateError.message.toLowerCase().includes("shift is full")) {
+                skippedFullCount += 1;
+              } else {
+                assignmentErrors.push(reactivateError.message);
+              }
+              continue;
+            }
+            assignedCount += 1;
+          } else {
+            skippedExistingCount += 1;
+          }
+          continue;
+        }
+
         const { data: savedAssignment, error: assignmentError } = await supabase
           .from("shift_assignments")
-          .upsert(
-            {
+          .insert({
               shift_instance_id: instance.id,
               volunteer_id: selectedVolunteer.id,
               status: "active",
               assignment_role: assignmentRole,
               dropped_at: null,
               dropped_reason: RECURRING_SHIFT_ADDED_REASON,
-            },
-            { onConflict: "shift_instance_id,volunteer_id" },
-          )
+            })
           .select("id")
           .maybeSingle();
 
