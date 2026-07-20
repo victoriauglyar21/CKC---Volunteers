@@ -2554,7 +2554,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       const chunk = assignmentRows.slice(index, index + 500);
       const { error: assignmentError } = await supabase
         .from("shift_assignments")
-        .upsert(chunk, { onConflict: "shift_instance_id,volunteer_id", ignoreDuplicates: true });
+        .upsert(chunk, { onConflict: "shift_instance_id,volunteer_id" });
       if (assignmentError) {
         if (import.meta.env.DEV) {
           console.warn("Unable to continue recurring shift assignments", assignmentError.message);
@@ -2854,7 +2854,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               dropped_at: null,
               dropped_reason: RECURRING_SHIFT_ADDED_REASON,
             },
-            { onConflict: "shift_instance_id,volunteer_id", ignoreDuplicates: true },
+            { onConflict: "shift_instance_id,volunteer_id" },
           )
           .select("id")
           .maybeSingle();
@@ -2874,16 +2874,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         }
 
         assignmentErrors.push(assignmentError.message);
-      }
-
-      if (!recurringEditId) {
-        const recurringPushError = await sendAdminPush({
-          title: "Recurring shifts added",
-          body: `${selectedVolunteer.preferred_name || selectedVolunteer.full_name || "A volunteer"} had recurring shifts added.`,
-        });
-        if (recurringPushError) {
-          setRecurringMessage(`Recurring shifts saved, but admin push notification failed: ${recurringPushError}`);
-        }
       }
 
       if (assignmentErrors.length > 0) {
@@ -2909,6 +2899,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
     } else {
       setRecurringMessage("Recurring pattern saved. No matching shift dates were found yet.");
+    }
+
+    if (!recurringEditId) {
+      const recurringPushError = await sendAdminPush({
+        title: "Recurring shifts added",
+        body: `${selectedVolunteer.preferred_name || selectedVolunteer.full_name || "A volunteer"} had recurring shifts added.`,
+      });
+      if (recurringPushError) {
+        setRecurringMessage((previous) =>
+          previous
+            ? `${previous} Admin push notification failed: ${recurringPushError}`
+            : `Recurring shifts saved, but admin push notification failed: ${recurringPushError}`,
+        );
+      }
     }
 
     setRecurringForm({ templateId: "", startsOn: "", endsOn: "", repeatEveryWeeks: "1" });
