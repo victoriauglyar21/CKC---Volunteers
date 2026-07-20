@@ -140,6 +140,15 @@ export async function sendVolunteerPush({
   return null;
 }
 
+function isExpectedPushSkip(message: string) {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("push notification skipped") ||
+    normalized.includes("push notifications disabled") ||
+    normalized.includes("no active push subscription")
+  );
+}
+
 export async function notifyLeadsOnShiftInstance({
   shiftInstanceId,
   excludeVolunteerIds = [],
@@ -199,7 +208,7 @@ export async function notifyLeadsOnShiftInstance({
       notificationType,
       shiftInstanceId,
     });
-    if (leadPushError) {
+    if (leadPushError && !isExpectedPushSkip(leadPushError)) {
       failures.push(leadPushError);
     }
   }
@@ -252,7 +261,7 @@ export async function notifyActiveMembersOnShiftInstance({
       notificationType,
       shiftInstanceId,
     });
-    if (memberPushError) {
+    if (memberPushError && !isExpectedPushSkip(memberPushError)) {
       failures.push(memberPushError);
     }
   }

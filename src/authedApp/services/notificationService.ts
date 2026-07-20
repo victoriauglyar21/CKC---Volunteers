@@ -72,6 +72,34 @@ const APPOINTMENT_NOTIFICATION_SELECT = `
   )
 `;
 
+const APP_NOTIFICATION_EVENT_SELECT = `
+  id,
+  notification_kind,
+  event_type,
+  audience,
+  target_user_id,
+  shift_instance_id,
+  appointment_id,
+  title,
+  body,
+  color,
+  starts_at,
+  ends_at,
+  completed_at,
+  completion_note,
+  created_at,
+  shift_instance:shift_instances (
+    id,
+    shift_date,
+    starts_at,
+    ends_at,
+    template:shift_templates (
+      id,
+      title
+    )
+  )
+`;
+
 const LEAD_NEEDED_NOTIFICATION_SELECT = `
   id,
   created_at,
@@ -222,20 +250,66 @@ function buildRecurringAssignmentNotificationItems(
   return Array.from(byEventAndVolunteer.values());
 }
 
-export async function fetchNotificationsData(input: FetchNotificationsInput) {
-  let rawItems: ShiftAssignmentDetail[] = [];
+async function fetchAllPendingShiftRequests() {
+  const pageSize = 1000;
+  let from = 0;
+  const items: ShiftAssignmentDetail[] = [];
 
-  if (input.isAdminAccount) {
+  while (true) {
     const { data, error } = await supabase
       .from("shift_assignments")
       .select(NOTIFICATION_SELECT)
-      .in("status", ["pending", "dropped", "active"])
-      .order("created_at", { ascending: true });
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .range(from, from + pageSize - 1);
 
     if (error) {
       return { items: [] as ShiftAssignmentDetail[], error: error.message };
     }
-    rawItems = (data as ShiftAssignmentDetail[]) ?? [];
+
+    const page = (data as ShiftAssignmentDetail[] | null) ?? [];
+    items.push(...page);
+    if (page.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return { items, error: null as string | null };
+}
+
+export async function fetchNotificationsData(input: FetchNotificationsInput) {
+  let rawItems: ShiftAssignmentDetail[] = [];
+  let protectedPendingItems: ShiftAssignmentDetail[] = [];
+
+  if (input.isAdminAccount) {
+    const droppedCutoffIso = new Date(Date.now() - ADMIN_DROPPED_NOTIFICATION_WINDOW_MS).toISOString();
+    const pendingResult = await fetchAllPendingShiftRequests();
+    if (pendingResult.error) {
+      return { items: [] as ShiftAssignmentDetail[], error: pendingResult.error };
+    }
+    protectedPendingItems = pendingResult.items;
+
+    const [droppedResult, recurringActiveResult] = await Promise.all([
+      supabase
+        .from("shift_assignments")
+        .select(NOTIFICATION_SELECT)
+        .eq("status", "dropped")
+        .or(`dropped_at.gte.${droppedCutoffIso},created_at.gte.${droppedCutoffIso}`)
+        .order("dropped_at", { ascending: false, nullsFirst: false })
+        .limit(500),
+      supabase
+        .from("shift_assignments")
+        .select(NOTIFICATION_SELECT)
+        .eq("status", "active")
+        .in("dropped_reason", [RECURRING_SHIFT_ADDED_REASON, RECURRING_SHIFT_CONTINUED_REASON])
+        .order("created_at", { ascending: false })
+        .limit(500),
+    ]);
+
+    rawItems = [
+      ...protectedPendingItems,
+      ...(((droppedResult.data as ShiftAssignmentDetail[] | null) ?? [])),
+      ...(((recurringActiveResult.data as ShiftAssignmentDetail[] | null) ?? [])),
+    ];
   } else if (input.role === "Lead") {
     const { data, error } = await supabase
       .from("shift_assignments")
@@ -305,21 +379,24 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
       if (Number.isNaN(createdAt)) return false;
       return Date.now() - createdAt <= ASSIGNMENT_NOTIFICATION_WINDOW_MS;
     })
-    .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
+    .filter((item) => {
+      if (input.isAdminAccount && item.status === "pending") return true;
+      return !input.dismissedTokens.has(getNotificationDismissToken(item));
+    });
 
   const { items: appointmentItems, error: appointmentError } = await fetchAppointmentNotificationItems(input);
-  if (appointmentError) {
+  if (appointmentError && protectedPendingItems.length === 0) {
     return { items: [] as AppNotificationItem[], error: appointmentError };
   }
 
   const { items: leadNeededItems, error: leadNeededError } = await fetchLeadNeededNotificationItems(input);
-  if (leadNeededError) {
+  if (leadNeededError && protectedPendingItems.length === 0) {
     return { items: [] as AppNotificationItem[], error: leadNeededError };
   }
 
   const { items: shadowFollowUpItems, error: shadowFollowUpError } =
     await fetchShadowFollowUpNotificationItems(input);
-  if (shadowFollowUpError) {
+  if (shadowFollowUpError && protectedPendingItems.length === 0) {
     return { items: [] as AppNotificationItem[], error: shadowFollowUpError };
   }
 
@@ -464,6 +541,25 @@ type AppointmentNotificationRow = {
   shift_instance: AppointmentNotificationItem["shift_instance"] | AppointmentNotificationItem["shift_instance"][];
 };
 
+type AppNotificationEventRow = {
+  id: string;
+  notification_kind: string | null;
+  event_type: string | null;
+  audience: string | null;
+  target_user_id: string | null;
+  shift_instance_id: number | null;
+  appointment_id: string | null;
+  title: string | null;
+  body: string | null;
+  color: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  completed_at: string | null;
+  completion_note: string | null;
+  created_at: string | null;
+  shift_instance: AppointmentNotificationItem["shift_instance"] | AppointmentNotificationItem["shift_instance"][];
+};
+
 async function fetchAppointmentNotificationItems(input: FetchNotificationsInput) {
   if (!input.isAdminAccount && input.role !== "Lead") {
     return { items: [] as AppointmentNotificationItem[], error: null as string | null };
@@ -526,10 +622,10 @@ async function fetchAppointmentNotificationItems(input: FetchNotificationsInput)
         Math.abs(updatedAtMs - completedAtMs) <= 2500
           ? "completed"
           : Number.isFinite(createdAtMs) &&
-        Number.isFinite(updatedAtMs) &&
-        Math.abs(updatedAtMs - createdAtMs) > 1500
-          ? "updated"
-          : "created";
+              Number.isFinite(updatedAtMs) &&
+              Math.abs(updatedAtMs - createdAtMs) > 1500
+            ? "updated"
+            : "created";
       const item: AppointmentNotificationItem = {
         notification_kind: "appointment",
         id: `appointment:${row.id}:${row.updated_at ?? row.created_at ?? ""}`,
@@ -552,7 +648,132 @@ async function fetchAppointmentNotificationItems(input: FetchNotificationsInput)
     .filter((item): item is AppointmentNotificationItem => Boolean(item))
     .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
 
+  const { items: eventItems, error: eventError } = await fetchAppointmentEventNotificationItems({
+    input,
+    cutoffIso,
+    allowedInstanceIds,
+  });
+  if (eventError && !/app_notification_events|relation/i.test(eventError)) {
+    return { items: [] as AppointmentNotificationItem[], error: eventError };
+  }
+
+  return { items: [...items, ...eventItems], error: null as string | null };
+}
+
+async function fetchAppointmentEventNotificationItems({
+  input,
+  cutoffIso,
+  allowedInstanceIds,
+}: {
+  input: FetchNotificationsInput;
+  cutoffIso: string;
+  allowedInstanceIds: number[] | null;
+}) {
+  let query = supabase
+    .from("app_notification_events")
+    .select(APP_NOTIFICATION_EVENT_SELECT)
+    .eq("notification_kind", "appointment")
+    .gte("created_at", cutoffIso)
+    .order("created_at", { ascending: false });
+
+  if (input.isAdminAccount) {
+    query = query.in("audience", ["admins", "admins_and_leads", "all"]);
+  } else if (input.role === "Lead") {
+    query = query.in("audience", ["leads", "admins_and_leads", "all"]);
+    if (allowedInstanceIds && allowedInstanceIds.length > 0) {
+      query = query.in("shift_instance_id", allowedInstanceIds);
+    }
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    return { items: [] as AppointmentNotificationItem[], error: error.message };
+  }
+
+  const items = ((data as AppNotificationEventRow[] | null) ?? [])
+    .map((row): AppointmentNotificationItem | null => {
+      if (
+        row.event_type !== "created" &&
+        row.event_type !== "updated" &&
+        row.event_type !== "completed" &&
+        row.event_type !== "deleted"
+      ) {
+        return null;
+      }
+      const shiftInstance = Array.isArray(row.shift_instance)
+        ? (row.shift_instance[0] ?? null)
+        : (row.shift_instance ?? null);
+      return {
+        notification_kind: "appointment",
+        id: `appointment-event:${row.id}`,
+        appointment_id: row.appointment_id ?? row.id,
+        shift_instance_id: row.shift_instance_id,
+        created_at: row.created_at,
+        updated_at: row.created_at,
+        title: row.title ?? "Appointment",
+        description: row.body,
+        color: row.color,
+        starts_at: row.starts_at,
+        ends_at: row.ends_at,
+        completed_at: row.completed_at,
+        completion_note: row.completion_note,
+        event_type: row.event_type,
+        shift_instance: shiftInstance,
+      };
+    })
+    .filter((item): item is AppointmentNotificationItem => Boolean(item))
+    .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
+
   return { items, error: null as string | null };
+}
+
+export async function recordAppointmentNotificationEvent({
+  eventType,
+  audience = "admins_and_leads",
+  actorId,
+  appointmentId,
+  shiftInstanceId,
+  title,
+  body,
+  color,
+  startsAt,
+  endsAt,
+  completedAt,
+  completionNote,
+}: {
+  eventType: "created" | "updated" | "completed" | "deleted";
+  audience?: "admins" | "admins_and_leads" | "leads" | "all";
+  actorId: string;
+  appointmentId: string;
+  shiftInstanceId: number | null;
+  title: string;
+  body?: string | null;
+  color?: string | null;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  completedAt?: string | null;
+  completionNote?: string | null;
+}) {
+  const { error } = await supabase.from("app_notification_events").insert({
+    notification_kind: "appointment",
+    event_type: eventType,
+    audience,
+    actor_id: actorId,
+    appointment_id: appointmentId,
+    shift_instance_id: shiftInstanceId,
+    title,
+    body: body ?? null,
+    color: color ?? null,
+    starts_at: startsAt ?? null,
+    ends_at: endsAt ?? null,
+    completed_at: completedAt ?? null,
+    completion_note: completionNote ?? null,
+  });
+
+  if (error && !/app_notification_events|relation/i.test(error.message)) {
+    return error.message;
+  }
+  return null;
 }
 
 type LeadNeededNotificationRow = {
@@ -619,15 +840,11 @@ export async function fetchAssignmentById(assignmentId: string) {
 }
 
 export async function fetchPendingNotifications() {
-  const { data, error } = await supabase
-    .from("shift_assignments")
-    .select(NOTIFICATION_SELECT)
-    .eq("status", "pending")
-    .order("created_at", { ascending: false });
+  const { items, error } = await fetchAllPendingShiftRequests();
 
   return {
-    data: (data as ShiftAssignmentDetail[]) ?? [],
-    error: error?.message ?? null,
+    data: items,
+    error,
   };
 }
 

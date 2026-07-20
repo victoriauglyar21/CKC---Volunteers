@@ -175,7 +175,7 @@ export type AppointmentNotificationItem = {
   ends_at: string | null;
   completed_at?: string | null;
   completion_note?: string | null;
-  event_type: "created" | "updated" | "completed";
+  event_type: "created" | "updated" | "completed" | "deleted";
   shift_instance?: {
     id: number;
     shift_date: string | null;
