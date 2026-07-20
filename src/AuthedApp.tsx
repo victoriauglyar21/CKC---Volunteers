@@ -2903,8 +2903,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
     if (!recurringEditId) {
       const recurringPushError = await sendAdminPush({
-        title: "Recurring shifts added",
-        body: `${selectedVolunteer.preferred_name || selectedVolunteer.full_name || "A volunteer"} had recurring shifts added.`,
+        title: "Recurring shifts created",
+        body: `${selectedVolunteer.preferred_name || selectedVolunteer.full_name || "A volunteer"} had recurring shifts created.`,
       });
       if (recurringPushError) {
         setRecurringMessage((previous) =>
@@ -3337,7 +3337,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           return next;
         });
         setNotificationsMessage(
-          error instanceof Error ? error.message : "Unable to delete notification. Restored.",
+          error instanceof Error ? error.message : "Unable to hide notification. Restored.",
         );
       } finally {
         setNotificationDeletingIds((prev) => {
@@ -6436,7 +6436,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         }}
       >
         <span className="notification-swipe-delete-label">
-          {mobileSwipeMode === "decision" ? (swipeDirection === "approve" ? "Approve" : "Deny") : "Delete"}
+          {mobileSwipeMode === "decision" ? (swipeDirection === "approve" ? "Approve" : "Deny") : "Hide"}
         </span>
       </div>
       <motion.div
@@ -6567,8 +6567,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 void handleDismissNotification(request, index);
               }}
               disabled={notificationDeletingIds.has(request.id)}
-              aria-label="Delete notification"
-              title="Delete notification"
+              aria-label="Hide notification"
+              title="Hide notification"
             >
               <X size={16} strokeWidth={2.5} aria-hidden="true" />
             </button>
@@ -7938,7 +7938,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 onClick={handleDeleteAllNotifications}
                 disabled={notifications.length === 0}
               >
-                Delete all
+                Hide all
               </button>
             </div>
             <div className="modal-body">
@@ -8139,7 +8139,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           ? "Recurring shifts removed"
                           : request.event_type === "changed"
                             ? "Recurring shifts updated"
-                            : "Recurring shifts added";
+                            : "Recurring shifts created";
                       const notificationBody = isAdminAccount
                         ? (
                             <>

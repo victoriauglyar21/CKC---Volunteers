@@ -62,7 +62,9 @@ export async function sendAdminPush({
     return error.message;
   }
   if (typeof responseData?.sent === "number" && responseData.sent <= 0) {
-    return "No active push subscription was found for an admin account.";
+    const adminCount =
+      typeof responseData?.admin_count === "number" ? ` across ${responseData.admin_count} admin account${responseData.admin_count === 1 ? "" : "s"}` : "";
+    return `No active admin push subscription was found${adminCount}.`;
   }
   if (typeof responseData?.failed === "number" && responseData.failed > 0) {
     return `${responseData.failed} admin push notification${responseData.failed === 1 ? "" : "s"} failed.`;

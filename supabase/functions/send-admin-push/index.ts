@@ -119,7 +119,7 @@ serve(async (req) => {
 
   const adminIds = (admins ?? []).map((admin) => admin.id);
   if (adminIds.length === 0) {
-    return new Response(JSON.stringify({ sent: 0, failed: 0 }), {
+    return new Response(JSON.stringify({ sent: 0, failed: 0, admin_count: 0, subscription_count: 0 }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
@@ -187,7 +187,12 @@ serve(async (req) => {
   const sent = sendResults.filter((result) => result.ok).length;
   const failed = sendResults.length - sent;
 
-  return new Response(JSON.stringify({ sent, failed }), {
+  return new Response(JSON.stringify({
+    sent,
+    failed,
+    admin_count: adminIds.length,
+    subscription_count: subs?.length ?? 0,
+  }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 });
