@@ -202,8 +202,7 @@ function getRecurringAssignmentEventType(
   if (item.dropped_reason === RECURRING_SHIFT_CHANGED_DROP_REASON) return "changed" as const;
   if (
     item.dropped_reason === RECURRING_SHIFT_ADDED_REASON ||
-    item.dropped_reason === RECURRING_SHIFT_CONTINUED_REASON ||
-    (item.status === "active" && recurringRules.some((rule) => matchesRecurringRule(item, rule)))
+    item.dropped_reason === RECURRING_SHIFT_CONTINUED_REASON
   ) {
     return "added" as const;
   }

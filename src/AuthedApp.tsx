@@ -2821,7 +2821,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             dropped_reason: RECURRING_SHIFT_CHANGED_DROP_REASON,
           })
           .eq("volunteer_id", selectedVolunteer.id)
-          .in("shift_instance_id", oldInstanceIds);
+          .in("shift_instance_id", oldInstanceIds)
+          .eq("status", "active")
+          .in("dropped_reason", [
+            RECURRING_SHIFT_ADDED_REASON,
+            RECURRING_SHIFT_CONTINUED_REASON,
+          ]);
         if (oldAssignmentDeleteError) {
           setRecurringMessage(oldAssignmentDeleteError.message);
           setRecurringSaving(false);
@@ -2873,12 +2878,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       let skippedFullCount = 0;
       let skippedExistingCount = 0;
       const assignmentErrors: string[] = [];
-      const recurringCleanupDropReasons = new Set([
-        RECURRING_SHIFT_ADDED_REASON,
-        RECURRING_SHIFT_CHANGED_DROP_REASON,
-        RECURRING_SHIFT_CONTINUED_REASON,
-        RECURRING_SHIFT_DELETED_DROP_REASON,
-      ]);
 
       for (const instance of filteredInstances) {
         const { data: existingAssignment, error: existingAssignmentError } = await supabase
@@ -2894,32 +2893,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         }
 
         if (existingAssignment?.id) {
-          if (
-            existingAssignment.status === "dropped" &&
-            recurringCleanupDropReasons.has(existingAssignment.dropped_reason ?? "")
-          ) {
-            const { error: reactivateError } = await supabase
-              .from("shift_assignments")
-              .update({
-                status: "active",
-                assignment_role: assignmentRole,
-                dropped_at: null,
-                dropped_reason: RECURRING_SHIFT_ADDED_REASON,
-              })
-              .eq("id", existingAssignment.id);
-
-            if (reactivateError) {
-              if (reactivateError.message.toLowerCase().includes("shift is full")) {
-                skippedFullCount += 1;
-              } else {
-                assignmentErrors.push(reactivateError.message);
-              }
-              continue;
-            }
-            assignedCount += 1;
-          } else {
-            skippedExistingCount += 1;
-          }
+          skippedExistingCount += 1;
           continue;
         }
 
@@ -3079,7 +3053,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             dropped_reason: RECURRING_SHIFT_DELETED_DROP_REASON,
           })
           .eq("volunteer_id", selectedVolunteer.id)
-          .in("shift_instance_id", instanceIds);
+          .in("shift_instance_id", instanceIds)
+          .eq("status", "active")
+          .in("dropped_reason", [
+            RECURRING_SHIFT_ADDED_REASON,
+            RECURRING_SHIFT_CONTINUED_REASON,
+          ]);
 
         if (assignmentError) {
           setRecurringMessage(assignmentError.message);
