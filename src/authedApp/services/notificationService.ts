@@ -200,10 +200,7 @@ function getRecurringAssignmentEventType(
 ) {
   if (item.dropped_reason === RECURRING_SHIFT_DELETED_DROP_REASON) return "removed" as const;
   if (item.dropped_reason === RECURRING_SHIFT_CHANGED_DROP_REASON) return "changed" as const;
-  if (
-    item.dropped_reason === RECURRING_SHIFT_ADDED_REASON ||
-    item.dropped_reason === RECURRING_SHIFT_CONTINUED_REASON
-  ) {
+  if (item.dropped_reason === RECURRING_SHIFT_ADDED_REASON) {
     return "added" as const;
   }
   return null;
@@ -212,24 +209,28 @@ function getRecurringAssignmentEventType(
 function buildRecurringAssignmentNotificationItems(
   items: ShiftAssignmentDetail[],
   recurringRules: NotificationRecurringRule[],
+  isAdminAccount: boolean,
 ) {
   const byEventAndVolunteer = new Map<string, RecurringAssignmentNotificationItem>();
+  const volunteerIdsByKey = new Map<string, Set<string>>();
 
   items.forEach((item) => {
     const eventType = getRecurringAssignmentEventType(item, recurringRules);
     if (!eventType) return;
 
     const volunteerId = item.volunteer?.id ?? "unknown";
-    const key = `${eventType}:${volunteerId}`;
+    const key = isAdminAccount ? eventType : `${eventType}:${volunteerId}`;
     const itemTimestamp = getNotificationSortTimestamp(item);
     const current = byEventAndVolunteer.get(key);
     if (!current) {
+      volunteerIdsByKey.set(key, new Set([volunteerId]));
       byEventAndVolunteer.set(key, {
         notification_kind: "recurring_assignment",
         id: `recurring-assignment:${key}`,
         created_at: item.dropped_at ?? item.created_at ?? null,
         event_type: eventType,
         count: 1,
+        volunteer_count: 1,
         shift_instance_id: item.shift_instance_id ?? item.shift_instance?.id ?? null,
         volunteer: item.volunteer,
         shift_instance: item.shift_instance,
@@ -238,11 +239,18 @@ function buildRecurringAssignmentNotificationItems(
     }
 
     current.count += 1;
+    const volunteerIds = volunteerIdsByKey.get(key);
+    volunteerIds?.add(volunteerId);
+    current.volunteer_count = volunteerIds?.size ?? current.volunteer_count;
+    if (isAdminAccount && (current.volunteer_count ?? 0) > 1) {
+      current.volunteer = null;
+    }
     const currentTimestamp = getNotificationSortTimestamp(current);
     if (itemTimestamp > currentTimestamp) {
       current.created_at = item.dropped_at ?? item.created_at ?? null;
       current.shift_instance_id = item.shift_instance_id ?? item.shift_instance?.id ?? null;
       current.shift_instance = item.shift_instance;
+      current.volunteer = isAdminAccount && (volunteerIds?.size ?? 0) > 1 ? null : item.volunteer;
     }
   });
 
@@ -287,27 +295,21 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
     }
     protectedPendingItems = pendingResult.items;
 
-    const [droppedResult, recurringActiveResult] = await Promise.all([
-      supabase
-        .from("shift_assignments")
-        .select(NOTIFICATION_SELECT)
-        .eq("status", "dropped")
-        .or(`dropped_at.gte.${droppedCutoffIso},created_at.gte.${droppedCutoffIso}`)
-        .order("dropped_at", { ascending: false, nullsFirst: false })
-        .limit(500),
-      supabase
-        .from("shift_assignments")
-        .select(NOTIFICATION_SELECT)
-        .eq("status", "active")
-        .in("dropped_reason", [RECURRING_SHIFT_ADDED_REASON, RECURRING_SHIFT_CONTINUED_REASON])
-        .order("created_at", { ascending: false })
-        .limit(500),
-    ]);
+    const { data, error } = await supabase
+      .from("shift_assignments")
+      .select(NOTIFICATION_SELECT)
+      .eq("status", "dropped")
+      .or(`dropped_at.gte.${droppedCutoffIso},created_at.gte.${droppedCutoffIso}`)
+      .order("dropped_at", { ascending: false, nullsFirst: false })
+      .limit(500);
+
+    if (error) {
+      return { items: [] as AppNotificationItem[], error: error.message };
+    }
 
     rawItems = [
       ...protectedPendingItems,
-      ...(((droppedResult.data as ShiftAssignmentDetail[] | null) ?? [])),
-      ...(((recurringActiveResult.data as ShiftAssignmentDetail[] | null) ?? [])),
+      ...(((data as ShiftAssignmentDetail[] | null) ?? [])),
     ];
   } else if (input.role === "Lead") {
     const { data, error } = await supabase
@@ -339,8 +341,10 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
     return { items: [] as AppNotificationItem[], error: recurringRulesError };
   }
 
-  const recurringAssignmentItems = buildRecurringAssignmentNotificationItems(rawItems, recurringRules)
-    .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
+  const recurringAssignmentItems = input.isAdminAccount
+    ? []
+    : buildRecurringAssignmentNotificationItems(rawItems, recurringRules, input.isAdminAccount)
+      .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
 
   const assignmentItems = rawItems
     .filter((item) => {

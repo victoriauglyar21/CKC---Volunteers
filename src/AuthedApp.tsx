@@ -2557,6 +2557,29 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       instanceIdBySlot.set(`${instance.template_id}:${dayKey}`, instance.id);
     });
 
+    const targetShiftInstanceIds = Array.from(new Set(Array.from(instanceIdBySlot.values())));
+    const existingAssignmentKeys = new Set<string>();
+    if (targetShiftInstanceIds.length > 0) {
+      const { data: existingAssignments, error: existingAssignmentsError } = await supabase
+        .from("shift_assignments")
+        .select("shift_instance_id, volunteer_id")
+        .in("shift_instance_id", targetShiftInstanceIds)
+        .in("volunteer_id", volunteerIds);
+
+      if (existingAssignmentsError) {
+        if (import.meta.env.DEV) {
+          console.warn("Unable to load existing recurring assignments", existingAssignmentsError.message);
+        }
+        return;
+      }
+
+      ((existingAssignments ?? []) as Array<{ shift_instance_id: number | null; volunteer_id: string | null }>)
+        .forEach((assignment) => {
+          if (!assignment.shift_instance_id || !assignment.volunteer_id) return;
+          existingAssignmentKeys.add(`${assignment.shift_instance_id}:${assignment.volunteer_id}`);
+        });
+    }
+
     const assignmentRowsBySlot = new Map<
       string,
       {
@@ -2571,7 +2594,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     assignmentTargets.forEach((target) => {
       const shiftInstanceId = instanceIdBySlot.get(`${target.recurring.template_id}:${target.dayKey}`);
       if (!shiftInstanceId) return;
-      assignmentRowsBySlot.set(`${shiftInstanceId}:${target.recurring.volunteer_id}`, {
+      const assignmentKey = `${shiftInstanceId}:${target.recurring.volunteer_id}`;
+      if (existingAssignmentKeys.has(assignmentKey)) return;
+      assignmentRowsBySlot.set(assignmentKey, {
         shift_instance_id: shiftInstanceId,
         volunteer_id: target.recurring.volunteer_id,
         status: "active",
@@ -8366,12 +8391,20 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           : request.event_type === "changed"
                             ? "Recurring shifts updated"
                             : "Recurring shifts created";
+                      const recurringAction =
+                        request.event_type === "removed"
+                          ? "removed"
+                          : request.event_type === "changed"
+                            ? "updated"
+                            : "created";
                       const notificationBody = isAdminAccount
-                        ? (
+                        ? request.volunteer_count && request.volunteer_count > 1
+                          ? `${request.count} recurring shift${request.count === 1 ? "" : "s"} ${recurringAction} for ${request.volunteer_count} volunteers.`
+                          : (
                             <>
                               <span className={volunteerNameClass}>{volunteerName}</span>
                             </>
-                          )
+                            )
                         : "Your schedule was updated.";
 
                       return renderNotificationCard(

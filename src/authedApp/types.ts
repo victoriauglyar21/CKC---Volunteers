@@ -238,6 +238,7 @@ export type RecurringAssignmentNotificationItem = {
   created_at: string | null;
   event_type: "added" | "removed" | "changed";
   count: number;
+  volunteer_count?: number;
   shift_instance_id?: number | null;
   volunteer: ShiftAssignmentDetail["volunteer"];
   shift_instance?: ShiftAssignmentDetail["shift_instance"];
