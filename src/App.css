@@ -4239,6 +4239,235 @@ html[data-theme="dark"] .range-mode-select {
   color: rgba(255, 255, 255, 0.85);
 }
 
+/* Modern surface refresh shared across modals, lists, and utility panels. */
+.modal-panel,
+.take-shift-panel,
+.volunteer-note-panel,
+.remove-volunteer-panel,
+.appointment-note-panel,
+.auth-card,
+.onboarding-card {
+  border-radius: 10px;
+}
+
+.modal-panel {
+  background: color-mix(in srgb, var(--calendar-surface) 88%, transparent);
+  border-color: var(--calendar-border);
+  box-shadow: var(--calendar-shadow);
+}
+
+.modal-panel .appointment-card,
+.modal-panel .account-section,
+.modal-panel .myshift-card,
+.modal-panel .recurring-card,
+.modal-panel .volunteer-row,
+.modal-panel .notification-card,
+.modal-panel .helpful-section,
+.modal-panel .volunteer-hours-card,
+.week-glance-table-wrap,
+.shift-chip,
+.empty-banner,
+.loading-banner,
+.error-banner {
+  border-radius: 8px;
+  border-color: color-mix(in srgb, var(--calendar-border) 86%, transparent);
+  background: color-mix(in srgb, var(--calendar-surface-soft) 82%, #ffffff 18%);
+  color: var(--ink-primary);
+  box-shadow: 0 7px 18px rgba(77, 44, 28, 0.07);
+}
+
+.modal-panel .appointment-card,
+.modal-panel .myshift-card,
+.modal-panel .recurring-card,
+.modal-panel .volunteer-row,
+.modal-panel .notification-card {
+  transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.modal-panel .appointment-card-editable:hover,
+.modal-panel .myshift-card:not(:disabled):hover,
+.modal-panel .volunteer-row:hover,
+.modal-panel .notification-card:hover {
+  border-color: color-mix(in srgb, var(--rose-400) 72%, transparent);
+  box-shadow: 0 10px 24px rgba(77, 44, 28, 0.11);
+  transform: translateY(-1px);
+}
+
+.modal-panel .account-section,
+.modal-panel .volunteer-recurring,
+.modal-panel .myshifts-section,
+.modal-panel .notifications-section,
+.modal-panel .helpful-section {
+  gap: 10px;
+}
+
+.modal-panel .modal-label,
+.modal-panel .account-section-title,
+.modal-panel .myshifts-section-title,
+.modal-panel .notifications-section-title,
+.modal-panel .myshift-detail-label,
+.modal-panel .recurring-meta,
+.modal-panel .volunteer-meta,
+.modal-panel .volunteer-joined,
+.modal-panel .notification-meta,
+.modal-panel .notification-reason,
+.modal-panel .appointment-time,
+.modal-panel .appointment-card-meta,
+.modal-panel .appointment-checklist-title,
+.modal-panel .appointment-save-status,
+.modal-panel .pagination-label,
+.modal-panel .repeat-day {
+  color: var(--ink-muted);
+}
+
+.modal-panel .myshift-detail-value,
+.modal-panel .recurring-meta-label,
+.modal-panel .appointment-title,
+.modal-panel .notification-name,
+.modal-panel .volunteer-name,
+.modal-panel .myshift-title {
+  color: var(--ink-primary);
+}
+
+.modal-panel .form-input,
+.modal-panel .form-textarea,
+.modal-panel select.form-input,
+.account-panel .form-input,
+.account-panel .form-textarea,
+.account-panel select.form-input,
+.appointment-form .form-input {
+  border-radius: 8px;
+  border-color: color-mix(in srgb, var(--calendar-border) 90%, transparent);
+  background: color-mix(in srgb, var(--calendar-surface) 86%, #ffffff 14%);
+  color: var(--ink-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.modal-panel .form-input:focus,
+.modal-panel .form-textarea:focus,
+.account-panel .form-input:focus,
+.account-panel .form-textarea:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--rose-400) 72%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rose-400) 20%, transparent);
+}
+
+.account-section,
+.myshift-card,
+.recurring-card,
+.volunteer-row,
+.notification-card,
+.appointment-card {
+  overflow: hidden;
+}
+
+.notification-list-item,
+.notification-swipe-delete-bg,
+.notification-skeleton {
+  border-radius: 8px;
+}
+
+.notification-card.latest {
+  border-color: color-mix(in srgb, var(--brand-accent) 50%, transparent);
+  background: color-mix(in srgb, var(--calendar-surface-soft) 70%, var(--rose-200) 30%);
+}
+
+.notification-tag,
+.myshift-role,
+.recurring-pill,
+.volunteer-role-filter,
+.appointment-expand-button,
+.shift-chip {
+  border-radius: 999px;
+}
+
+.week-glance-table {
+  background: var(--calendar-surface);
+}
+
+.week-glance-table th {
+  background: color-mix(in srgb, var(--calendar-surface-soft) 88%, #ffffff 12%);
+}
+
+.week-glance-table th,
+.week-glance-table td {
+  border-color: color-mix(in srgb, var(--calendar-border) 86%, transparent);
+}
+
+.helpful-section {
+  padding: 12px;
+}
+
+.helpful-contact {
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--calendar-border) 60%, transparent);
+}
+
+.helpful-contact:last-child {
+  border-bottom: 0;
+}
+
+.helpful-link,
+.helpful-phone,
+.helpful-phone:visited,
+.modal-panel .volunteer-phone-link,
+.volunteer-phone-link {
+  color: var(--brand-accent);
+}
+
+.empty-banner {
+  border-color: rgba(245, 158, 11, 0.38);
+  background: color-mix(in srgb, #fef3c7 58%, var(--calendar-surface) 42%);
+}
+
+.error-banner {
+  border-color: rgba(248, 113, 113, 0.42);
+  background: color-mix(in srgb, #fee2e2 56%, var(--calendar-surface) 44%);
+}
+
+.loading-banner {
+  border-color: color-mix(in srgb, var(--calendar-border) 86%, transparent);
+}
+
+html[data-theme="dark"] .modal-panel,
+html[data-theme="dark"] .take-shift-panel,
+html[data-theme="dark"] .volunteer-note-panel,
+html[data-theme="dark"] .remove-volunteer-panel,
+html[data-theme="dark"] .appointment-note-panel {
+  background: color-mix(in srgb, var(--calendar-surface) 88%, #020617 12%);
+  border-color: var(--calendar-border);
+}
+
+html[data-theme="dark"] .modal-panel .appointment-card,
+html[data-theme="dark"] .modal-panel .account-section,
+html[data-theme="dark"] .modal-panel .myshift-card,
+html[data-theme="dark"] .modal-panel .recurring-card,
+html[data-theme="dark"] .modal-panel .volunteer-row,
+html[data-theme="dark"] .modal-panel .notification-card,
+html[data-theme="dark"] .modal-panel .helpful-section,
+html[data-theme="dark"] .modal-panel .volunteer-hours-card,
+html[data-theme="dark"] .week-glance-table-wrap,
+html[data-theme="dark"] .shift-chip,
+html[data-theme="dark"] .empty-banner,
+html[data-theme="dark"] .loading-banner,
+html[data-theme="dark"] .error-banner {
+  background: color-mix(in srgb, var(--calendar-surface-soft) 86%, #020617 14%);
+  border-color: color-mix(in srgb, var(--calendar-border) 88%, transparent);
+  color: var(--ink-primary);
+}
+
+html[data-theme="dark"] .modal-panel .form-input,
+html[data-theme="dark"] .modal-panel .form-textarea,
+html[data-theme="dark"] .modal-panel select.form-input,
+html[data-theme="dark"] .account-panel .form-input,
+html[data-theme="dark"] .account-panel .form-textarea,
+html[data-theme="dark"] .account-panel select.form-input,
+html[data-theme="dark"] .appointment-form .form-input {
+  background: color-mix(in srgb, var(--calendar-surface) 82%, #020617 18%);
+  border-color: color-mix(in srgb, var(--calendar-border) 90%, transparent);
+  color: var(--ink-primary);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .modal-backdrop,
   .modal-panel {
