@@ -21,14 +21,14 @@
 }
 
 html[data-theme="dark"] {
-  --rose-50: #0f1c31;
-  --rose-100: #152744;
-  --rose-200: #1f3458;
-  --rose-300: #294b76;
-  --rose-400: #77b7ff;
-  --ink-primary: #eef5ff;
-  --ink-muted: #c2d4ef;
-  --brand-accent: #8fc4ff;
+  --rose-50: #071426;
+  --rose-100: #0d213d;
+  --rose-200: #14335c;
+  --rose-300: #24558c;
+  --rose-400: #72b7ff;
+  --ink-primary: #f4f8ff;
+  --ink-muted: #bdd3f2;
+  --brand-accent: #93c9ff;
   --role-admin: #f0a8c6;
   --role-lead: #9bc9ff;
   --role-regular: #9fd9ad;
@@ -36,10 +36,10 @@ html[data-theme="dark"] {
   --onboarding-shell-bg: #0d1b30;
   --onboarding-card-border: #294b76;
   --focus-ring-strong: #77b7ff;
-  --calendar-surface: color-mix(in srgb, var(--rose-100) 72%, #020617 28%);
-  --calendar-surface-soft: color-mix(in srgb, var(--rose-100) 58%, #020617 42%);
-  --calendar-border: color-mix(in srgb, var(--rose-400) 34%, transparent);
-  --calendar-shadow: 0 16px 38px rgba(0, 0, 0, 0.28);
+  --calendar-surface: #0a1b33;
+  --calendar-surface-soft: #122a4a;
+  --calendar-border: rgba(114, 183, 255, 0.38);
+  --calendar-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
 }
 
 .sr-only {
@@ -317,6 +317,7 @@ html[data-theme="dark"] {
 
 .menu-shell {
   position: relative;
+  z-index: 130;
 }
 
 .menu-button {
@@ -349,7 +350,8 @@ html[data-theme="dark"] {
   gap: 8px;
   min-width: 180px;
   box-shadow: 0 18px 36px rgba(77, 44, 28, 0.22);
-  z-index: 5;
+  box-sizing: border-box;
+  z-index: 120;
 }
 
 .menu-item {
@@ -367,6 +369,9 @@ html[data-theme="dark"] {
   align-items: center;
   justify-content: flex-start;
   letter-spacing: 0.01em;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .menu-item:hover {
@@ -381,7 +386,7 @@ html[data-theme="dark"] {
 .menu-item-theme-toggle {
   justify-content: space-between;
   gap: 12px;
-  min-width: 220px;
+  min-width: 0;
 }
 
 .menu-item-subtoggle {
@@ -770,17 +775,26 @@ html[data-theme="dark"] {
   }
 
   .menu-dropdown {
-    min-width: 220px;
-    width: max-content;
-    max-width: calc(100vw - 24px);
+    min-width: 0;
+    width: min(320px, calc(100vw - 48px));
+    max-width: calc(100vw - 48px);
     padding: 10px;
     gap: 8px;
+    right: 0;
   }
 
   .menu-item {
     min-height: 36px;
     padding: 0 12px;
     font-size: 0.9rem;
+  }
+
+  .menu-item-theme-toggle {
+    gap: 8px;
+  }
+
+  .menu-theme-toggle-track {
+    width: 96px;
   }
 
   .month-nav-left {
@@ -2364,7 +2378,38 @@ html[data-theme="dark"] .capacity-slot-extra {
 }
 
 html[data-theme="dark"] .calendar-panel {
-  background: color-mix(in srgb, var(--rose-50) 74%, #020617 26%);
+  background: #07182d;
+}
+
+html[data-theme="dark"] .calendar-shell > .calendar-header,
+html[data-theme="dark"] .menu-dropdown {
+  background: #0a1b33;
+  border-color: rgba(114, 183, 255, 0.42);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+}
+
+html[data-theme="dark"] .menu-item,
+html[data-theme="dark"] .menu-theme-toggle-track {
+  background: #132a4c;
+  border-color: rgba(114, 183, 255, 0.22);
+  color: var(--ink-primary);
+}
+
+html[data-theme="dark"] .menu-item:hover {
+  border-color: rgba(147, 201, 255, 0.58);
+  background: #18365f;
+}
+
+html[data-theme="dark"] .day-cell {
+  background: #0b1d35;
+  border-color: rgba(114, 183, 255, 0.3);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+}
+
+html[data-theme="dark"] .shift-block {
+  background: #162f52;
+  border-color: rgba(114, 183, 255, 0.28);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
 }
 
 html[data-theme="dark"] .capacity-slot {
@@ -4434,7 +4479,7 @@ html[data-theme="dark"] .take-shift-panel,
 html[data-theme="dark"] .volunteer-note-panel,
 html[data-theme="dark"] .remove-volunteer-panel,
 html[data-theme="dark"] .appointment-note-panel {
-  background: color-mix(in srgb, var(--calendar-surface) 88%, #020617 12%);
+  background: #0a1b33;
   border-color: var(--calendar-border);
 }
 
@@ -4451,7 +4496,7 @@ html[data-theme="dark"] .shift-chip,
 html[data-theme="dark"] .empty-banner,
 html[data-theme="dark"] .loading-banner,
 html[data-theme="dark"] .error-banner {
-  background: color-mix(in srgb, var(--calendar-surface-soft) 86%, #020617 14%);
+  background: #102744;
   border-color: color-mix(in srgb, var(--calendar-border) 88%, transparent);
   color: var(--ink-primary);
 }
@@ -4463,7 +4508,7 @@ html[data-theme="dark"] .account-panel .form-input,
 html[data-theme="dark"] .account-panel .form-textarea,
 html[data-theme="dark"] .account-panel select.form-input,
 html[data-theme="dark"] .appointment-form .form-input {
-  background: color-mix(in srgb, var(--calendar-surface) 82%, #020617 18%);
+  background: #081a30;
   border-color: color-mix(in srgb, var(--calendar-border) 90%, transparent);
   color: var(--ink-primary);
 }
