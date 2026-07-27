@@ -14,10 +14,10 @@
   --onboarding-shell-bg: #be9b7b;
   --onboarding-card-border: #be9b7b;
   --focus-ring-strong: #be9b7b;
-  --calendar-surface: color-mix(in srgb, var(--rose-50) 82%, #ffffff 18%);
-  --calendar-surface-soft: color-mix(in srgb, var(--rose-100) 72%, #ffffff 28%);
-  --calendar-border: color-mix(in srgb, var(--rose-400) 42%, transparent);
-  --calendar-shadow: 0 14px 34px rgba(77, 44, 28, 0.12);
+  --calendar-surface: #f8ece4;
+  --calendar-surface-soft: #f1ddd1;
+  --calendar-border: rgba(185, 105, 60, 0.3);
+  --calendar-shadow: 0 14px 34px rgba(77, 44, 28, 0.11);
 }
 
 html[data-theme="dark"] {
@@ -107,7 +107,7 @@ html[data-theme="dark"] {
 }
 
 .calendar-shell > .calendar-header {
-  background: color-mix(in srgb, var(--calendar-surface) 86%, transparent);
+  background: #f8ede6;
   color: var(--ink-primary);
   border-radius: 10px;
   padding: 12px 14px;
@@ -343,24 +343,25 @@ html[data-theme="dark"] {
   position: absolute;
   right: 0;
   top: calc(100% + 8px);
-  background: var(--rose-50);
+  background: #f8ede6;
   border: 1px solid color-mix(in srgb, var(--rose-400) 75%, #0000);
-  border-radius: 16px;
+  border-radius: 10px;
   padding: 10px;
   display: grid;
   gap: 8px;
-  min-width: 180px;
+  min-width: 230px;
+  width: 230px;
   box-shadow: 0 18px 36px rgba(77, 44, 28, 0.22);
   box-sizing: border-box;
   z-index: 120;
 }
 
 .menu-item {
-  border-radius: 14px;
+  border-radius: 8px;
   border: 1px solid transparent;
   min-height: 50px;
-  padding: 0 14px;
-  background: var(--rose-100);
+  padding: 0 12px;
+  background: #f1ddd1;
   color: var(--ink-primary);
   font-weight: 600;
   font-size: 0.95rem;
@@ -386,8 +387,10 @@ html[data-theme="dark"] {
 
 .menu-item-theme-toggle {
   justify-content: space-between;
-  gap: 12px;
+  column-gap: 10px;
   min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 78px;
 }
 
 .menu-item-subtoggle {
@@ -397,6 +400,9 @@ html[data-theme="dark"] {
 
 .menu-item-label {
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .menu-item-caret {
@@ -424,8 +430,8 @@ html[data-theme="dark"] {
 }
 
 .menu-theme-toggle-track {
-  width: 92px;
-  height: 28px;
+  width: 78px;
+  height: 26px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--rose-400) 85%, #0000);
   background: var(--rose-50);
@@ -435,6 +441,7 @@ html[data-theme="dark"] {
   align-items: center;
   padding: 2px;
   flex: 0 0 auto;
+  justify-self: end;
   overflow: hidden;
   transition: background-color 0.2s ease, border-color 0.2s ease;
 }
@@ -443,8 +450,8 @@ html[data-theme="dark"] {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 44px;
-  height: 22px;
+  width: 37px;
+  height: 20px;
   border-radius: 999px;
   background: #fff8f2;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
@@ -457,7 +464,7 @@ html[data-theme="dark"] {
   z-index: 1;
   display: grid;
   place-items: center;
-  font-size: 0.72rem;
+  font-size: 0.64rem;
   font-weight: 700;
   line-height: 1;
   color: var(--ink-muted);
@@ -475,7 +482,7 @@ html[data-theme="dark"] {
 }
 
 .menu-theme-toggle-track.is-on .menu-theme-toggle-thumb {
-  transform: translateX(44px);
+  transform: translateX(37px);
 }
 
 .week-glance-title {
@@ -777,25 +784,40 @@ html[data-theme="dark"] {
 
   .menu-dropdown {
     min-width: 0;
-    width: min(320px, calc(100vw - 48px));
-    max-width: calc(100vw - 48px);
-    padding: 10px;
-    gap: 8px;
+    width: min(260px, calc(100vw - 72px));
+    max-width: calc(100vw - 72px);
+    padding: 9px;
+    gap: 7px;
     right: 0;
   }
 
   .menu-item {
-    min-height: 36px;
-    padding: 0 12px;
-    font-size: 0.9rem;
+    min-height: 34px;
+    padding: 0 11px;
+    font-size: 0.84rem;
   }
 
   .menu-item-theme-toggle {
-    gap: 8px;
+    column-gap: 8px;
+    grid-template-columns: minmax(0, 1fr) 74px;
   }
 
   .menu-theme-toggle-track {
-    width: 96px;
+    width: 74px;
+    height: 24px;
+  }
+
+  .menu-theme-toggle-thumb {
+    width: 35px;
+    height: 18px;
+  }
+
+  .menu-theme-toggle-track.is-on .menu-theme-toggle-thumb {
+    transform: translateX(35px);
+  }
+
+  .menu-theme-toggle-option {
+    font-size: 0.6rem;
   }
 
   .month-nav-left {
@@ -969,7 +991,7 @@ html[data-theme="dark"] {
 }
 
 .calendar-panel {
-  background: color-mix(in srgb, var(--rose-100) 54%, #ffffff 46%);
+  background: #f4e8df;
   border: 1px solid var(--calendar-border);
   border-radius: 10px;
   padding: 14px;
@@ -1012,8 +1034,8 @@ html[data-theme="dark"] .weekday-today {
   min-height: 132px;
   border-radius: 8px;
   padding: 12px;
-  background: var(--calendar-surface);
-  border: 1px solid color-mix(in srgb, var(--calendar-border) 82%, transparent);
+  background: #f1dfd4;
+  border: 1px solid rgba(185, 105, 60, 0.34);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1232,7 +1254,7 @@ html[data-theme="dark"] .weekday-today {
   border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--calendar-border) 88%, transparent);
   padding: 10px;
-  background: color-mix(in srgb, var(--calendar-surface-soft) 84%, #ffffff 16%);
+  background: #e7d0c2;
   display: grid;
   gap: 9px;
   container-type: inline-size;
@@ -1263,6 +1285,19 @@ html[data-theme="dark"] .weekday-today {
 
 .shift-block-header-clickable:hover .shift-block-title {
   text-decoration: underline;
+}
+
+.shift-block:has(.shift-appointments-list) {
+  gap: 10px;
+}
+
+.shift-block:has(.shift-appointments-list) .shift-block-header {
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(185, 105, 60, 0.22);
+}
+
+.shift-block:has(.shift-appointments-list) .shift-block-meta {
+  font-size: 0.76rem;
 }
 
 .shift-appointments-button {
@@ -1421,7 +1456,7 @@ html[data-theme="dark"] .weekday-today {
 
 .shift-appointments-list {
   display: grid;
-  gap: 8px;
+  gap: 7px;
 }
 
 .shift-appointment-item {
@@ -1430,8 +1465,8 @@ html[data-theme="dark"] .weekday-today {
 
 .shift-appointment-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  gap: 10px;
   align-items: center;
 }
 
@@ -1439,32 +1474,36 @@ html[data-theme="dark"] .weekday-today {
   min-width: 0;
   width: 100%;
   text-align: left;
-  border-radius: 10px;
-  padding: 6px 8px;
-  border: 1px solid color-mix(in srgb, var(--rose-400) 70%, #0000);
+  border-radius: 8px;
+  padding: 9px 10px 9px 12px;
+  border: 1px solid rgba(185, 105, 60, 0.24);
   border-left-width: 4px;
-  background: var(--rose-50);
+  background: #f8ede6;
   color: var(--ink-primary);
   display: grid;
-  gap: 2px;
-  min-height: 42px;
+  gap: 3px;
+  min-height: 46px;
+  box-shadow: 0 5px 12px rgba(77, 44, 28, 0.06);
+  transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .shift-appointment-button:hover {
-  border-color: var(--rose-400);
+  border-color: rgba(185, 105, 60, 0.44);
+  box-shadow: 0 7px 16px rgba(77, 44, 28, 0.1);
+  transform: translateY(-1px);
 }
 
 .shift-appointment-title {
   margin: 0;
-  font-weight: 700;
-  font-size: 0.76rem;
-  line-height: 1.2;
+  font-weight: 800;
+  font-size: 0.78rem;
+  line-height: 1.22;
   overflow-wrap: anywhere;
 }
 
 .shift-appointment-check {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1474,8 +1513,8 @@ html[data-theme="dark"] .weekday-today {
 }
 
 .shift-appointment-check input {
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
   margin: 0;
   accent-color: var(--rose-500);
 }
@@ -2250,7 +2289,7 @@ html[data-theme="dark"] .weekday-today {
   min-height: 44px;
   border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--calendar-border) 72%, transparent);
-  background: color-mix(in srgb, var(--calendar-surface) 78%, transparent);
+  background: #ead4c7;
   padding: 7px 9px;
   font-size: 0.72rem;
   line-height: 1.2;
@@ -2258,10 +2297,29 @@ html[data-theme="dark"] .weekday-today {
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  gap: 8px;
   word-break: break-word;
   color: inherit;
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--rose-400) 52%, transparent);
   transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.capacity-slot-badge {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  font-size: 0.68rem;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0;
+  color: currentColor;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
 }
 
 .capacity-slot:not(:disabled):hover {
@@ -2273,17 +2331,27 @@ html[data-theme="dark"] .weekday-today {
 }
 
 .capacity-slot.none {
-  background: color-mix(in srgb, #fee2e2 80%, var(--calendar-surface) 20%);
-  border-color: rgba(248, 113, 113, 0.46);
+  background: #f8cfcf;
+  border-color: rgba(220, 38, 38, 0.42);
   box-shadow: inset 3px 0 0 rgba(248, 113, 113, 0.72);
   color: #7f1d1d;
 }
 
+.capacity-slot.none .capacity-slot-badge {
+  color: #b91c1c;
+  background: #fca5a5;
+}
+
 .capacity-slot.needs-lead {
-  background: color-mix(in srgb, #fef3c7 78%, var(--calendar-surface) 22%);
-  border-color: rgba(245, 158, 11, 0.5);
+  background: #f6dea5;
+  border-color: rgba(217, 119, 6, 0.48);
   box-shadow: inset 3px 0 0 rgba(245, 158, 11, 0.78);
   color: #3b2a12;
+}
+
+.capacity-slot.needs-lead .capacity-slot-badge {
+  color: #92400e;
+  background: #fbbf24;
 }
 
 html[data-theme="dark"] .capacity-slot.needs-lead {
@@ -2293,40 +2361,62 @@ html[data-theme="dark"] .capacity-slot.needs-lead {
 }
 
 .capacity-slot.assigned {
-  background: color-mix(in srgb, #dcfce7 74%, var(--calendar-surface) 26%);
-  border-color: rgba(74, 166, 100, 0.35);
+  background: #c8e4cf;
+  border-color: rgba(34, 134, 75, 0.38);
   box-shadow: inset 3px 0 0 rgba(74, 166, 100, 0.62);
 }
 
+.capacity-slot.assigned .capacity-slot-badge {
+  color: #14532d;
+  background: #86d69c;
+}
+
 .capacity-slot.lead {
-  background: color-mix(in srgb, #dbeafe 76%, var(--calendar-surface) 24%);
-  border-color: rgba(96, 165, 250, 0.5);
+  background: #c7d9f1;
+  border-color: rgba(37, 99, 235, 0.38);
   box-shadow: inset 3px 0 0 rgba(59, 130, 246, 0.7);
 }
 
+.capacity-slot.lead .capacity-slot-badge,
+.capacity-slot.admin .capacity-slot-badge {
+  color: #1e3a8a;
+  background: #8db9f3;
+}
+
 .capacity-slot.admin {
-  background: color-mix(in srgb, #dbeafe 76%, var(--calendar-surface) 24%);
-  border-color: rgba(96, 165, 250, 0.5);
+  background: #c7d9f1;
+  border-color: rgba(37, 99, 235, 0.38);
   box-shadow: inset 3px 0 0 rgba(59, 130, 246, 0.7);
 }
 
 .capacity-slot.pending {
-  background: color-mix(in srgb, #fef3c7 76%, var(--calendar-surface) 24%);
-  border-color: rgba(245, 158, 11, 0.5);
+  background: #f4dfa8;
+  border-color: rgba(217, 119, 6, 0.42);
   box-shadow: inset 3px 0 0 rgba(245, 158, 11, 0.78);
 }
 
+.capacity-slot.pending .capacity-slot-badge {
+  color: #92400e;
+  background: #facc15;
+}
+
 .capacity-slot.other {
-  background: color-mix(in srgb, #f3e8ff 76%, var(--calendar-surface) 24%);
-  border-color: rgba(168, 85, 247, 0.42);
+  background: #dfcdf0;
+  border-color: rgba(126, 34, 206, 0.36);
   box-shadow: inset 3px 0 0 rgba(147, 51, 234, 0.66);
 }
 
 .capacity-slot.shadow {
-  background: color-mix(in srgb, #f3e8ff 80%, var(--calendar-surface) 20%);
-  border-color: rgba(168, 85, 247, 0.5);
+  background: #dfcdf0;
+  border-color: rgba(126, 34, 206, 0.42);
   box-shadow: inset 3px 0 0 rgba(147, 51, 234, 0.72);
   color: inherit;
+}
+
+.capacity-slot.other .capacity-slot-badge,
+.capacity-slot.shadow .capacity-slot-badge {
+  color: #581c87;
+  background: #c7a6e8;
 }
 
 .capacity-slot:disabled {
@@ -2429,10 +2519,21 @@ html[data-theme="dark"] .capacity-slot.assigned {
   border-color: rgba(74, 222, 128, 0.25);
 }
 
+html[data-theme="dark"] .capacity-slot.assigned .capacity-slot-badge {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.24);
+}
+
 html[data-theme="dark"] .capacity-slot.lead,
 html[data-theme="dark"] .capacity-slot.admin {
   background: rgba(59, 130, 246, 0.16);
   border-color: rgba(147, 197, 253, 0.28);
+}
+
+html[data-theme="dark"] .capacity-slot.lead .capacity-slot-badge,
+html[data-theme="dark"] .capacity-slot.admin .capacity-slot-badge {
+  color: #dbeafe;
+  background: rgba(59, 130, 246, 0.28);
 }
 
 html[data-theme="dark"] .capacity-slot.pending {
@@ -2440,10 +2541,42 @@ html[data-theme="dark"] .capacity-slot.pending {
   border-color: rgba(251, 191, 36, 0.3);
 }
 
+html[data-theme="dark"] .capacity-slot.pending .capacity-slot-badge,
+html[data-theme="dark"] .capacity-slot.needs-lead .capacity-slot-badge {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.24);
+}
+
 html[data-theme="dark"] .capacity-slot.other,
 html[data-theme="dark"] .capacity-slot.shadow {
   background: rgba(147, 51, 234, 0.18);
   border-color: rgba(196, 181, 253, 0.28);
+}
+
+html[data-theme="dark"] .capacity-slot.other .capacity-slot-badge,
+html[data-theme="dark"] .capacity-slot.shadow .capacity-slot-badge {
+  color: #f3e8ff;
+  background: rgba(147, 51, 234, 0.28);
+}
+
+html[data-theme="dark"] .capacity-slot.none .capacity-slot-badge {
+  color: #fecaca;
+  background: rgba(248, 113, 113, 0.22);
+}
+
+html[data-theme="dark"] .shift-block:has(.shift-appointments-list) .shift-block-header {
+  border-bottom-color: rgba(114, 183, 255, 0.2);
+}
+
+html[data-theme="dark"] .shift-appointment-button {
+  background: #0b1d35;
+  border-color: rgba(114, 183, 255, 0.22);
+  color: var(--ink-primary);
+}
+
+html[data-theme="dark"] .shift-appointment-button:hover {
+  border-color: rgba(147, 201, 255, 0.48);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
 }
 
 .modal-label {
@@ -4317,7 +4450,7 @@ html[data-theme="dark"] .range-mode-select {
 .error-banner {
   border-radius: 8px;
   border-color: color-mix(in srgb, var(--calendar-border) 86%, transparent);
-  background: color-mix(in srgb, var(--calendar-surface-soft) 82%, #ffffff 18%);
+  background: #ead4c7;
   color: var(--ink-primary);
   box-shadow: 0 7px 18px rgba(77, 44, 28, 0.07);
 }
@@ -4415,7 +4548,7 @@ html[data-theme="dark"] .range-mode-select {
 
 .notification-card.latest {
   border-color: color-mix(in srgb, var(--brand-accent) 50%, transparent);
-  background: color-mix(in srgb, var(--calendar-surface-soft) 70%, var(--rose-200) 30%);
+  background: #e3c9ba;
 }
 
 .notification-tag,

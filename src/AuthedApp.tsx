@@ -4357,6 +4357,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       : assignment.assignment_role === "lead"
                         ? "lead"
                         : "assigned";
+              const slotBadgeLabel =
+                assignment?.status === "pending"
+                  ? "P"
+                  : assignment && hasOtherLabel
+                    ? parsedOtherNote.display.trim().slice(0, 1).toUpperCase() || "O"
+                    : assignment && hasVolunteer
+                      ? (name ?? "Volunteer").trim().slice(0, 1).toUpperCase() || "V"
+                      : index === 0
+                        ? "!"
+                        : "N";
               return (
                 <button
                   key={`${shift.id}-slot-${index}`}
@@ -4435,8 +4445,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                   }}
                 >
                   {assignment?.status === "pending" ? (
-                    "Pending"
+                    <>
+                      <span className="capacity-slot-badge" aria-hidden="true">{slotBadgeLabel}</span>
+                      <div className="capacity-slot-content">
+                        <span className="capacity-slot-name">Pending</span>
+                      </div>
+                    </>
                   ) : assignment && hasOtherLabel ? (
+                    <>
+                    <span className="capacity-slot-badge" aria-hidden="true">{slotBadgeLabel}</span>
                     <div className="capacity-slot-content">
                       <span className="capacity-slot-name">
                         {parsedOtherNote.isShadowShift
@@ -4444,7 +4461,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           : parsedOtherNote.display}
                       </span>
                     </div>
+                    </>
                   ) : assignment && hasVolunteer ? (
+                    <>
+                    <span className="capacity-slot-badge" aria-hidden="true">{slotBadgeLabel}</span>
                     <div className="capacity-slot-content">
                       <span className="capacity-slot-name">{name ?? "No Volunteer Assigned"}</span>
                       {parsedOtherNote.isShadowShift ? (
@@ -4466,8 +4486,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         </span>
                       ) : null}
                     </div>
+                    </>
                   ) : (
-                    (index === 0 ? "Needs Lead Coverage" : "No Volunteer Assigned")
+                    <>
+                      <span className="capacity-slot-badge" aria-hidden="true">{slotBadgeLabel}</span>
+                      <div className="capacity-slot-content">
+                        <span className="capacity-slot-name">
+                          {index === 0 ? "Needs Lead Coverage" : "No Volunteer Assigned"}
+                        </span>
+                      </div>
+                    </>
                   )}
                 </button>
               );
