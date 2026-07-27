@@ -12,6 +12,7 @@ import {
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { signOutSafely, supabase } from "./supabaseClient";
+import AppLoader from "./components/AppLoader";
 import {
   APPOINTMENT_COLOR_ADOPTION,
   APPOINTMENT_COLOR_FOSTER,
@@ -614,6 +615,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [today, setToday] = useState(() => startOfDay(new Date()));
   const [templates, setTemplates] = useState<ShiftTemplate[]>(() => readCachedTemplates());
   const [loading, setLoading] = useState(() => readCachedTemplates().length === 0);
+  const [initialCalendarLoading, setInitialCalendarLoading] = useState(true);
   const [visibleRealInstanceIdsBySlot, setVisibleRealInstanceIdsBySlot] = useState<Record<string, number>>({});
   const [activeShiftInstanceId, setActiveShiftInstanceId] = useState<number | null>(null);
   const [instanceShifts, setInstanceShifts] = useState<ShiftInstance[]>([]);
@@ -793,6 +795,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const weekAppointmentsFetchSeqRef = useRef(0);
   const weekAppointmentsHydratedKeyRef = useRef<string | null>(null);
   const pushSubscriptionSyncInFlightRef = useRef(false);
+  const initialCalendarHydratedRef = useRef(false);
   const initialTodayScrollDoneRef = useRef(false);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const swipeTriggeredRef = useRef(false);
@@ -1176,6 +1179,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     };
   }, []);
 
+  const finishInitialCalendarLoad = useCallback(() => {
+    if (initialCalendarHydratedRef.current) return;
+    initialCalendarHydratedRef.current = true;
+    setInitialCalendarLoading(false);
+  }, []);
+
   useEffect(() => {
     let mounted = true;
 
@@ -1269,6 +1278,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       if (visibleDates.length === 0) {
         setInstanceShifts([]);
         setVisibleRealInstanceIdsBySlot({});
+        finishInitialCalendarLoad();
         return;
       }
 
@@ -1327,6 +1337,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       if (error || !data) {
         setInstanceShifts([]);
         setVisibleRealInstanceIdsBySlot({});
+        finishInitialCalendarLoad();
         return;
       }
 
@@ -1445,6 +1456,22 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
       if (rowsToInsert.length === 0) return;
 
+      if (!initialCalendarHydratedRef.current) {
+        const { error: insertError } = await supabase
+          .from("shift_instances")
+          .upsert(rowsToInsert, { onConflict: "template_id,shift_date" });
+        if (insertError) {
+          if (import.meta.env.DEV) {
+            console.warn("Unable to generate visible shift instances", insertError.message);
+          }
+          finishInitialCalendarLoad();
+          return;
+        }
+        if (!mounted) return;
+        setShiftInstancesRefreshToken((value) => value + 1);
+        return;
+      }
+
       void supabase
         .from("shift_instances")
         .upsert(rowsToInsert, { onConflict: "template_id,shift_date" })
@@ -1465,7 +1492,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     return () => {
       mounted = false;
     };
-  }, [today, weekOffset, monthOffset, calendarRangeMode, templates, shiftInstancesRefreshToken]);
+  }, [today, weekOffset, monthOffset, calendarRangeMode, templates, shiftInstancesRefreshToken, finishInitialCalendarLoad]);
+
+  useEffect(() => {
+    if (!loading && templates.length === 0) {
+      finishInitialCalendarLoad();
+    }
+  }, [finishInitialCalendarLoad, loading, templates.length]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 600px)");
@@ -1555,6 +1588,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       if (!weekAssignmentsHydratedKeyRef.current) {
         setWeekAssignments({});
       }
+      finishInitialCalendarLoad();
       return;
     }
 
@@ -1653,6 +1687,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         .order("created_at", { ascending: true })
         .range(from, from + pageSize - 1);
       if (error || !data) {
+        if (fetchSeq === weekAssignmentsFetchSeqRef.current) {
+          finishInitialCalendarLoad();
+        }
         return;
       }
       allAssignments.push(...(data as unknown as ShiftAssignmentDetail[]));
@@ -1828,13 +1865,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (fetchSeq !== weekAssignmentsFetchSeqRef.current) return;
     weekAssignmentsHydratedKeyRef.current = assignmentCacheKey;
     setWeekAssignments(dedupedMap);
+    finishInitialCalendarLoad();
     if (typeof window !== "undefined") {
       writeStoredJson(assignmentCacheKey, dedupedCacheMap, [
         WEEK_ASSIGNMENTS_CACHE_PREFIX,
         SHIFT_INSTANCE_CACHE_PREFIX,
       ]);
     }
-  }, [instanceShifts, session.user.id, visibleRealInstanceIdsBySlot]);
+  }, [finishInitialCalendarLoad, instanceShifts, session.user.id, visibleRealInstanceIdsBySlot]);
 
   const fetchWeekAppointments = useCallback(async () => {
     const fetchSeq = (weekAppointmentsFetchSeqRef.current += 1);
@@ -6863,6 +6901,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   return (
     <div className="calendar-shell">
+      <AppLoader visible={initialCalendarLoading} />
       <header className="calendar-header">
         <div>
           <div className="calendar-eyebrow-row">
