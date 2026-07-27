@@ -113,6 +113,7 @@ html[data-theme="dark"] {
   padding: 12px 14px;
   border: 1px solid var(--calendar-border);
   position: relative;
+  z-index: 140;
   box-shadow: 0 8px 24px rgba(77, 44, 28, 0.08);
   backdrop-filter: blur(12px) saturate(112%);
 }
@@ -1654,11 +1655,11 @@ html[data-theme="dark"] .weekday-today {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(95, 70, 58, 0.28);
+  background: color-mix(in srgb, var(--app-page-bg) 84%, rgba(47, 32, 24, 0.34));
   display: grid;
   place-items: center;
   padding: 20px;
-  z-index: 50;
+  z-index: 500;
   animation: modal-backdrop-fade 180ms ease-out;
 }
 
@@ -4511,6 +4512,58 @@ html[data-theme="dark"] .appointment-form .form-input {
   background: #081a30;
   border-color: color-mix(in srgb, var(--calendar-border) 90%, transparent);
   color: var(--ink-primary);
+}
+
+/* Final contrast and role-color safeguards after global card styling. */
+.modal-panel {
+  background: var(--calendar-surface);
+}
+
+.modal-panel .volunteer-name-admin,
+.modal-panel .volunteer-row .volunteer-name-admin,
+.modal-panel .notification-card .volunteer-name-admin {
+  color: var(--role-admin);
+}
+
+.modal-panel .volunteer-name-lead,
+.modal-panel .volunteer-row .volunteer-name-lead,
+.modal-panel .notification-card .volunteer-name-lead {
+  color: var(--role-lead);
+}
+
+.modal-panel .volunteer-name-regular,
+.modal-panel .volunteer-row .volunteer-name-regular,
+.modal-panel .notification-card .volunteer-name-regular {
+  color: var(--role-regular);
+}
+
+.modal-panel .volunteer-name-other,
+.modal-panel .volunteer-row .volunteer-name-other,
+.modal-panel .notification-card .volunteer-name-other {
+  color: var(--role-other);
+}
+
+.volunteer-role-filter.active.role-admin {
+  border-color: color-mix(in srgb, var(--role-admin) 70%, var(--calendar-border) 30%);
+  color: var(--role-admin);
+}
+
+.volunteer-role-filter.active.role-lead {
+  border-color: color-mix(in srgb, var(--role-lead) 70%, var(--calendar-border) 30%);
+  color: var(--role-lead);
+}
+
+.volunteer-role-filter.active.role-regular {
+  border-color: color-mix(in srgb, var(--role-regular) 70%, var(--calendar-border) 30%);
+  color: var(--role-regular);
+}
+
+html[data-theme="dark"] .modal-backdrop {
+  background: rgba(3, 10, 20, 0.86);
+}
+
+html[data-theme="dark"] .modal-panel {
+  background: #0a1b33;
 }
 
 @media (prefers-reduced-motion: reduce) {
