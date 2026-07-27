@@ -10,7 +10,7 @@ import {
   type TouchEvent as ReactTouchEvent,
 } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Check, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { Bell, Check, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { signOutSafely, supabase } from "./supabaseClient";
 import AppLoader from "./components/AppLoader";
 import {
@@ -632,6 +632,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsMessage, setNotificationsMessage] = useState("");
   const [notifications, setNotifications] = useState<AppNotificationItem[]>([]);
+  const [adminNotificationTab, setAdminNotificationTab] = useState<"requests" | "notifications">("requests");
   const [notificationShiftFallbacks, setNotificationShiftFallbacks] = useState<
     Record<
       number,
@@ -6927,6 +6928,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   ): item is RecurringAssignmentNotificationItem =>
     "notification_kind" in item && item.notification_kind === "recurring_assignment";
 
+  const isAdminRequestNotification = (item: AppNotificationItem) =>
+    !("notification_kind" in item) && item.status === "pending";
+  const adminRequestCount = notifications.filter(isAdminRequestNotification).length;
+  const adminOtherNotificationCount = notifications.length - adminRequestCount;
+  const visibleNotifications =
+    isAdminAccount && adminNotificationTab === "requests"
+      ? notifications.filter(isAdminRequestNotification)
+      : isAdminAccount
+        ? notifications.filter((item) => !isAdminRequestNotification(item))
+        : notifications;
+
   return (
     <div className="calendar-shell">
       <AppLoader visible={initialCalendarLoading} />
@@ -6986,7 +6998,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
             aria-label="Open notifications"
             title="Notifications"
           >
-            🔔
+            <Bell aria-hidden="true" className="notification-button-icon" strokeWidth={2.4} />
             {notificationCount > 0 ? (
               <span className="notification-badge">
                 {notificationCount > 9 ? "9+" : notificationCount}
@@ -8274,6 +8286,30 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <Trash2 size={18} strokeWidth={2.35} aria-hidden="true" />
               </button>
             </div>
+            {isAdminAccount ? (
+              <div className="notification-tabs" role="tablist" aria-label="Notification type">
+                <button
+                  className={`notification-tab ${adminNotificationTab === "requests" ? "active" : ""}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={adminNotificationTab === "requests"}
+                  onClick={() => setAdminNotificationTab("requests")}
+                >
+                  Requests
+                  <span className="notification-tab-count">{adminRequestCount}</span>
+                </button>
+                <button
+                  className={`notification-tab ${adminNotificationTab === "notifications" ? "active" : ""}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={adminNotificationTab === "notifications"}
+                  onClick={() => setAdminNotificationTab("notifications")}
+                >
+                  Notifications
+                  <span className="notification-tab-count">{adminOtherNotificationCount}</span>
+                </button>
+              </div>
+            ) : null}
             <div className="modal-body">
               {notificationsInitialLoading ? (
                 <div className="notifications-skeletons" aria-hidden="true">
@@ -8285,13 +8321,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               {notificationsMessage ? (
                 <div className="error-banner">{notificationsMessage}</div>
               ) : null}
-              {notifications.length === 0 && !notificationsInitialLoading ? (
-                <div className="empty-banner">Nothing Here!</div>
+              {visibleNotifications.length === 0 && !notificationsInitialLoading ? (
+                <div className="empty-banner">
+                  {isAdminAccount && adminNotificationTab === "requests"
+                    ? "No Requests"
+                    : "Nothing Here!"}
+                </div>
               ) : null}
-              {notifications.length > 0 ? (
+              {visibleNotifications.length > 0 ? (
                 <motion.div className="notifications-list" layout={prefersReducedMotion ? false : "position"}>
                   <AnimatePresence initial={false}>
-                  {notifications.map((request, index) => {
+                  {visibleNotifications.map((request, index) => {
                     const isLatest = index === 0;
                     if (isAppointmentNotification(request)) {
                       const shiftInstance = request.shift_instance;

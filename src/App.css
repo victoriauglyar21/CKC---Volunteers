@@ -36,10 +36,10 @@ html[data-theme="dark"] {
   --onboarding-shell-bg: #0d1b30;
   --onboarding-card-border: #294b76;
   --focus-ring-strong: #77b7ff;
-  --calendar-surface: #0a1b33;
-  --calendar-surface-soft: #122a4a;
-  --calendar-border: rgba(114, 183, 255, 0.38);
-  --calendar-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+  --calendar-surface: #061120;
+  --calendar-surface-soft: #102542;
+  --calendar-border: rgba(126, 191, 255, 0.5);
+  --calendar-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
 }
 
 .sr-only {
@@ -506,6 +506,17 @@ html[data-theme="dark"] {
   position: relative;
 }
 
+.notification-button-icon {
+  width: 17px;
+  height: 17px;
+  color: #111827;
+  display: block;
+}
+
+html[data-theme="dark"] .notification-button-icon {
+  color: #ffffff;
+}
+
 .notification-badge {
   position: absolute;
   top: -6px;
@@ -784,40 +795,40 @@ html[data-theme="dark"] {
 
   .menu-dropdown {
     min-width: 0;
-    width: min(260px, calc(100vw - 72px));
-    max-width: calc(100vw - 72px);
-    padding: 9px;
-    gap: 7px;
+    width: min(280px, calc(100vw - 56px));
+    max-width: calc(100vw - 56px);
+    padding: 10px;
+    gap: 8px;
     right: 0;
   }
 
   .menu-item {
-    min-height: 34px;
-    padding: 0 11px;
-    font-size: 0.84rem;
+    min-height: 42px;
+    padding: 0 13px;
+    font-size: 0.9rem;
   }
 
   .menu-item-theme-toggle {
     column-gap: 8px;
-    grid-template-columns: minmax(0, 1fr) 74px;
+    grid-template-columns: minmax(0, 1fr) 82px;
   }
 
   .menu-theme-toggle-track {
-    width: 74px;
-    height: 24px;
+    width: 82px;
+    height: 28px;
   }
 
   .menu-theme-toggle-thumb {
-    width: 35px;
-    height: 18px;
+    width: 39px;
+    height: 22px;
   }
 
   .menu-theme-toggle-track.is-on .menu-theme-toggle-thumb {
-    transform: translateX(35px);
+    transform: translateX(39px);
   }
 
   .menu-theme-toggle-option {
-    font-size: 0.6rem;
+    font-size: 0.66rem;
   }
 
   .month-nav-left {
@@ -1687,8 +1698,10 @@ html[data-theme="dark"] .weekday-today {
   border-radius: 14px;
   padding: 12px 16px;
   font-size: 0.9rem;
-  border: 1px solid rgba(255, 214, 80, 0.5);
-  background: rgba(255, 214, 80, 0.18);
+  border: 1px solid rgba(185, 105, 60, 0.34);
+  background: #e6cabc;
+  color: var(--ink-primary);
+  box-shadow: 0 8px 18px rgba(77, 44, 28, 0.08);
 }
 
 .modal-backdrop {
@@ -1944,6 +1957,58 @@ html[data-theme="dark"] .weekday-today {
   justify-content: flex-end;
   margin-top: -8px;
   padding-right: 8px;
+}
+
+.notification-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 12px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--calendar-border) 78%, transparent);
+  background: color-mix(in srgb, var(--calendar-surface-soft) 72%, transparent);
+}
+
+.notification-tab {
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.notification-tab.active {
+  background: var(--calendar-surface);
+  border-color: color-mix(in srgb, var(--rose-400) 76%, transparent);
+  color: var(--ink-primary);
+  box-shadow: 0 6px 14px rgba(77, 44, 28, 0.08);
+}
+
+.notification-tab-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--rose-400) 22%, transparent);
+  color: inherit;
+  display: inline-grid;
+  place-items: center;
+  font-size: 0.7rem;
+  line-height: 1;
 }
 
 .week-glance-panel {
@@ -2469,12 +2534,12 @@ html[data-theme="dark"] .capacity-slot-extra {
 }
 
 html[data-theme="dark"] .calendar-panel {
-  background: #07182d;
+  background: #040d19;
 }
 
 html[data-theme="dark"] .calendar-shell > .calendar-header,
 html[data-theme="dark"] .menu-dropdown {
-  background: #0a1b33;
+  background: #07172a;
   border-color: rgba(114, 183, 255, 0.42);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
 }
@@ -2492,76 +2557,83 @@ html[data-theme="dark"] .menu-item:hover {
 }
 
 html[data-theme="dark"] .day-cell {
-  background: #0b1d35;
-  border-color: rgba(114, 183, 255, 0.3);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  background: #08182d;
+  border-color: rgba(126, 191, 255, 0.46);
+  box-shadow:
+    0 14px 32px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 html[data-theme="dark"] .shift-block {
-  background: #162f52;
-  border-color: rgba(114, 183, 255, 0.28);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+  background: #102846;
+  border-color: rgba(142, 202, 255, 0.46);
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 html[data-theme="dark"] .capacity-slot {
-  background: color-mix(in srgb, var(--calendar-surface) 88%, transparent);
-  border-color: rgba(119, 183, 255, 0.18);
+  background: #0a1f3a;
+  border-color: rgba(138, 199, 255, 0.36);
+  box-shadow:
+    inset 3px 0 0 rgba(114, 183, 255, 0.76),
+    0 4px 12px rgba(0, 0, 0, 0.16);
 }
 
 html[data-theme="dark"] .capacity-slot.none {
-  background: rgba(127, 29, 29, 0.28);
-  border-color: rgba(248, 113, 113, 0.34);
+  background: #4a1f25;
+  border-color: rgba(248, 113, 113, 0.5);
   color: #fee2e2;
 }
 
 html[data-theme="dark"] .capacity-slot.assigned {
-  background: rgba(34, 197, 94, 0.14);
-  border-color: rgba(74, 222, 128, 0.25);
+  background: #174542;
+  border-color: rgba(74, 222, 128, 0.42);
 }
 
 html[data-theme="dark"] .capacity-slot.assigned .capacity-slot-badge {
   color: #bbf7d0;
-  background: rgba(34, 197, 94, 0.24);
+  background: #23684d;
 }
 
 html[data-theme="dark"] .capacity-slot.lead,
 html[data-theme="dark"] .capacity-slot.admin {
-  background: rgba(59, 130, 246, 0.16);
-  border-color: rgba(147, 197, 253, 0.28);
+  background: #12355f;
+  border-color: rgba(147, 197, 253, 0.52);
 }
 
 html[data-theme="dark"] .capacity-slot.lead .capacity-slot-badge,
 html[data-theme="dark"] .capacity-slot.admin .capacity-slot-badge {
   color: #dbeafe;
-  background: rgba(59, 130, 246, 0.28);
+  background: #2e5e9d;
 }
 
 html[data-theme="dark"] .capacity-slot.pending {
-  background: rgba(245, 158, 11, 0.16);
-  border-color: rgba(251, 191, 36, 0.3);
+  background: #4b3a18;
+  border-color: rgba(251, 191, 36, 0.48);
 }
 
 html[data-theme="dark"] .capacity-slot.pending .capacity-slot-badge,
 html[data-theme="dark"] .capacity-slot.needs-lead .capacity-slot-badge {
   color: #fde68a;
-  background: rgba(245, 158, 11, 0.24);
+  background: #7c5d19;
 }
 
 html[data-theme="dark"] .capacity-slot.other,
 html[data-theme="dark"] .capacity-slot.shadow {
-  background: rgba(147, 51, 234, 0.18);
-  border-color: rgba(196, 181, 253, 0.28);
+  background: #3b2b71;
+  border-color: rgba(196, 181, 253, 0.5);
 }
 
 html[data-theme="dark"] .capacity-slot.other .capacity-slot-badge,
 html[data-theme="dark"] .capacity-slot.shadow .capacity-slot-badge {
   color: #f3e8ff;
-  background: rgba(147, 51, 234, 0.28);
+  background: #5b3f9f;
 }
 
 html[data-theme="dark"] .capacity-slot.none .capacity-slot-badge {
   color: #fecaca;
-  background: rgba(248, 113, 113, 0.22);
+  background: #7f2a33;
 }
 
 html[data-theme="dark"] .shift-block:has(.shift-appointments-list) .shift-block-header {
@@ -4627,12 +4699,20 @@ html[data-theme="dark"] .modal-panel .helpful-section,
 html[data-theme="dark"] .modal-panel .volunteer-hours-card,
 html[data-theme="dark"] .week-glance-table-wrap,
 html[data-theme="dark"] .shift-chip,
-html[data-theme="dark"] .empty-banner,
 html[data-theme="dark"] .loading-banner,
 html[data-theme="dark"] .error-banner {
   background: #102744;
   border-color: color-mix(in srgb, var(--calendar-border) 88%, transparent);
   color: var(--ink-primary);
+}
+
+html[data-theme="dark"] .empty-banner {
+  background: #18304f;
+  border-color: rgba(142, 202, 255, 0.5);
+  color: var(--ink-primary);
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 html[data-theme="dark"] .modal-panel .form-input,
