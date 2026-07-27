@@ -128,6 +128,7 @@ const SHIFT_INSTANCE_CACHE_PREFIX = "ckc:shift-instances";
 const WEEK_ASSIGNMENTS_CACHE_PREFIX = "weekAssignments:";
 const RECURRING_ASSIGNMENT_BLACKOUT_DATES = new Set(["2026-07-08", "2026-07-09"]);
 const VOLUNTEER_HOURS_AUTOMATIC_START_AT = "2026-07-17T00:00:00-06:00";
+const VOLUNTEER_DROPPED_SHIFTS_TRACKING_START_AT = "2026-07-27T00:00:00-06:00";
 const MIN_WEEK_OFFSET = -52;
 
 type CachedShiftInstance = {
@@ -595,6 +596,7 @@ function calculateVolunteerHoursSummary(
     baselineHours: normalizedBaselineHours,
     automaticHours,
     completedShiftCount,
+    droppedShiftCount: 0,
     automaticStartAt,
   };
 }
@@ -2014,7 +2016,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, []);
 
   const fetchVolunteerHoursSummary = useCallback(async (volunteerId: string) => {
-    const [assignmentsResult, baselineResult] = await Promise.all([
+    const [assignmentsResult, baselineResult, droppedResult] = await Promise.all([
       supabase
         .from("shift_assignments")
         .select(
@@ -2038,6 +2040,13 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         .select("volunteer_id, baseline_hours, automatic_start_at, updated_at, updated_by")
         .eq("volunteer_id", volunteerId)
         .maybeSingle(),
+      supabase
+        .from("shift_assignments")
+        .select("id", { count: "exact", head: true })
+        .eq("volunteer_id", volunteerId)
+        .eq("status", "dropped")
+        .gte("dropped_at", VOLUNTEER_DROPPED_SHIFTS_TRACKING_START_AT)
+        .like("dropped_reason", `${SELF_DROP_REASON_PREFIX}%`),
     ]);
 
     if (assignmentsResult.error || !assignmentsResult.data) {
@@ -2049,6 +2058,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     ) {
       throw new Error(baselineResult.error.message);
     }
+    if (droppedResult.error) {
+      throw new Error(droppedResult.error.message);
+    }
 
     const baseline = baselineResult.error
       ? null
@@ -2056,11 +2068,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const baselineHours = Number(baseline?.baseline_hours ?? 0);
     const automaticStartAt = baseline?.automatic_start_at ?? VOLUNTEER_HOURS_AUTOMATIC_START_AT;
 
-    return calculateVolunteerHoursSummary(
+    return {
+      ...calculateVolunteerHoursSummary(
       assignmentsResult.data as unknown as VolunteerHoursAssignmentRow[],
       baselineHours,
       automaticStartAt,
-    );
+      ),
+      droppedShiftCount: droppedResult.count ?? 0,
+    };
   }, []);
 
   const fetchMyHoursSummary = useCallback(async () => {
@@ -2136,10 +2151,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     const completedShiftCount = selectedVolunteerHours?.completedShiftCount ?? 0;
+    const droppedShiftCount = selectedVolunteerHours?.droppedShiftCount ?? 0;
     const nextSummary = {
       baselineHours: nextBaselineHours,
       automaticHours,
       completedShiftCount,
+      droppedShiftCount,
       automaticStartAt:
         selectedVolunteerHours?.automaticStartAt ??
         VOLUNTEER_HOURS_AUTOMATIC_START_AT,
@@ -9302,6 +9319,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                             {selectedVolunteerHoursLoading
                               ? "Loading..."
                               : formatVolunteerShiftCount(selectedVolunteerHours?.totalShiftCount)}
+                          </span>
+                        </div>
+                        <div className="modal-row">
+                          <span className="modal-label">Shifts dropped</span>
+                          <span>
+                            {selectedVolunteerHoursLoading
+                              ? "Loading..."
+                              : formatVolunteerShiftCount(selectedVolunteerHours?.droppedShiftCount)}
                           </span>
                         </div>
                         {isEditingVolunteerBaselineHours ? (

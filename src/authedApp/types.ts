@@ -103,6 +103,7 @@ export type VolunteerHoursSummary = {
   baselineHours: number;
   automaticHours: number;
   completedShiftCount: number;
+  droppedShiftCount: number;
   automaticStartAt: string;
 };
 
