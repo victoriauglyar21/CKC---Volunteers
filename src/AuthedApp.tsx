@@ -4901,7 +4901,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       ? "shadow"
                     : assignment.volunteer?.role === "Admin"
                       ? "admin"
-                      : assignment.assignment_role === "lead"
+                      : isLeadAssignmentRole(assignment.assignment_role) ||
+                          isLeadRole(assignment.volunteer?.role)
                         ? "lead"
                         : "assigned";
               const slotBadgeLabel =
@@ -5020,7 +5021,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         </span>
                       ) : volunteerNoteDisplay ? (
                         <span className="capacity-slot-phone">{volunteerNoteDisplay}</span>
-                      ) : (assignment.assignment_role === "lead" || assignment.volunteer?.role === "Admin") &&
+                      ) : (isLeadAssignmentRole(assignment.assignment_role) ||
+                        isLeadRole(assignment.volunteer?.role) ||
+                        assignment.volunteer?.role === "Admin") &&
                         assignment.volunteer?.phone ? (
                         <span className="capacity-slot-phone">
                           <a
