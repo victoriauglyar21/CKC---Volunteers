@@ -40,6 +40,7 @@ begin
   if new.status = 'dropped'
     and old.status is distinct from 'dropped'
     and new.volunteer_id is not null
+    and coalesce(new.dropped_reason, '') <> 'Recurring shift deleted'
   then
     insert into public.shift_call_out_logs (
       assignment_id,
@@ -99,6 +100,7 @@ select
 from public.shift_assignments sa
 where sa.status = 'dropped'
   and sa.volunteer_id is not null
+  and coalesce(sa.dropped_reason, '') <> 'Recurring shift deleted'
   and not exists (
     select 1
     from public.shift_call_out_logs existing
