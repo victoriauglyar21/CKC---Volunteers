@@ -42,6 +42,7 @@ export const APPOINTMENT_COLOR_ORIENTATION = "#ef4444";
 export const APPOINTMENT_COLOR_OTHER_DEFAULT = "#f97316";
 
 export const SELF_DROP_REASON_PREFIX = "__self_drop__:";
+export const ON_LEAVE_DROP_REASON_PREFIX = "__on_leave__:";
 export const RECURRING_SHIFT_ADDED_REASON = "Recurring shift added";
 export const RECURRING_SHIFT_CONTINUED_REASON = "Recurring shift continued";
 export const RECURRING_SHIFT_CHANGED_DROP_REASON = "Recurring shift changed";

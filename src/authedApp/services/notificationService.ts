@@ -20,6 +20,7 @@ import type {
   RecurringAssignmentNotificationItem,
   ShadowFollowUpNotificationItem,
   ShiftAssignmentDetail,
+  ShiftUpdateNotificationItem,
 } from "../types";
 
 const NOTIFICATION_SELECT = `
@@ -87,6 +88,7 @@ const APP_NOTIFICATION_EVENT_SELECT = `
   ends_at,
   completed_at,
   completion_note,
+  metadata,
   created_at,
   shift_instance:shift_instances (
     id,
@@ -397,6 +399,15 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
     return { items: [] as AppNotificationItem[], error: leadNeededError };
   }
 
+  const { items: shiftUpdateItems, error: shiftUpdateError } = await fetchShiftUpdateNotificationItems(input);
+  if (
+    shiftUpdateError &&
+    !/app_notification_events|relation/i.test(shiftUpdateError) &&
+    protectedPendingItems.length === 0
+  ) {
+    return { items: [] as AppNotificationItem[], error: shiftUpdateError };
+  }
+
   const { items: shadowFollowUpItems, error: shadowFollowUpError } =
     await fetchShadowFollowUpNotificationItems(input);
   if (shadowFollowUpError && protectedPendingItems.length === 0) {
@@ -408,6 +419,7 @@ export async function fetchNotificationsData(input: FetchNotificationsInput) {
     ...assignmentItems,
     ...appointmentItems,
     ...leadNeededItems,
+    ...shiftUpdateItems,
     ...shadowFollowUpItems,
   ].sort((left, right) => getNotificationSortTimestamp(right) - getNotificationSortTimestamp(left));
 
@@ -559,9 +571,34 @@ type AppNotificationEventRow = {
   ends_at: string | null;
   completed_at: string | null;
   completion_note: string | null;
+  metadata?: Record<string, unknown> | null;
   created_at: string | null;
   shift_instance: AppointmentNotificationItem["shift_instance"] | AppointmentNotificationItem["shift_instance"][];
 };
+
+async function fetchLeadActiveShiftInstanceIds(sessionUserId: string) {
+  const { data, error } = await supabase
+    .from("shift_assignments")
+    .select("shift_instance_id")
+    .eq("volunteer_id", sessionUserId)
+    .eq("assignment_role", "lead")
+    .eq("status", "active");
+
+  if (error) {
+    return { items: [] as number[], error: error.message };
+  }
+
+  return {
+    items: Array.from(
+      new Set(
+        ((data as { shift_instance_id: number | null }[] | null) ?? [])
+          .map((row) => row.shift_instance_id)
+          .filter((value): value is number => Number.isInteger(value)),
+      ),
+    ),
+    error: null as string | null,
+  };
+}
 
 async function fetchAppointmentNotificationItems(input: FetchNotificationsInput) {
   if (!input.isAdminAccount && input.role !== "Lead") {
@@ -572,24 +609,12 @@ async function fetchAppointmentNotificationItems(input: FetchNotificationsInput)
   let allowedInstanceIds: number[] | null = null;
 
   if (!input.isAdminAccount && input.role === "Lead") {
-    const { data: leadAssignments, error: leadAssignmentsError } = await supabase
-      .from("shift_assignments")
-      .select("shift_instance_id")
-      .eq("volunteer_id", input.sessionUserId)
-      .eq("assignment_role", "lead")
-      .eq("status", "active");
-
-    if (leadAssignmentsError) {
-      return { items: [] as AppointmentNotificationItem[], error: leadAssignmentsError.message };
+    const leadInstancesResult = await fetchLeadActiveShiftInstanceIds(input.sessionUserId);
+    if (leadInstancesResult.error) {
+      return { items: [] as AppointmentNotificationItem[], error: leadInstancesResult.error };
     }
 
-    allowedInstanceIds = Array.from(
-      new Set(
-        ((leadAssignments as { shift_instance_id: number | null }[] | null) ?? [])
-          .map((row) => row.shift_instance_id)
-          .filter((value): value is number => Number.isInteger(value)),
-      ),
-    );
+    allowedInstanceIds = leadInstancesResult.items;
 
     if (allowedInstanceIds.length === 0) {
       return { items: [] as AppointmentNotificationItem[], error: null as string | null };
@@ -730,6 +755,84 @@ async function fetchAppointmentEventNotificationItems({
   return { items, error: null as string | null };
 }
 
+async function fetchShiftUpdateNotificationItems(input: FetchNotificationsInput) {
+  if (!input.isAdminAccount && input.role !== "Lead") {
+    return { items: [] as ShiftUpdateNotificationItem[], error: null as string | null };
+  }
+
+  const cutoffIso = new Date(Date.now() - ASSIGNMENT_NOTIFICATION_WINDOW_MS).toISOString();
+  let allowedInstanceIds: number[] | null = null;
+
+  if (!input.isAdminAccount && input.role === "Lead") {
+    const leadInstancesResult = await fetchLeadActiveShiftInstanceIds(input.sessionUserId);
+    if (leadInstancesResult.error) {
+      return { items: [] as ShiftUpdateNotificationItem[], error: leadInstancesResult.error };
+    }
+
+    allowedInstanceIds = leadInstancesResult.items;
+    if (allowedInstanceIds.length === 0) {
+      return { items: [] as ShiftUpdateNotificationItem[], error: null as string | null };
+    }
+  }
+
+  let query = supabase
+    .from("app_notification_events")
+    .select(APP_NOTIFICATION_EVENT_SELECT)
+    .eq("notification_kind", "shift_update")
+    .gte("created_at", cutoffIso)
+    .order("created_at", { ascending: false });
+
+  if (input.isAdminAccount) {
+    query = query.in("audience", ["admins", "admins_and_leads", "all"]);
+  } else {
+    query = query.in("audience", ["leads", "admins_and_leads", "all"]);
+    if (allowedInstanceIds && allowedInstanceIds.length > 0) {
+      query = query.in("shift_instance_id", allowedInstanceIds);
+    }
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    return { items: [] as ShiftUpdateNotificationItem[], error: error.message };
+  }
+
+  const items = ((data as AppNotificationEventRow[] | null) ?? [])
+    .map((row): ShiftUpdateNotificationItem | null => {
+      if (
+        row.event_type !== "added" &&
+        row.event_type !== "removed" &&
+        row.event_type !== "dropped" &&
+        row.event_type !== "approved"
+      ) {
+        return null;
+      }
+      const shiftInstance = Array.isArray(row.shift_instance)
+        ? (row.shift_instance[0] ?? null)
+        : (row.shift_instance ?? null);
+      const volunteerRole = row.metadata?.volunteer_role;
+      return {
+        notification_kind: "shift_update",
+        id: `shift-update:${row.id}`,
+        created_at: row.created_at,
+        event_type: row.event_type,
+        target_user_id: row.target_user_id,
+        shift_instance_id: row.shift_instance_id,
+        title: row.title ?? "Shift updated",
+        body: row.body,
+        volunteer_name: typeof row.metadata?.volunteer_name === "string" ? row.metadata.volunteer_name : null,
+        volunteer_role:
+          volunteerRole === "Regular Volunteer" || volunteerRole === "Lead" || volunteerRole === "Admin"
+            ? volunteerRole
+            : null,
+        shift_instance: shiftInstance,
+      };
+    })
+    .filter((item): item is ShiftUpdateNotificationItem => Boolean(item))
+    .filter((item) => !input.dismissedTokens.has(getNotificationDismissToken(item)));
+
+  return { items, error: null as string | null };
+}
+
 export async function recordAppointmentNotificationEvent({
   eventType,
   audience = "admins_and_leads",
@@ -771,6 +874,48 @@ export async function recordAppointmentNotificationEvent({
     ends_at: endsAt ?? null,
     completed_at: completedAt ?? null,
     completion_note: completionNote ?? null,
+  });
+
+  if (error && !/app_notification_events|relation/i.test(error.message)) {
+    return error.message;
+  }
+  return null;
+}
+
+export async function recordShiftUpdateNotificationEvent({
+  eventType,
+  audience = "admins_and_leads",
+  actorId,
+  targetUserId,
+  shiftInstanceId,
+  title,
+  body,
+  volunteerName,
+  volunteerRole,
+}: {
+  eventType: "added" | "removed" | "dropped" | "approved";
+  audience?: "admins" | "admins_and_leads" | "leads" | "all";
+  actorId: string;
+  targetUserId?: string | null;
+  shiftInstanceId: number | null;
+  title: string;
+  body?: string | null;
+  volunteerName?: string | null;
+  volunteerRole?: "Regular Volunteer" | "Lead" | "Admin" | null;
+}) {
+  const { error } = await supabase.from("app_notification_events").insert({
+    notification_kind: "shift_update",
+    event_type: eventType,
+    audience,
+    actor_id: actorId,
+    target_user_id: targetUserId ?? null,
+    shift_instance_id: shiftInstanceId,
+    title,
+    body: body ?? null,
+    metadata: {
+      volunteer_name: volunteerName ?? null,
+      volunteer_role: volunteerRole ?? null,
+    },
   });
 
   if (error && !/app_notification_events|relation/i.test(error.message)) {

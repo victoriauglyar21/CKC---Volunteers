@@ -2786,6 +2786,28 @@ html[data-theme="dark"] .shift-appointment-button:hover {
   opacity: 0.7;
 }
 
+.leave-form-section {
+  display: grid;
+  gap: 12px;
+}
+
+.leave-submit-button {
+  width: fit-content;
+  justify-self: end;
+}
+
+.leave-cancel-button {
+  width: fit-content;
+  justify-self: end;
+}
+
+.leave-period-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .myshift-detail-row {
   display: flex;
   justify-content: space-between;
@@ -3193,6 +3215,70 @@ html[data-theme="dark"] .shift-appointment-button:hover {
 .volunteer-name {
   margin: 0;
   font-weight: 600;
+}
+
+.volunteer-callout-log {
+  display: grid;
+  gap: 10px;
+}
+
+.volunteer-callout-log-header,
+.volunteer-callout-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.volunteer-callout-status,
+.volunteer-callout-summary,
+.volunteer-callout-meta,
+.volunteer-callout-reason,
+.volunteer-callout-date,
+.volunteer-callout-action {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+.volunteer-callout-summary {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.volunteer-callout-list {
+  display: grid;
+  gap: 8px;
+}
+
+.volunteer-callout-item {
+  padding: 10px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.volunteer-callout-title,
+.volunteer-callout-meta,
+.volunteer-callout-reason {
+  margin: 0;
+}
+
+.volunteer-callout-title {
+  font-weight: 700;
+}
+
+.volunteer-callout-main,
+.volunteer-callout-side {
+  display: grid;
+  gap: 3px;
+}
+
+.volunteer-callout-side {
+  justify-items: end;
+  text-align: right;
+  min-width: 135px;
+}
+
+.volunteer-callout-action {
+  font-weight: 700;
 }
 
 .volunteer-name-row {
@@ -4562,6 +4648,11 @@ html[data-theme="dark"] .range-mode-select {
 .modal-panel .volunteer-joined,
 .modal-panel .notification-meta,
 .modal-panel .notification-reason,
+.modal-panel .volunteer-callout-summary,
+.modal-panel .volunteer-callout-meta,
+.modal-panel .volunteer-callout-reason,
+.modal-panel .volunteer-callout-date,
+.modal-panel .volunteer-callout-action,
 .modal-panel .appointment-time,
 .modal-panel .appointment-card-meta,
 .modal-panel .appointment-checklist-title,
@@ -4620,7 +4711,18 @@ html[data-theme="dark"] .range-mode-select {
 
 .notification-card.latest {
   border-color: color-mix(in srgb, var(--brand-accent) 50%, transparent);
-  background: #e3c9ba;
+  background: #f6e4da;
+}
+
+.modal-panel .notification-card {
+  background: #f8e8df;
+  border-color: color-mix(in srgb, var(--rose-400) 54%, #0000);
+  box-shadow: 0 6px 16px rgba(77, 44, 28, 0.055);
+}
+
+.modal-panel .notification-card.latest {
+  background: #f6e4da;
+  border-color: color-mix(in srgb, var(--brand-accent) 42%, transparent);
 }
 
 .notification-tag,

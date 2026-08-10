@@ -3,6 +3,7 @@ import {
   APPOINTMENT_COLOR_FOSTER,
   APPOINTMENT_COLOR_ORIENTATION,
   APPOINTMENT_COLOR_VAX,
+  ON_LEAVE_DROP_REASON_PREFIX,
   SELF_DROP_REASON_PREFIX,
   timeFormatter,
 } from "./constants";
@@ -15,6 +16,7 @@ import type {
   LeadNeededNotificationItem,
   RecurringAssignmentNotificationItem,
   ShadowFollowUpNotificationItem,
+  ShiftUpdateNotificationItem,
   ShiftAssignmentDetail,
   ShiftInstance,
   ShiftTemplate,
@@ -81,6 +83,10 @@ function isRecurringAssignmentNotificationItem(
   return "notification_kind" in item && item.notification_kind === "recurring_assignment";
 }
 
+function isShiftUpdateNotificationItem(item: AppNotificationItem): item is ShiftUpdateNotificationItem {
+  return "notification_kind" in item && item.notification_kind === "shift_update";
+}
+
 export function getNotificationSortTimestamp(item: AppNotificationItem) {
   const value = isAppointmentNotificationItem(item)
     ? item.updated_at ?? item.created_at ?? ""
@@ -94,7 +100,9 @@ export function getNotificationSortTimestamp(item: AppNotificationItem) {
           ""
         : isRecurringAssignmentNotificationItem(item)
           ? item.created_at ?? ""
-      : item.dropped_at ?? item.created_at ?? "";
+          : isShiftUpdateNotificationItem(item)
+            ? item.created_at ?? ""
+            : item.dropped_at ?? item.created_at ?? "";
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
 }
@@ -115,6 +123,9 @@ export function getNotificationDismissToken(item: AppNotificationItem) {
   if (isRecurringAssignmentNotificationItem(item)) {
     return `${item.id}:${item.created_at ?? ""}`;
   }
+  if (isShiftUpdateNotificationItem(item)) {
+    return `${item.id}:${item.created_at ?? ""}`;
+  }
   const status = item.status ?? "unknown";
   const changeMoment = item.dropped_at ?? item.created_at ?? "";
   return `${item.id}:${status}:${changeMoment}`;
@@ -126,6 +137,9 @@ export function isSelfDropReason(reason: string | null | undefined) {
 
 export function normalizeDropReason(reason: string | null | undefined) {
   if (!reason) return "";
+  if (reason.startsWith(ON_LEAVE_DROP_REASON_PREFIX)) {
+    return reason.slice(ON_LEAVE_DROP_REASON_PREFIX.length).trim();
+  }
   return isSelfDropReason(reason) ? reason.slice(SELF_DROP_REASON_PREFIX.length).trim() : reason;
 }
 

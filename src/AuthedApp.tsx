@@ -22,6 +22,7 @@ import {
   dayFormatter,
   monthFormatter,
   monthJumpFormatter,
+  ON_LEAVE_DROP_REASON_PREFIX,
   PRIMARY_ADMIN_EMAIL,
   RECURRING_SHIFT_ADDED_REASON,
   RECURRING_SHIFT_CHANGED_DROP_REASON,
@@ -44,6 +45,7 @@ import {
   fetchNotificationsData,
   fetchPendingNotifications,
   recordAppointmentNotificationEvent,
+  recordShiftUpdateNotificationEvent,
 } from "./authedApp/services/notificationService";
 import {
   notifyLeadsOnShiftInstance,
@@ -61,6 +63,8 @@ import type {
   RecurringAssignmentNotificationItem,
   LeadNeededNotificationItem,
   ShadowFollowUpNotificationItem,
+  ShiftCallOutLog,
+  ShiftUpdateNotificationItem,
   ShiftAppointment,
   ShiftAssignment,
   ShiftAssignmentDetail,
@@ -69,6 +73,7 @@ import type {
   ShiftTemplate,
   VolunteerHourBaseline,
   VolunteerHoursSummary,
+  VolunteerLeavePeriod,
   VolunteerRow,
 } from "./authedApp/types";
 import {
@@ -132,6 +137,61 @@ const VOLUNTEER_HOURS_AUTOMATIC_START_AT = "2026-07-17T00:00:00-06:00";
 const VOLUNTEER_DROPPED_SHIFTS_TRACKING_START_AT = "2026-07-27T00:00:00-06:00";
 const MIN_WEEK_OFFSET = -52;
 
+function getDateKeyFromShiftValue(value: string | null | undefined) {
+  if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : getDateKey(parsed);
+}
+
+function rangesOverlap(startA: string, endA: string, startB: string, endB: string) {
+  return startA <= endB && endA >= startB;
+}
+
+function isShiftDateInLeavePeriods(
+  shift: { shift_date?: string | null; starts_at?: string | null } | null | undefined,
+  leavePeriods: VolunteerLeavePeriod[],
+) {
+  const dayKey = getDateKeyFromShiftValue(shift?.shift_date ?? shift?.starts_at);
+  if (!dayKey) return false;
+  return leavePeriods.some((period) => rangesOverlap(dayKey, dayKey, period.starts_on, period.ends_on));
+}
+
+function formatLeaveRange(startsOn: string, endsOn: string) {
+  const start = parseDateOnly(startsOn);
+  const end = parseDateOnly(endsOn);
+  if (!start || !end) return `${startsOn} to ${endsOn}`;
+  const startLabel = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const endLabel = end.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return start.getFullYear() === end.getFullYear()
+    ? `${startLabel}-${endLabel}, ${start.getFullYear()}`
+    : `${startLabel}, ${start.getFullYear()}-${endLabel}, ${end.getFullYear()}`;
+}
+
+function isMissingVolunteerLeavePeriodsTableError(
+  error: { message?: string; code?: string } | string | null | undefined,
+) {
+  const message = typeof error === "string" ? error : (error?.message ?? "");
+  const code = typeof error === "string" ? "" : (error?.code ?? "");
+  return (
+    code === "PGRST205" ||
+    /volunteer_leave_periods/i.test(message) ||
+    /schema cache/i.test(message)
+  );
+}
+
+function isMissingShiftCallOutLogsTableError(
+  error: { message?: string; code?: string } | string | null | undefined,
+) {
+  const message = typeof error === "string" ? error : (error?.message ?? "");
+  const code = typeof error === "string" ? "" : (error?.code ?? "");
+  return (
+    code === "PGRST205" ||
+    /shift_call_out_logs/i.test(message) ||
+    /schema cache/i.test(message)
+  );
+}
+
 type CachedShiftInstance = {
   id: string;
   title: string;
@@ -141,6 +201,51 @@ type CachedShiftInstance = {
   instanceId: number;
   isVirtual?: boolean;
 };
+
+type LeaveShiftAssignmentRow = {
+  id: string;
+  shift_instance:
+    | ShiftAssignmentDetail["shift_instance"]
+    | ShiftAssignmentDetail["shift_instance"][];
+};
+
+async function fetchShiftCallOutLogsForVolunteer(volunteerId: string) {
+  const { data, error } = await supabase
+    .from("shift_call_out_logs")
+    .select(
+      `
+      id,
+      assignment_id,
+      volunteer_id,
+      actor_id,
+      shift_instance_id,
+      action,
+      reason,
+      dropped_at,
+      created_at,
+      actor:profiles!shift_call_out_logs_actor_id_fkey (
+        id,
+        full_name,
+        preferred_name
+      ),
+      shift_instance:shift_instances (
+        id,
+        shift_date,
+        starts_at,
+        ends_at,
+        template:shift_templates (
+          id,
+          title
+        )
+      )
+    `,
+    )
+    .eq("volunteer_id", volunteerId)
+    .order("dropped_at", { ascending: false })
+    .limit(20);
+
+  return { data: (data as unknown as ShiftCallOutLog[] | null) ?? [], error };
+}
 
 function getAppointmentStartMs(appointment: ShiftAppointment) {
   if (!appointment.starts_at) return Number.POSITIVE_INFINITY;
@@ -706,6 +811,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [selectedVolunteerHours, setSelectedVolunteerHours] = useState<VolunteerHoursSummary | null>(null);
   const [selectedVolunteerHoursLoading, setSelectedVolunteerHoursLoading] = useState(false);
   const [selectedVolunteerHoursMessage, setSelectedVolunteerHoursMessage] = useState("");
+  const [selectedVolunteerCallOutLogs, setSelectedVolunteerCallOutLogs] = useState<ShiftCallOutLog[]>([]);
+  const [selectedVolunteerCallOutLogsLoading, setSelectedVolunteerCallOutLogsLoading] = useState(false);
+  const [selectedVolunteerCallOutLogsMessage, setSelectedVolunteerCallOutLogsMessage] = useState("");
+  const [myCallOutLogs, setMyCallOutLogs] = useState<ShiftCallOutLog[]>([]);
+  const [myCallOutLogsLoading, setMyCallOutLogsLoading] = useState(false);
+  const [myCallOutLogsMessage, setMyCallOutLogsMessage] = useState("");
   const [isEditingVolunteerBaselineHours, setIsEditingVolunteerBaselineHours] = useState(false);
   const [volunteerBaselineHoursDraft, setVolunteerBaselineHoursDraft] = useState("");
   const [volunteerBaselineHoursSaving, setVolunteerBaselineHoursSaving] = useState(false);
@@ -759,6 +870,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [assignmentsMessage, setAssignmentsMessage] = useState("");
   const [myRecurring, setMyRecurring] = useState<RecurringAssignment[]>([]);
   const [myShiftsPage, setMyShiftsPage] = useState(0);
+  const [myLeavePeriods, setMyLeavePeriods] = useState<VolunteerLeavePeriod[]>([]);
+  const [leaveForm, setLeaveForm] = useState({
+    startsOn: "",
+    endsOn: "",
+    reason: "",
+  });
+  const [leaveSaving, setLeaveSaving] = useState(false);
+  const [leaveTableAvailable, setLeaveTableAvailable] = useState(true);
+  const [editingLeaveId, setEditingLeaveId] = useState<string | null>(null);
+  const [rescindingLeaveId, setRescindingLeaveId] = useState<string | null>(null);
   const [calendarRangeMode, setCalendarRangeMode] = useState<"week" | "month">("week");
   const [isMobile, setIsMobile] = useState(false);
   const [weekOffset, setWeekOffset] = useState(0);
@@ -2151,6 +2272,52 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     [fetchVolunteerHoursSummary, isAdminAccount],
   );
 
+  const fetchVolunteerCallOutLogs = useCallback(
+    async (volunteerId: string) => {
+      if (!isAdminAccount) return;
+      setSelectedVolunteerCallOutLogsLoading(true);
+      setSelectedVolunteerCallOutLogsMessage("");
+
+      const { data, error } = await fetchShiftCallOutLogsForVolunteer(volunteerId);
+
+      if (error || !data) {
+        setSelectedVolunteerCallOutLogs([]);
+        setSelectedVolunteerCallOutLogsMessage(
+          error && isMissingShiftCallOutLogsTableError(error)
+            ? "Call-out log setup is pending. Apply the shift_call_out_logs migration."
+            : error?.message ?? "Unable to load call-out log.",
+        );
+        setSelectedVolunteerCallOutLogsLoading(false);
+        return;
+      }
+
+      setSelectedVolunteerCallOutLogs(data as unknown as ShiftCallOutLog[]);
+      setSelectedVolunteerCallOutLogsLoading(false);
+    },
+    [isAdminAccount],
+  );
+
+  const fetchMyCallOutLogs = useCallback(async () => {
+    setMyCallOutLogsLoading(true);
+    setMyCallOutLogsMessage("");
+
+    const { data, error } = await fetchShiftCallOutLogsForVolunteer(session.user.id);
+
+    if (error || !data) {
+      setMyCallOutLogs([]);
+      setMyCallOutLogsMessage(
+        error && isMissingShiftCallOutLogsTableError(error)
+          ? "Call-out log setup is pending. Apply the shift_call_out_logs migration."
+          : error?.message ?? "Unable to load your call-out log.",
+      );
+      setMyCallOutLogsLoading(false);
+      return;
+    }
+
+    setMyCallOutLogs(data);
+    setMyCallOutLogsLoading(false);
+  }, [session.user.id]);
+
   const handleVolunteerBaselineHoursSave = useCallback(async () => {
     if (!isAdminAccount || !selectedVolunteer) return;
     const nextTotalHours = Number(volunteerBaselineHoursDraft);
@@ -2332,6 +2499,67 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     fetchMyRecurring();
   }, [fetchMyRecurring]);
 
+  const fetchMyLeavePeriods = useCallback(async () => {
+    const todayKey = getDateKey(startOfDay(new Date()));
+    const { data, error } = await supabase
+      .from("volunteer_leave_periods")
+      .select("id, volunteer_id, starts_on, ends_on, reason, created_by, created_at, updated_at")
+      .eq("volunteer_id", session.user.id)
+      .gte("ends_on", todayKey)
+      .order("starts_on", { ascending: true });
+
+    if (error) {
+      if (isMissingVolunteerLeavePeriodsTableError(error)) {
+        setLeaveTableAvailable(false);
+        setMyLeavePeriods([]);
+        return;
+      }
+      setAssignmentsMessage((previous) =>
+        previous ? `${previous} Leave periods could not load: ${error.message}` : error.message,
+      );
+      setMyLeavePeriods([]);
+      return;
+    }
+
+    setLeaveTableAvailable(true);
+    setMyLeavePeriods((data as VolunteerLeavePeriod[] | null) ?? []);
+  }, [session.user.id]);
+
+  const fetchLeavePeriodsForVolunteer = useCallback(
+    async (volunteerId: string, startsOn: string, endsOn: string) => {
+      const { data, error } = await supabase
+        .from("volunteer_leave_periods")
+        .select("id, volunteer_id, starts_on, ends_on, reason, created_by, created_at, updated_at")
+        .eq("volunteer_id", volunteerId)
+        .lte("starts_on", endsOn)
+        .gte("ends_on", startsOn);
+
+      return {
+        data: (data as VolunteerLeavePeriod[] | null) ?? [],
+        error: error
+          ? isMissingVolunteerLeavePeriodsTableError(error)
+            ? null
+            : error.message
+          : null,
+      };
+    },
+    [],
+  );
+
+  const getLeaveConflictForShift = useCallback(
+    async (
+      volunteerId: string,
+      shift: { shift_date?: string | null; starts_at?: string | null } | null | undefined,
+    ) => {
+      const dayKey = getDateKeyFromShiftValue(shift?.shift_date ?? shift?.starts_at);
+      if (!dayKey) return { period: null as VolunteerLeavePeriod | null, error: null as string | null };
+      const { data, error } = await fetchLeavePeriodsForVolunteer(volunteerId, dayKey, dayKey);
+      if (error) return { period: null as VolunteerLeavePeriod | null, error };
+      return { period: data[0] ?? null, error: null as string | null };
+    },
+    [fetchLeavePeriodsForVolunteer],
+  );
+
   const fetchMyShifts = useCallback(async () => {
     setAssignmentsLoading(true);
     setAssignmentsMessage("");
@@ -2414,9 +2642,296 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     setAssignmentsLoading(false);
   }, [session.user.id]);
 
+  const handleLeaveSubmit = useCallback(async () => {
+    if (!leaveTableAvailable) {
+      setAssignmentsMessage("On Leave setup is pending. Apply the volunteer_leave_periods migration first.");
+      return;
+    }
+    const startsOn = leaveForm.startsOn;
+    const endsOn = leaveForm.endsOn;
+    const reason = leaveForm.reason.trim();
+    if (!startsOn || !endsOn) {
+      setAssignmentsMessage("Start and end dates are required.");
+      return;
+    }
+    if (startsOn > endsOn) {
+      setAssignmentsMessage("End date must be on or after the start date.");
+      return;
+    }
+    if (!reason) {
+      setAssignmentsMessage("Reason is required.");
+      return;
+    }
+
+    setLeaveSaving(true);
+    setAssignmentsMessage("");
+
+    const existingLeaveResult = await fetchLeavePeriodsForVolunteer(session.user.id, startsOn, endsOn);
+    if (existingLeaveResult.error) {
+      setAssignmentsMessage(existingLeaveResult.error);
+      setLeaveSaving(false);
+      return;
+    }
+    if (existingLeaveResult.data.some((period) => period.id !== editingLeaveId)) {
+      setAssignmentsMessage("You already have an on-leave range that overlaps these dates.");
+      setLeaveSaving(false);
+      return;
+    }
+
+    const leaveSaveResult = editingLeaveId
+      ? await supabase
+          .from("volunteer_leave_periods")
+          .update({
+            starts_on: startsOn,
+            ends_on: endsOn,
+            reason,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", editingLeaveId)
+          .eq("volunteer_id", session.user.id)
+      : await supabase.from("volunteer_leave_periods").insert({
+          volunteer_id: session.user.id,
+          starts_on: startsOn,
+          ends_on: endsOn,
+          reason,
+          created_by: session.user.id,
+        });
+    const leaveError = leaveSaveResult.error;
+
+    if (leaveError) {
+      setAssignmentsMessage(
+        isMissingVolunteerLeavePeriodsTableError(leaveError)
+          ? "On Leave setup is pending. Apply the volunteer_leave_periods migration first."
+          : leaveError.message,
+      );
+      setLeaveSaving(false);
+      return;
+    }
+
+    const startDate = parseDateOnly(startsOn);
+    const endDate = parseDateOnly(endsOn);
+    const startIso = startDate ? startOfDay(startDate).toISOString() : `${startsOn}T00:00:00.000Z`;
+    const endExclusive = endDate ? addDays(startOfDay(endDate), 1).toISOString() : `${endsOn}T23:59:59.999Z`;
+    const { data: shiftsToDrop, error: lookupError } = await supabase
+      .from("shift_assignments")
+      .select(
+        `
+        id,
+        shift_instance:shift_instances (
+          id,
+          shift_date,
+          starts_at,
+          ends_at,
+          template:shift_templates (
+            id,
+            title
+          )
+        )
+      `,
+      )
+      .eq("volunteer_id", session.user.id)
+      .eq("status", "active")
+      .or(
+        `starts_at.gte.${startIso},starts_at.lt.${endExclusive},shift_date.gte.${startsOn},shift_date.lte.${endsOn}`,
+        { foreignTable: "shift_instances" },
+      );
+
+    if (lookupError) {
+      setAssignmentsMessage(`Leave saved, but shifts could not be checked: ${lookupError.message}`);
+      setLeaveSaving(false);
+      await fetchMyLeavePeriods();
+      return;
+    }
+
+    const matchingAssignments = ((shiftsToDrop as unknown as LeaveShiftAssignmentRow[] | null) ?? []).filter((assignment) => {
+      const shiftInstance = Array.isArray(assignment.shift_instance)
+        ? (assignment.shift_instance[0] ?? null)
+        : assignment.shift_instance;
+      return isShiftDateInLeavePeriods(shiftInstance, [
+        {
+          id: "draft",
+          volunteer_id: session.user.id,
+          starts_on: startsOn,
+          ends_on: endsOn,
+          reason,
+        },
+      ]);
+    });
+    const assignmentIds = matchingAssignments.map((assignment) => assignment.id);
+    const nowIso = new Date().toISOString();
+    if (assignmentIds.length > 0) {
+      const { error: dropError } = await supabase
+        .from("shift_assignments")
+        .update({
+          status: "dropped",
+          dropped_at: nowIso,
+          dropped_reason: `${ON_LEAVE_DROP_REASON_PREFIX} ${formatLeaveRange(startsOn, endsOn)}: ${reason}`,
+        })
+        .in("id", assignmentIds);
+
+      if (dropError) {
+        setAssignmentsMessage(`Leave saved, but shifts could not be dropped: ${dropError.message}`);
+        setLeaveSaving(false);
+        await fetchMyLeavePeriods();
+        return;
+      }
+    }
+
+    const volunteerName =
+      displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "A volunteer";
+    const leaveRange = formatLeaveRange(startsOn, endsOn);
+    const droppedCountLabel = `${assignmentIds.length} shift${assignmentIds.length === 1 ? "" : "s"} dropped`;
+    const body = `${volunteerName} is on leave ${leaveRange}. Reason: ${reason}. ${droppedCountLabel}.`;
+    const notificationErrors: string[] = [];
+    const eventError = await recordShiftUpdateNotificationEvent({
+      eventType: "dropped",
+      audience: "admins",
+      actorId: session.user.id,
+      targetUserId: session.user.id,
+      shiftInstanceId: (() => {
+        const shiftInstance = matchingAssignments[0]?.shift_instance;
+        return Array.isArray(shiftInstance) ? (shiftInstance[0]?.id ?? null) : (shiftInstance?.id ?? null);
+      })(),
+      title: editingLeaveId ? "Volunteer leave updated" : "Volunteer on leave",
+      body,
+      volunteerName,
+      volunteerRole: displayProfile?.role ?? null,
+    });
+    if (eventError) {
+      notificationErrors.push(`notification center event failed: ${eventError}`);
+    }
+    const adminPushError = await sendAdminPush({
+      title: editingLeaveId ? "Volunteer leave updated" : "Volunteer on leave",
+      body,
+    });
+    if (adminPushError) {
+      notificationErrors.push(`admin notification failed: ${adminPushError}`);
+    }
+
+    setLeaveForm({ startsOn: "", endsOn: "", reason: "" });
+    setEditingLeaveId(null);
+    setAssignmentsMessage(
+      notificationErrors.length > 0
+        ? `Leave ${editingLeaveId ? "updated" : "saved"} and ${droppedCountLabel}, but ${notificationErrors.join(" | ")}`
+        : `Leave ${editingLeaveId ? "updated" : "saved"}. ${droppedCountLabel}.`,
+    );
+    setLeaveSaving(false);
+    await Promise.all([
+      fetchMyLeavePeriods(),
+      fetchMyShifts(),
+      fetchMyHoursSummary(),
+      fetchWeekAssignments(),
+      fetchPersonalAssignments(),
+      fetchNotificationsRef.current(),
+    ]);
+  }, [
+    displayProfile,
+    fetchLeavePeriodsForVolunteer,
+    fetchMyHoursSummary,
+    fetchMyLeavePeriods,
+    fetchMyShifts,
+    fetchPersonalAssignments,
+    fetchWeekAssignments,
+    editingLeaveId,
+    leaveTableAvailable,
+    leaveForm,
+    session.user.email,
+    session.user.id,
+  ]);
+
   useEffect(() => {
     fetchMyShifts();
-  }, [fetchMyShifts]);
+    void fetchMyLeavePeriods();
+  }, [fetchMyLeavePeriods, fetchMyShifts]);
+
+  const handleEditLeave = useCallback((period: VolunteerLeavePeriod) => {
+    setAssignmentsMessage("");
+    setEditingLeaveId(period.id);
+    setLeaveForm({
+      startsOn: period.starts_on,
+      endsOn: period.ends_on,
+      reason: period.reason,
+    });
+  }, []);
+
+  const handleCancelLeaveEdit = useCallback(() => {
+    setAssignmentsMessage("");
+    setEditingLeaveId(null);
+    setLeaveForm({ startsOn: "", endsOn: "", reason: "" });
+  }, []);
+
+  const handleRescindLeave = useCallback(
+    async (period: VolunteerLeavePeriod) => {
+      setRescindingLeaveId(period.id);
+      setAssignmentsMessage("");
+
+      const { error } = await supabase
+        .from("volunteer_leave_periods")
+        .delete()
+        .eq("id", period.id)
+        .eq("volunteer_id", session.user.id);
+
+      if (error) {
+        setAssignmentsMessage(error.message);
+        setRescindingLeaveId(null);
+        return;
+      }
+
+      if (editingLeaveId === period.id) {
+        setEditingLeaveId(null);
+        setLeaveForm({ startsOn: "", endsOn: "", reason: "" });
+      }
+
+      const volunteerName =
+        displayProfile?.preferred_name || displayProfile?.full_name || session.user.email || "A volunteer";
+      const leaveRange = formatLeaveRange(period.starts_on, period.ends_on);
+      const body = `${volunteerName} rescinded leave for ${leaveRange}. Reason had been: ${period.reason}.`;
+      const notificationErrors: string[] = [];
+      const eventError = await recordShiftUpdateNotificationEvent({
+        eventType: "approved",
+        audience: "admins",
+        actorId: session.user.id,
+        targetUserId: session.user.id,
+        shiftInstanceId: null,
+        title: "Volunteer leave rescinded",
+        body,
+        volunteerName,
+        volunteerRole: displayProfile?.role ?? null,
+      });
+      if (eventError) {
+        notificationErrors.push(`notification center event failed: ${eventError}`);
+      }
+      const adminPushError = await sendAdminPush({
+        title: "Volunteer leave rescinded",
+        body,
+      });
+      if (adminPushError) {
+        notificationErrors.push(`admin notification failed: ${adminPushError}`);
+      }
+
+      setAssignmentsMessage(
+        notificationErrors.length > 0
+          ? `Leave rescinded, but ${notificationErrors.join(" | ")}`
+          : "Leave rescinded. Previously dropped shifts were not automatically restored.",
+      );
+      setRescindingLeaveId(null);
+      await Promise.all([
+        fetchMyLeavePeriods(),
+        fetchWeekAssignments(),
+        fetchPersonalAssignments(),
+        fetchNotificationsRef.current(),
+      ]);
+    },
+    [
+      displayProfile,
+      editingLeaveId,
+      fetchMyLeavePeriods,
+      fetchPersonalAssignments,
+      fetchWeekAssignments,
+      session.user.email,
+      session.user.id,
+    ],
+  );
 
   const getRecurringIntervalWeeks = useCallback(
     (recurring: Pick<RecurringAssignment, "repeat_interval_weeks"> | null | undefined) =>
@@ -2848,6 +3363,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return Boolean(dayKey && targetDateKeySet.has(dayKey));
     });
 
+    const leavePeriodsResult = await fetchLeavePeriodsForVolunteer(selectedVolunteer.id, rangeStart, rangeEnd);
+    if (leavePeriodsResult.error) {
+      setRecurringMessage(leavePeriodsResult.error);
+      setRecurringSaving(false);
+      return;
+    }
+    const selectedVolunteerLeavePeriods = leavePeriodsResult.data;
+
     if (recurringEditId) {
       const targetRecurring = volunteerRecurring.find((item) => item.id === recurringEditId);
       if (!targetRecurring) {
@@ -2958,9 +3481,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       let assignedCount = 0;
       let skippedFullCount = 0;
       let skippedExistingCount = 0;
+      let skippedLeaveCount = 0;
       const assignmentErrors: string[] = [];
 
       for (const instance of filteredInstances) {
+        if (isShiftDateInLeavePeriods(instance, selectedVolunteerLeavePeriods)) {
+          skippedLeaveCount += 1;
+          continue;
+        }
+
         const { data: existingAssignment, error: existingAssignmentError } = await supabase
           .from("shift_assignments")
           .select("id,status,dropped_reason")
@@ -3012,12 +3541,15 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         setRecurringMessage(
           `Recurring shifts saved, but some assignments failed: ${assignmentErrors.join(" | ")}`,
         );
-      } else if (skippedFullCount > 0 || skippedExistingCount > 0) {
+      } else if (skippedFullCount > 0 || skippedExistingCount > 0 || skippedLeaveCount > 0) {
         const assignedLabel =
           assignedCount > 0
             ? `${assignedCount} shift${assignedCount === 1 ? "" : "s"} added`
             : "no shifts added yet";
         const skippedParts = [
+          skippedLeaveCount > 0
+            ? `${skippedLeaveCount} on-leave shift${skippedLeaveCount === 1 ? " was" : "s were"} skipped`
+            : null,
           skippedFullCount > 0
             ? `${skippedFullCount} full shift${skippedFullCount === 1 ? " was" : "s were"} skipped`
             : null,
@@ -3066,6 +3598,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     recurringDays,
     today,
     templates,
+    fetchLeavePeriodsForVolunteer,
     fetchVolunteerRecurring,
     fetchMyShifts,
     fetchWeekAssignments,
@@ -3218,14 +3751,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (!showMyShifts) return;
     let mounted = true;
 
-    fetchMyShifts().then(() => {
+    Promise.all([fetchMyShifts(), fetchMyLeavePeriods()]).then(() => {
       if (!mounted) return;
     });
 
     return () => {
       mounted = false;
     };
-  }, [showMyShifts, fetchMyShifts]);
+  }, [showMyShifts, fetchMyShifts, fetchMyLeavePeriods]);
 
   useEffect(() => {
     const channel = supabase
@@ -3339,24 +3872,30 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   useEffect(() => {
     if (!showProfile) return;
+    fetchMyCallOutLogs();
     const intervalId = window.setInterval(() => {
       fetchMyHoursSummary();
+      fetchMyCallOutLogs();
     }, 60 * 1000);
     return () => window.clearInterval(intervalId);
-  }, [fetchMyHoursSummary, showProfile]);
+  }, [fetchMyCallOutLogs, fetchMyHoursSummary, showProfile]);
 
   useEffect(() => {
     if (!selectedVolunteer) {
       setSelectedVolunteerHours(null);
       setSelectedVolunteerHoursMessage("");
       setSelectedVolunteerHoursLoading(false);
+      setSelectedVolunteerCallOutLogs([]);
+      setSelectedVolunteerCallOutLogsMessage("");
+      setSelectedVolunteerCallOutLogsLoading(false);
       setIsEditingVolunteerBaselineHours(false);
       setVolunteerBaselineHoursDraft("");
       return;
     }
     fetchVolunteerRecurring(selectedVolunteer.id);
     fetchSelectedVolunteerHoursSummary(selectedVolunteer);
-  }, [fetchSelectedVolunteerHoursSummary, fetchVolunteerRecurring, selectedVolunteer]);
+    fetchVolunteerCallOutLogs(selectedVolunteer.id);
+  }, [fetchSelectedVolunteerHoursSummary, fetchVolunteerCallOutLogs, fetchVolunteerRecurring, selectedVolunteer]);
 
   useEffect(() => {
     if (!isEditingVolunteerBaselineHours || !selectedVolunteerHours) return;
@@ -3367,9 +3906,16 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     if (!showVolunteers || !selectedVolunteer || !isAdminAccount) return;
     const intervalId = window.setInterval(() => {
       fetchSelectedVolunteerHoursSummary(selectedVolunteer);
+      fetchVolunteerCallOutLogs(selectedVolunteer.id);
     }, 60 * 1000);
     return () => window.clearInterval(intervalId);
-  }, [fetchSelectedVolunteerHoursSummary, isAdminAccount, selectedVolunteer, showVolunteers]);
+  }, [
+    fetchSelectedVolunteerHoursSummary,
+    fetchVolunteerCallOutLogs,
+    isAdminAccount,
+    selectedVolunteer,
+    showVolunteers,
+  ]);
 
   useEffect(() => {
     if (!session.user.id) return;
@@ -4629,6 +5175,25 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         setTakeShiftMessage("Past shifts are locked and can no longer be changed.");
         return;
       }
+      const leaveConflict = await getLeaveConflictForShift(
+        session.user.id,
+        activeShift
+          ? {
+              shift_date: getDateKey(startOfDay(activeShift.start)),
+              starts_at: activeShift.start.toISOString(),
+            }
+          : null,
+      );
+      if (leaveConflict.error) {
+        setTakeShiftMessage(leaveConflict.error);
+        return;
+      }
+      if (leaveConflict.period) {
+        setTakeShiftMessage(
+          `You are on leave ${formatLeaveRange(leaveConflict.period.starts_on, leaveConflict.period.ends_on)}.`,
+        );
+        return;
+      }
     }
     const existingAssignment = (weekAssignments[activeShiftInstanceId] ?? []).some(
       (assignment) =>
@@ -4805,32 +5370,37 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         displayProfile?.full_name ||
         session.user.email ||
         "A volunteer";
+      const shiftAddedBody = formatShiftAddedNotificationLabel(
+        requestedShift
+          ? {
+              starts_at: requestedShift.start.toISOString(),
+              title: requestedShift.title,
+            }
+          : null,
+      );
+      const shiftUpdateEventError = await recordShiftUpdateNotificationEvent({
+        eventType: "added",
+        actorId: session.user.id,
+        targetUserId: session.user.id,
+        shiftInstanceId: activeShiftInstanceId,
+        title: `${volunteerName} added`,
+        body: shiftAddedBody,
+        volunteerName,
+        volunteerRole: profile.role,
+      });
       const adminPushError = await sendAdminPush({
         title: `${volunteerName} added`,
-        body: formatShiftAddedNotificationLabel(
-          requestedShift
-            ? {
-                starts_at: requestedShift.start.toISOString(),
-                title: requestedShift.title,
-              }
-            : null,
-        ),
+        body: shiftAddedBody,
       });
       const leadNotifyError = await notifyLeadsOnShiftInstance({
         shiftInstanceId: activeShiftInstanceId,
         excludeVolunteerIds: [session.user.id],
         title: `${volunteerName} added`,
-        body: formatShiftAddedNotificationLabel(
-          requestedShift
-            ? {
-                starts_at: requestedShift.start.toISOString(),
-                title: requestedShift.title,
-              }
-            : null,
-        ),
+        body: shiftAddedBody,
         notificationType: "shift_added",
       });
       const notificationErrors = [
+        shiftUpdateEventError ? `notification center event failed: ${shiftUpdateEventError}` : null,
         adminPushError ? `admin notification failed: ${adminPushError}` : null,
         leadNotifyError,
       ].filter((value): value is string => Boolean(value));
@@ -5342,6 +5912,31 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const assignmentRole = volunteer.role === "Lead" ? "lead" : "regular";
     const isShadowAssignment = assignOtherMode === "shadow";
     const volunteerName = volunteer.preferred_name || volunteer.full_name || "A volunteer";
+    const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
+    const leaveConflict = await getLeaveConflictForShift(
+      volunteerId,
+      assignedShift
+        ? {
+            shift_date: getDateKey(startOfDay(assignedShift.start)),
+            starts_at: assignedShift.start.toISOString(),
+          }
+        : null,
+    );
+    if (leaveConflict.error) {
+      setAssignMessage(leaveConflict.error);
+      setAssignLoading(false);
+      return;
+    }
+    if (leaveConflict.period) {
+      setAssignMessage(
+        `${volunteerName} is on leave ${formatLeaveRange(
+          leaveConflict.period.starts_on,
+          leaveConflict.period.ends_on,
+        )}.`,
+      );
+      setAssignLoading(false);
+      return;
+    }
     const existingLocalAssignment = (weekAssignments[assignShiftInstanceId] ?? []).find(
       (assignment) => assignment.volunteer?.id === volunteerId,
     );
@@ -5405,7 +6000,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
     const notificationErrors: string[] = [];
     const savedAssignment = Array.isArray(savedAssignments) ? (savedAssignments[0] ?? null) : null;
     const savedAssignmentId = savedAssignment?.id ?? `${assignShiftInstanceId}-${volunteerId}`;
@@ -5414,17 +6008,32 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       ? (savedAssignment?.notes ?? notes ?? null)
       : null;
     const assignmentLabel = isShadowAssignment ? "Shadow shift" : "Shift";
+    const shiftAddedBody = formatShiftAddedNotificationLabel(
+      assignedShift
+        ? {
+            starts_at: assignedShift.start.toISOString(),
+            title: assignedShift.title,
+          }
+        : null,
+    );
+
+    const shiftUpdateEventError = await recordShiftUpdateNotificationEvent({
+      eventType: "added",
+      actorId: session.user.id,
+      targetUserId: volunteerId,
+      shiftInstanceId: assignShiftInstanceId,
+      title: `${volunteerName} added`,
+      body: shiftAddedBody,
+      volunteerName,
+      volunteerRole: volunteer.role,
+    });
+    if (shiftUpdateEventError) {
+      notificationErrors.push(`notification center event failed: ${shiftUpdateEventError}`);
+    }
 
     const adminPushError = await sendAdminPush({
       title: `${volunteerName} added`,
-      body: formatShiftAddedNotificationLabel(
-        assignedShift
-          ? {
-              starts_at: assignedShift.start.toISOString(),
-              title: assignedShift.title,
-            }
-          : null,
-      ),
+      body: shiftAddedBody,
     });
     if (adminPushError) {
       notificationErrors.push(`admin notification failed: ${adminPushError}`);
@@ -5434,14 +6043,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       shiftInstanceId: assignShiftInstanceId,
       excludeVolunteerIds: [volunteerId],
       title: `${volunteerName} added`,
-      body: formatShiftAddedNotificationLabel(
-        assignedShift
-          ? {
-              starts_at: assignedShift.start.toISOString(),
-              title: assignedShift.title,
-            }
-          : null,
-      ),
+      body: shiftAddedBody,
       notificationType: "shift_added",
     });
     if (leadNotifyError) {
@@ -5451,14 +6053,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     const pushError = await sendVolunteerPush({
       userId: volunteerId,
       title: `${volunteerName} added`,
-      body: formatShiftAddedNotificationLabel(
-        assignedShift
-          ? {
-              starts_at: assignedShift.start.toISOString(),
-              title: assignedShift.title,
-            }
-          : null,
-      ),
+      body: shiftAddedBody,
       notificationType: "shift_added",
       shiftInstanceId: assignShiftInstanceId,
     });
@@ -5694,6 +6289,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     }
 
     if (approvedShiftInstanceId) {
+      const shiftUpdateEventError = await recordShiftUpdateNotificationEvent({
+        eventType: "approved",
+        actorId: session.user.id,
+        targetUserId: approvedVolunteerId ?? null,
+        shiftInstanceId: approvedShiftInstanceId,
+        title: `${approvedVolunteerName} added`,
+        body: approvedShiftLabel,
+        volunteerName: approvedVolunteerName,
+        volunteerRole: approvedRequest?.volunteer?.role ?? null,
+      });
+      if (shiftUpdateEventError) {
+        approvalNotificationErrors.push(`notification center event failed: ${shiftUpdateEventError}`);
+      }
       const adminPushError = await sendAdminPush({
         title: `${approvedVolunteerName} added`,
         body: approvedShiftLabel,
@@ -5850,6 +6458,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       }
     }
     if (removedShiftInstanceId) {
+      const shiftUpdateEventError = await recordShiftUpdateNotificationEvent({
+        eventType: "removed",
+        actorId: session.user.id,
+        targetUserId: removedVolunteerId ?? null,
+        shiftInstanceId: removedShiftInstanceId,
+        title: "Shift Removed",
+        body: `${volunteerName}\n${removedShiftLabel}`,
+        volunteerName,
+        volunteerRole: removeTarget.volunteer?.role ?? null,
+      });
+      if (shiftUpdateEventError) {
+        removalNotificationErrors.push(`notification center event failed: ${shiftUpdateEventError}`);
+      }
       const leadNotifyError = await notifyLeadsOnShiftInstance({
         shiftInstanceId: removedShiftInstanceId,
         excludeVolunteerIds: [session.user.id, removedVolunteerId].filter(
@@ -5936,6 +6557,19 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       dropNotificationErrors.push(`admin notification failed: ${adminPushError}`);
     }
     if (isVolunteerDrop && targetShiftInstanceId) {
+      const shiftUpdateEventError = await recordShiftUpdateNotificationEvent({
+        eventType: "dropped",
+        actorId: session.user.id,
+        targetUserId: session.user.id,
+        shiftInstanceId: targetShiftInstanceId,
+        title: "Shift Dropped",
+        body: `${actorName}\n${droppedShiftLabel}`,
+        volunteerName: actorName,
+        volunteerRole: displayProfile?.role ?? null,
+      });
+      if (shiftUpdateEventError) {
+        dropNotificationErrors.push(`notification center event failed: ${shiftUpdateEventError}`);
+      }
       const leadNotifyError = await notifyLeadsOnShiftInstance({
         shiftInstanceId: targetShiftInstanceId,
         excludeVolunteerIds: [session.user.id],
@@ -6928,6 +7562,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   ): item is RecurringAssignmentNotificationItem =>
     "notification_kind" in item && item.notification_kind === "recurring_assignment";
 
+  const isShiftUpdateNotification = (item: AppNotificationItem): item is ShiftUpdateNotificationItem =>
+    "notification_kind" in item && item.notification_kind === "shift_update";
+
   const isAdminRequestNotification = (item: AppNotificationItem) =>
     !("notification_kind" in item) && item.status === "pending";
   const adminRequestCount = notifications.filter(isAdminRequestNotification).length;
@@ -6938,6 +7575,56 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       : isAdminAccount
         ? notifications.filter((item) => !isAdminRequestNotification(item))
         : notifications;
+
+  const renderCallOutLogContent = (
+    logs: ShiftCallOutLog[],
+    loading: boolean,
+    message: string,
+    emptyLabel: string,
+  ) => (
+    <div className="account-dropdown-body volunteer-callout-body">
+      {message ? <div className="error-banner">{message}</div> : null}
+      {!loading && !message && logs.length === 0 ? (
+        <div className="empty-banner">{emptyLabel}</div>
+      ) : null}
+      {logs.length > 0 ? (
+        <div className="volunteer-callout-list">
+          {logs.map((log) => {
+            const shiftTitle = log.shift_instance?.template?.title ?? "Shift";
+            const shiftTime = formatResolvedShiftTimeRange(log.shift_instance, shiftTitle);
+            const shiftDate = formatDate(
+              log.shift_instance?.shift_date ?? log.shift_instance?.starts_at ?? null,
+            );
+            const actorName =
+              log.actor?.preferred_name ||
+              log.actor?.full_name ||
+              (log.action === "removed_by_admin" ? "Admin" : "Volunteer");
+            const actionLabel =
+              log.action === "removed_by_admin"
+                ? `Removed by ${actorName}`
+                : "Dropped by volunteer";
+            const reason = normalizeDropReason(log.reason);
+            return (
+              <div key={log.id} className="volunteer-callout-item">
+                <div className="volunteer-callout-main">
+                  <p className="volunteer-callout-title">{shiftTitle}</p>
+                  <p className="volunteer-callout-meta">
+                    {shiftDate}
+                    {shiftTime ? ` · ${shiftTime}` : ""}
+                  </p>
+                  {reason ? <p className="volunteer-callout-reason">{reason}</p> : null}
+                </div>
+                <div className="volunteer-callout-side">
+                  <span className="volunteer-callout-date">{formatDateTime(log.dropped_at)}</span>
+                  <span className="volunteer-callout-action">{actionLabel}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
 
   return (
     <div className="calendar-shell">
@@ -7520,6 +8207,116 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               {assignmentsMessage ? (
                 <div className="error-banner">{assignmentsMessage}</div>
               ) : null}
+              <div className="myshifts-section leave-section">
+                <p className="myshifts-section-title">On leave</p>
+                {!leaveTableAvailable ? (
+                  <div className="empty-banner">
+                    On Leave setup is pending. Apply the Supabase migration to enable this.
+                  </div>
+                ) : null}
+                <div className="account-section leave-form-section">
+                  <div className="appointment-form-grid">
+                    <label className="form-field">
+                      <span className="modal-label">Start date</span>
+                      <input
+                        className="form-input"
+                        type="date"
+                        value={leaveForm.startsOn}
+                        onChange={(event) =>
+                          setLeaveForm((previous) => ({
+                            ...previous,
+                            startsOn: event.currentTarget.value,
+                          }))
+                        }
+                        disabled={leaveSaving || !leaveTableAvailable}
+                      />
+                    </label>
+                    <label className="form-field">
+                      <span className="modal-label">End date</span>
+                      <input
+                        className="form-input"
+                        type="date"
+                        value={leaveForm.endsOn}
+                        onChange={(event) =>
+                          setLeaveForm((previous) => ({
+                            ...previous,
+                            endsOn: event.currentTarget.value,
+                          }))
+                        }
+                        disabled={leaveSaving || !leaveTableAvailable}
+                      />
+                    </label>
+                  </div>
+                  <label className="form-field">
+                    <span className="modal-label">Reason</span>
+                    <textarea
+                      className="form-input form-textarea"
+                      value={leaveForm.reason}
+                      onChange={(event) =>
+                        setLeaveForm((previous) => ({
+                          ...previous,
+                          reason: event.currentTarget.value,
+                        }))
+                      }
+                      disabled={leaveSaving || !leaveTableAvailable}
+                      rows={3}
+                    />
+                  </label>
+                  <button
+                    className="account-button leave-submit-button"
+                    type="button"
+                    onClick={handleLeaveSubmit}
+                    disabled={leaveSaving || !leaveTableAvailable}
+                  >
+                    {leaveSaving ? "Saving..." : editingLeaveId ? "Save leave" : "Set leave"}
+                  </button>
+                  {editingLeaveId ? (
+                    <button
+                      className="nav-button leave-cancel-button"
+                      type="button"
+                      onClick={handleCancelLeaveEdit}
+                      disabled={leaveSaving}
+                    >
+                      Cancel edit
+                    </button>
+                  ) : null}
+                </div>
+                {myLeavePeriods.length > 0 ? (
+                  <div className="recurring-list">
+                    {myLeavePeriods.map((period) => (
+                      <div key={period.id} className="recurring-card leave-period-card">
+                        <p className="recurring-meta">
+                          <span className="recurring-meta-label">Dates:</span>{" "}
+                          {formatLeaveRange(period.starts_on, period.ends_on)}
+                        </p>
+                        <p className="recurring-meta">
+                          <span className="recurring-meta-label">Reason:</span> {period.reason}
+                        </p>
+                        <div className="leave-period-actions">
+                          <button
+                            className="nav-button"
+                            type="button"
+                            onClick={() => handleEditLeave(period)}
+                            disabled={leaveSaving || rescindingLeaveId === period.id}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="account-button"
+                            type="button"
+                            onClick={() => {
+                              void handleRescindLeave(period);
+                            }}
+                            disabled={leaveSaving || rescindingLeaveId === period.id}
+                          >
+                            {rescindingLeaveId === period.id ? "Rescinding..." : "Rescind"}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <div className="myshifts-section">
                 <p className="myshifts-section-title">Upcoming shifts this week</p>
                 {showNoUpcoming ? (
@@ -8543,6 +9340,63 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       );
                     }
 
+                    if (isShiftUpdateNotification(request)) {
+                      const volunteerName = request.volunteer_name || "Volunteer";
+                      const volunteerNameClass =
+                        request.volunteer_role === "Admin"
+                          ? "volunteer-name volunteer-name-admin"
+                          : request.volunteer_role === "Lead"
+                            ? "volunteer-name volunteer-name-lead"
+                            : "volunteer-name volunteer-name-regular";
+                      const fallbackNotificationShiftFromQuery =
+                        (request.shift_instance?.id ?? request.shift_instance_id ?? null) != null
+                          ? notificationShiftFallbacks[
+                              Number(request.shift_instance?.id ?? request.shift_instance_id ?? -1)
+                            ] ?? null
+                          : null;
+                      const fallbackNotificationShiftFromCalendar =
+                        ((request.shift_instance?.id ?? request.shift_instance_id ?? null) != null
+                          ? instanceShifts.find(
+                              (shift) =>
+                                shift.instanceId === (request.shift_instance?.id ?? request.shift_instance_id ?? -1),
+                            )
+                          : null);
+                      const shiftLabel = formatShortShiftRequestLabel(
+                        request.shift_instance?.starts_at || request.shift_instance?.shift_date
+                          ? request.shift_instance
+                          : fallbackNotificationShiftFromQuery
+                            ? fallbackNotificationShiftFromQuery
+                            : fallbackNotificationShiftFromCalendar
+                              ? {
+                                  starts_at: fallbackNotificationShiftFromCalendar.start.toISOString(),
+                                  title: fallbackNotificationShiftFromCalendar.title,
+                                }
+                              : null,
+                      );
+                      const actionLabel =
+                        request.event_type === "removed"
+                          ? "removed from"
+                          : request.event_type === "dropped"
+                            ? "dropped"
+                            : request.event_type === "approved"
+                              ? "approved for"
+                              : "added to";
+
+                      return renderNotificationCard(
+                        request,
+                        index,
+                        isLatest,
+                        <>
+                          {isLatest ? <span className="notification-tag">Latest</span> : null}
+                          <p className="notification-name">
+                            <span className={volunteerNameClass}>{volunteerName}</span> {actionLabel} shift
+                          </p>
+                          <p className="notification-meta">{shiftLabel}</p>
+                          {request.body ? <p className="notification-reason">{request.body}</p> : null}
+                        </>,
+                      );
+                    }
+
                     const volunteerName =
                       request.volunteer?.preferred_name ||
                       request.volunteer?.full_name ||
@@ -9501,6 +10355,25 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         ) : null}
                       </div>
                     ) : null}
+                    {isAdminAccount ? (
+                      <details className="account-section account-dropdown volunteer-callout-log">
+                        <summary className="account-dropdown-summary">
+                          <span className="account-section-title">Call-out log</span>
+                          <span className="volunteer-callout-summary">
+                            {selectedVolunteerCallOutLogsLoading
+                              ? "Loading..."
+                              : `${selectedVolunteerCallOutLogs.length} logged`}
+                          </span>
+                          <span className="account-dropdown-caret" aria-hidden="true">⌄</span>
+                        </summary>
+                        {renderCallOutLogContent(
+                          selectedVolunteerCallOutLogs,
+                          selectedVolunteerCallOutLogsLoading,
+                          selectedVolunteerCallOutLogsMessage,
+                          "No call-outs logged.",
+                        )}
+                      </details>
+                    ) : null}
                   </div>
 
                   {volunteerRecurring.length > 0 || showAddRecurring || profile?.role === "Admin" ? (
@@ -10109,6 +10982,21 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     )}
                   </div>
                 </div>
+              </details>
+              <details className="account-section account-dropdown volunteer-callout-log">
+                <summary className="account-dropdown-summary">
+                  <span className="account-section-title">My call-out log</span>
+                  <span className="volunteer-callout-summary">
+                    {myCallOutLogsLoading ? "Loading..." : `${myCallOutLogs.length} logged`}
+                  </span>
+                  <span className="account-dropdown-caret" aria-hidden="true">⌄</span>
+                </summary>
+                {renderCallOutLogContent(
+                  myCallOutLogs,
+                  myCallOutLogsLoading,
+                  myCallOutLogsMessage,
+                  "No call-outs logged.",
+                )}
               </details>
               <div className="account-section">
                 <div className="account-section-header">

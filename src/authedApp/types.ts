@@ -107,12 +107,50 @@ export type VolunteerHoursSummary = {
   automaticStartAt: string;
 };
 
+export type ShiftCallOutLog = {
+  id: string;
+  assignment_id: string | null;
+  volunteer_id: string;
+  actor_id: string | null;
+  shift_instance_id: number | null;
+  action: "self_dropped" | "removed_by_admin";
+  reason: string | null;
+  dropped_at: string;
+  created_at?: string | null;
+  actor?: {
+    id: string;
+    full_name: string | null;
+    preferred_name: string | null;
+  } | null;
+  shift_instance?: {
+    id: number;
+    shift_date: string | null;
+    starts_at: string | null;
+    ends_at: string | null;
+    template?: {
+      id: string;
+      title: string;
+    } | null;
+  } | null;
+};
+
 export type VolunteerHourBaseline = {
   volunteer_id: string;
   baseline_hours: number | string | null;
   automatic_start_at: string | null;
   updated_at?: string | null;
   updated_by?: string | null;
+};
+
+export type VolunteerLeavePeriod = {
+  id: string;
+  volunteer_id: string;
+  starts_on: string;
+  ends_on: string;
+  reason: string;
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type RecurringAssignment = {
@@ -245,12 +283,27 @@ export type RecurringAssignmentNotificationItem = {
   shift_instance?: ShiftAssignmentDetail["shift_instance"];
 };
 
+export type ShiftUpdateNotificationItem = {
+  notification_kind: "shift_update";
+  id: string;
+  created_at: string | null;
+  event_type: "added" | "removed" | "dropped" | "approved";
+  target_user_id?: string | null;
+  shift_instance_id?: number | null;
+  title: string;
+  body: string | null;
+  volunteer_name?: string | null;
+  volunteer_role?: "Regular Volunteer" | "Lead" | "Admin" | null;
+  shift_instance?: ShiftAssignmentDetail["shift_instance"];
+};
+
 export type AppNotificationItem =
   | ShiftAssignmentDetail
   | AppointmentNotificationItem
   | LeadNeededNotificationItem
   | ShadowFollowUpNotificationItem
-  | RecurringAssignmentNotificationItem;
+  | RecurringAssignmentNotificationItem
+  | ShiftUpdateNotificationItem;
 
 export type AppointmentKind = "foster" | "adoption" | "vax" | "orientation" | "other";
 
