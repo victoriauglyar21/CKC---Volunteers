@@ -53,9 +53,13 @@ export async function sendAdminPush({
     return "Unauthorized: missing session token. Please log in again.";
   }
 
+  const notificationTitle = title.trim() || "Notification";
+  const notificationBody = body.trim() || "Open the app for details.";
+  const notificationUrl = url.trim() || "/?view=notifications";
+
   const { data: responseData, error } = await supabase.functions.invoke("send-admin-push", {
     headers: authHeaders,
-    body: { title, body, url, actions, data },
+    body: { title: notificationTitle, body: notificationBody, url: notificationUrl, actions, data },
   });
   if (error) {
     console.warn("Failed to send admin push:", error.message);
@@ -92,13 +96,17 @@ export async function sendVolunteerPush({
     return "Unauthorized: missing session token. Please log in again.";
   }
 
+  const notificationTitle = title.trim() || "Notification";
+  const notificationBody = body.trim() || "Open the app for details.";
+  const notificationUrl = url.trim() || "/?view=notifications";
+
   const { data, error } = await supabase.functions.invoke("send-push", {
     headers: authHeaders,
     body: {
       user_id: userId,
-      title,
-      body,
-      url,
+      title: notificationTitle,
+      body: notificationBody,
+      url: notificationUrl,
       notification_type: notificationType,
       shift_instance_id: shiftInstanceId,
     },

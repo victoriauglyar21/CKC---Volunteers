@@ -82,9 +82,20 @@ serve(async (req) => {
   }
 
   const payload = await req.json();
-  const { title, body, url, actions, data } = payload ?? {};
-  if (!title || !body || !url) {
-    return new Response("Invalid payload", { status: 400, headers: corsHeaders });
+  const { title: rawTitle, body: rawBody, url: rawUrl, actions, data } = payload ?? {};
+  const title = typeof rawTitle === "string" ? rawTitle.trim() : "";
+  const body = typeof rawBody === "string" ? rawBody.trim() : "";
+  const url = typeof rawUrl === "string" ? rawUrl.trim() : "";
+  const missingFields = [
+    title ? null : "title",
+    body ? null : "body",
+    url ? null : "url",
+  ].filter((field): field is string => Boolean(field));
+  if (missingFields.length > 0) {
+    return new Response(`Invalid payload: missing ${missingFields.join(", ")}`, {
+      status: 400,
+      headers: corsHeaders,
+    });
   }
   const notificationActions = Array.isArray(actions)
     ? actions

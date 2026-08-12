@@ -59,9 +59,29 @@ serve(async (req) => {
     .maybeSingle();
 
   const payload = await req.json();
-  const { user_id, title, body, url, notification_type, shift_instance_id } = payload ?? {};
-  if (!user_id || !title || !body || !url) {
-    return new Response("Invalid payload", { status: 400, headers: corsHeaders });
+  const {
+    user_id: rawUserId,
+    title: rawTitle,
+    body: rawBody,
+    url: rawUrl,
+    notification_type,
+    shift_instance_id,
+  } = payload ?? {};
+  const user_id = typeof rawUserId === "string" ? rawUserId.trim() : "";
+  const title = typeof rawTitle === "string" ? rawTitle.trim() : "";
+  const body = typeof rawBody === "string" ? rawBody.trim() : "";
+  const url = typeof rawUrl === "string" ? rawUrl.trim() : "";
+  const missingFields = [
+    user_id ? null : "user_id",
+    title ? null : "title",
+    body ? null : "body",
+    url ? null : "url",
+  ].filter((field): field is string => Boolean(field));
+  if (missingFields.length > 0) {
+    return new Response(`Invalid payload: missing ${missingFields.join(", ")}`, {
+      status: 400,
+      headers: corsHeaders,
+    });
   }
 
   const requesterRoleFromProfile = requesterProfile?.role ?? null;
