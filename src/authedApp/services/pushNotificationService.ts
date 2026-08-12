@@ -148,7 +148,7 @@ export async function sendVolunteerPush({
   return null;
 }
 
-function isExpectedPushSkip(message: string) {
+export function isExpectedPushSkip(message: string) {
   const normalized = message.toLowerCase();
   return (
     normalized.includes("push notification skipped") ||

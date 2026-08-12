@@ -48,6 +48,7 @@ import {
   recordShiftUpdateNotificationEvent,
 } from "./authedApp/services/notificationService";
 import {
+  isExpectedPushSkip,
   notifyLeadsOnShiftInstance,
   sendAdminPush,
   sendVolunteerPush,
@@ -6060,7 +6061,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       notificationType: "shift_added",
       shiftInstanceId: assignShiftInstanceId,
     });
-    if (pushError) {
+    if (pushError && !isExpectedPushSkip(pushError)) {
       notificationErrors.push(`volunteer notification failed: ${pushError}`);
     }
     if (notificationErrors.length > 0) {
@@ -6286,7 +6287,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         body: `Your request for ${approvedShiftTitle} was approved.`,
         notificationType: "shift_approved",
       });
-      if (pushError) {
+      if (pushError && !isExpectedPushSkip(pushError)) {
         approvalNotificationErrors.push(`push notification failed: ${pushError}`);
       }
     }
@@ -6390,7 +6391,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         notificationType: "shift_removed",
         shiftInstanceId: deniedRequest?.shift_instance?.id ?? undefined,
       });
-      if (pushError) {
+      if (pushError && !isExpectedPushSkip(pushError)) {
         denyNotificationErrors.push(`push notification failed: ${pushError}`);
       }
     }
