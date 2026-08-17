@@ -138,7 +138,7 @@ const VOLUNTEER_HOURS_AUTOMATIC_START_AT = "2026-07-17T00:00:00-06:00";
 const VOLUNTEER_DROPPED_SHIFTS_TRACKING_START_AT = "2026-07-27T00:00:00-06:00";
 const MIN_WEEK_OFFSET = -52;
 const RECENT_CALENDAR_VIEW_STORAGE_PREFIX = "ckc:recent-calendar-view";
-const RECENT_CALENDAR_VIEW_MAX_AGE_MS = 30 * 60 * 1000;
+const RECENT_CALENDAR_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 type RecentCalendarView = {
   savedAt: number;
@@ -6825,29 +6825,35 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [calendarRangeMode, monthOffset, session.user.id, weekOffset]);
 
   useEffect(() => {
+    saveRecentCalendarView();
+  }, [saveRecentCalendarView]);
+
+  useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
         saveRecentCalendarView();
-      } else {
-        requestAnimationFrame(() => {
-          window.scrollTo(0, scrollYRef.current);
-        });
       }
     };
     const handlePageHide = () => {
       saveRecentCalendarView();
     };
+    const handleWindowBlur = () => {
+      saveRecentCalendarView();
+    };
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("blur", handleWindowBlur);
     return () => {
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("blur", handleWindowBlur);
     };
   }, [saveRecentCalendarView]);
 
   useEffect(() => {
     let ticking = false;
     const handleScroll = () => {
+      scrollYRef.current = Math.max(0, window.scrollY);
       if (ticking) return;
       ticking = true;
       window.setTimeout(() => {
