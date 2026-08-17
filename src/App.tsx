@@ -11,6 +11,52 @@ const NewUI = lazy(() => import("./NewUI"));
 
 type ThemeMode = "light" | "dark";
 const THEME_STORAGE_KEY = "ui-theme";
+const PROFILE_CACHE_PREFIX = "ckc:profile";
+
+function readStoredJson<T>(storageKey: string) {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredJson(storageKey: string, value: unknown) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(value));
+  } catch {
+    // Ignore cache write failures.
+  }
+}
+
+function getProfileCacheKey(userId: string) {
+  return `${PROFILE_CACHE_PREFIX}:${userId}`;
+}
+
+function readCachedProfile(userId: string | null | undefined) {
+  if (!userId) return null;
+  const cached = readStoredJson<ProfileRecord>(getProfileCacheKey(userId));
+  return cached?.id === userId ? cached : null;
+}
+
+function readStoredSupabaseSession() {
+  if (typeof window === "undefined") return null;
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (!key || !key.startsWith("sb-") || !key.includes("-auth-token")) continue;
+    const stored = readStoredJson<Session | { currentSession?: Session | null }>(key);
+    const session =
+      stored && "currentSession" in stored ? stored.currentSession : (stored as Session | null);
+    if (session?.access_token && session.user?.id) {
+      return session;
+    }
+  }
+  return null;
+}
 
 function getInitialTheme(): ThemeMode {
   if (typeof window === "undefined") return "light";
@@ -107,13 +153,17 @@ function replaceRoute(path: string) {
 }
 
 function MainApp() {
-  const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [initialSession] = useState(() => readStoredSupabaseSession());
+  const [initialProfile] = useState(() => readCachedProfile(initialSession?.user.id));
+  const [session, setSession] = useState<Session | null>(initialSession);
+  const [loading, setLoading] = useState(!initialSession);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
-  const [profileChecked, setProfileChecked] = useState(false);
-  const [profile, setProfile] = useState<ProfileRecord | null>(null);
-  const [needsOnboarding, setNeedsOnboarding] = useState(false);
+  const [profileChecked, setProfileChecked] = useState(Boolean(initialProfile));
+  const [profile, setProfile] = useState<ProfileRecord | null>(initialProfile);
+  const [needsOnboarding, setNeedsOnboarding] = useState(
+    () => Boolean(initialProfile && !isProfileComplete(initialProfile)),
+  );
   const [profileMissing, setProfileMissing] = useState(false);
   const [startupOverlayMounted, setStartupOverlayMounted] = useState(true);
   const [startupOverlayVisible, setStartupOverlayVisible] = useState(true);
@@ -211,7 +261,14 @@ function MainApp() {
         setProfileLoading(false);
         return;
       }
-      setProfileChecked(false);
+      const cachedProfile = readCachedProfile(session.user.id);
+      if (cachedProfile && !profile) {
+        setProfile(cachedProfile);
+        setNeedsOnboarding(!isProfileComplete(cachedProfile));
+        setProfileChecked(true);
+      } else if (!profile) {
+        setProfileChecked(false);
+      }
       setProfileLoading(true);
       const { data, error } = await supabase
         .from("profiles")
@@ -243,6 +300,7 @@ function MainApp() {
       const fetchedProfile = data as ProfileRecord;
       const profileComplete = isProfileComplete(fetchedProfile);
       setProfile(fetchedProfile);
+      writeStoredJson(getProfileCacheKey(session.user.id), fetchedProfile);
       setNeedsOnboarding(!profileComplete);
       setProfileMissing(false);
       setProfileChecked(true);

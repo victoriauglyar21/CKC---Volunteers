@@ -3688,6 +3688,19 @@ html[data-theme="dark"] .shift-appointment-button:hover {
   align-items: center;
 }
 
+.volunteer-contact-inline {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--ink-primary);
+  font-size: 0.95rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.volunteer-contact-inline:hover {
+  text-decoration: underline;
+}
+
 .volunteer-note-icon-action {
   width: 38px;
   height: 38px;

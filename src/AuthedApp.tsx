@@ -137,6 +137,16 @@ const RECURRING_ASSIGNMENT_BLACKOUT_DATES = new Set(["2026-07-08", "2026-07-09"]
 const VOLUNTEER_HOURS_AUTOMATIC_START_AT = "2026-07-17T00:00:00-06:00";
 const VOLUNTEER_DROPPED_SHIFTS_TRACKING_START_AT = "2026-07-27T00:00:00-06:00";
 const MIN_WEEK_OFFSET = -52;
+const RECENT_CALENDAR_VIEW_STORAGE_PREFIX = "ckc:recent-calendar-view";
+const RECENT_CALENDAR_VIEW_MAX_AGE_MS = 30 * 60 * 1000;
+
+type RecentCalendarView = {
+  savedAt: number;
+  scrollY: number;
+  calendarRangeMode: "week" | "month";
+  weekOffset: number;
+  monthOffset: number;
+};
 
 function getDateKeyFromShiftValue(value: string | null | undefined) {
   if (!value) return null;
@@ -366,6 +376,33 @@ function readStoredJson<T>(storageKey: string) {
   } catch {
     return null;
   }
+}
+
+function getRecentCalendarViewStorageKey(userId: string) {
+  return `${RECENT_CALENDAR_VIEW_STORAGE_PREFIX}:${userId}`;
+}
+
+function readRecentCalendarView(userId: string) {
+  const stored = readStoredJson<Partial<RecentCalendarView>>(getRecentCalendarViewStorageKey(userId));
+  if (!stored) return null;
+  const now = Date.now();
+  if (!Number.isFinite(stored.savedAt) || now - Number(stored.savedAt) > RECENT_CALENDAR_VIEW_MAX_AGE_MS) {
+    return null;
+  }
+  if (stored.calendarRangeMode !== "week" && stored.calendarRangeMode !== "month") return null;
+  const scrollY = Number(stored.scrollY);
+  const weekOffset = Number(stored.weekOffset);
+  const monthOffset = Number(stored.monthOffset);
+  if (!Number.isFinite(scrollY) || !Number.isFinite(weekOffset) || !Number.isFinite(monthOffset)) {
+    return null;
+  }
+  return {
+    savedAt: Number(stored.savedAt),
+    scrollY: Math.max(0, scrollY),
+    calendarRangeMode: stored.calendarRangeMode,
+    weekOffset,
+    monthOffset,
+  } satisfies RecentCalendarView;
 }
 
 function isQuotaExceededError(error: unknown) {
@@ -718,10 +755,11 @@ function formatVolunteerShiftCount(value: number | null | undefined) {
 }
 
 export default function AuthedApp({ session, profile }: AuthedAppProps) {
+  const [recentCalendarView] = useState(() => readRecentCalendarView(session.user.id));
   const [today, setToday] = useState(() => startOfDay(new Date()));
   const [templates, setTemplates] = useState<ShiftTemplate[]>(() => readCachedTemplates());
   const [loading, setLoading] = useState(() => readCachedTemplates().length === 0);
-  const [initialCalendarLoading, setInitialCalendarLoading] = useState(true);
+  const [initialCalendarLoading, setInitialCalendarLoading] = useState(!recentCalendarView);
   const [visibleRealInstanceIdsBySlot, setVisibleRealInstanceIdsBySlot] = useState<Record<string, number>>({});
   const [activeShiftInstanceId, setActiveShiftInstanceId] = useState<number | null>(null);
   const [instanceShifts, setInstanceShifts] = useState<ShiftInstance[]>([]);
@@ -881,10 +919,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [leaveTableAvailable, setLeaveTableAvailable] = useState(true);
   const [editingLeaveId, setEditingLeaveId] = useState<string | null>(null);
   const [rescindingLeaveId, setRescindingLeaveId] = useState<string | null>(null);
-  const [calendarRangeMode, setCalendarRangeMode] = useState<"week" | "month">("week");
-  const [isMobile, setIsMobile] = useState(false);
-  const [weekOffset, setWeekOffset] = useState(0);
-  const [monthOffset, setMonthOffset] = useState(0);
+  const [calendarRangeMode, setCalendarRangeMode] = useState<"week" | "month">(
+    () => recentCalendarView?.calendarRangeMode ?? "week",
+  );
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 600px)").matches,
+  );
+  const [weekOffset, setWeekOffset] = useState(() => recentCalendarView?.weekOffset ?? 0);
+  const [monthOffset, setMonthOffset] = useState(() => recentCalendarView?.monthOffset ?? 0);
   const [collapsedDayKeys, setCollapsedDayKeys] = useState<Set<string>>(new Set());
   const [manuallyToggledDayKeys, setManuallyToggledDayKeys] = useState<Set<string>>(new Set());
   const [personalShiftKeys, setPersonalShiftKeys] = useState<Set<string>>(new Set());
@@ -911,7 +953,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const [shiftInstancesRefreshToken, setShiftInstancesRefreshToken] = useState(0);
-  const scrollYRef = useRef(0);
+  const scrollYRef = useRef(recentCalendarView?.scrollY ?? 0);
   const liveRefreshInFlightRef = useRef(false);
   const weekAssignmentsFetchSeqRef = useRef(0);
   const weekAssignmentsHydratedKeyRef = useRef<string | null>(null);
@@ -919,7 +961,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const weekAppointmentsHydratedKeyRef = useRef<string | null>(null);
   const pushSubscriptionSyncInFlightRef = useRef(false);
   const initialCalendarHydratedRef = useRef(false);
-  const initialTodayScrollDoneRef = useRef(false);
+  const initialTodayScrollDoneRef = useRef(Boolean(recentCalendarView));
+  const recentCalendarRestoreDoneRef = useRef(!recentCalendarView);
+  const mobileRangeResetInitializedRef = useRef(false);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const swipeTriggeredRef = useRef(false);
   const todayCellRef = useRef<HTMLDivElement | null>(null);
@@ -1698,6 +1742,10 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, [today]);
 
   useEffect(() => {
+    if (!mobileRangeResetInitializedRef.current) {
+      mobileRangeResetInitializedRef.current = true;
+      return;
+    }
     if (isMobile) {
       setWeekOffset(0);
     }
@@ -6762,21 +6810,56 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   // Removed focus refresh to avoid reloading view on tab switch.
 
+  const saveRecentCalendarView = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (!recentCalendarRestoreDoneRef.current) return;
+    const nextScrollY = Math.max(0, window.scrollY);
+    scrollYRef.current = nextScrollY;
+    writeStoredJson(getRecentCalendarViewStorageKey(session.user.id), {
+      savedAt: Date.now(),
+      scrollY: nextScrollY,
+      calendarRangeMode,
+      weekOffset,
+      monthOffset,
+    } satisfies RecentCalendarView);
+  }, [calendarRangeMode, monthOffset, session.user.id, weekOffset]);
+
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
-        scrollYRef.current = window.scrollY;
+        saveRecentCalendarView();
       } else {
         requestAnimationFrame(() => {
           window.scrollTo(0, scrollYRef.current);
         });
       }
     };
+    const handlePageHide = () => {
+      saveRecentCalendarView();
+    };
     document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("pagehide", handlePageHide);
     return () => {
       document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("pagehide", handlePageHide);
     };
-  }, []);
+  }, [saveRecentCalendarView]);
+
+  useEffect(() => {
+    let ticking = false;
+    const handleScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      window.setTimeout(() => {
+        ticking = false;
+        saveRecentCalendarView();
+      }, 500);
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+    };
+  }, [saveRecentCalendarView]);
 
   useEffect(() => {
     if (!showMenu) return;
@@ -6982,6 +7065,25 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       });
     });
   }, [todayJumpToken, weekOffset, monthOffset, calendarRangeMode, todayKey]);
+
+  useEffect(() => {
+    if (recentCalendarRestoreDoneRef.current) return;
+    if (!recentCalendarView) return;
+    if (loading) return;
+    if (templates.length > 0 && instanceShifts.length === 0) return;
+
+    recentCalendarRestoreDoneRef.current = true;
+    const targetScrollY = recentCalendarView.scrollY;
+    scrollYRef.current = targetScrollY;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: targetScrollY, behavior: "auto" });
+        window.setTimeout(() => {
+          window.scrollTo({ top: targetScrollY, behavior: "auto" });
+        }, 180);
+      });
+    });
+  }, [instanceShifts.length, loading, recentCalendarView, templates.length]);
 
   useEffect(() => {
     if (initialTodayScrollDoneRef.current) return;
@@ -10122,6 +10224,14 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       "Volunteer"}
                   </span>
                 </h3>
+                {isAdminAccount && notesTarget?.volunteer?.phone ? (
+                  <a
+                    className="volunteer-contact-inline"
+                    href={`tel:${normalizePhoneLink(notesTarget.volunteer.phone)}`}
+                  >
+                    {notesTarget.volunteer.phone}
+                  </a>
+                ) : null}
               </div>
               <button
                 className="appointment-note-icon-button"
