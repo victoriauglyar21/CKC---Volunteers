@@ -76,7 +76,6 @@ function isProfileComplete(profile: ProfileRecord) {
     return false;
   if (!hasText(profile.full_name)) return false;
   if (!hasText(profile.preferred_name)) return false;
-  if (!hasText(profile.pronouns)) return false;
   if (!hasText(profile.phone)) return false;
   if (!profile.joined_at) return false;
   return true;

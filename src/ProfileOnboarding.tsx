@@ -106,7 +106,6 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
   const validate = () => {
     if (!form.full_name.trim()) return "Full name is required.";
     if (!form.preferred_name.trim()) return "Preferred name is required.";
-    if (!form.pronouns.trim()) return "Pronouns are required.";
     if (!form.phone.trim()) return "Phone number is required.";
     if (!form.joined_at) return "Joined date is required.";
     return "";
@@ -152,7 +151,7 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
             : "Regular Volunteer",
       full_name: normalizeText(form.full_name),
       preferred_name: normalizeText(form.preferred_name),
-      pronouns: normalizeText(form.pronouns),
+      pronouns: normalizeText(form.pronouns) || null,
       phone: normalizeText(form.phone),
       joined_at: form.joined_at || null,
     };
@@ -277,7 +276,6 @@ export default function ProfileOnboarding({ userId, initialProfile, onComplete }
                 type="text"
                 value={form.pronouns}
                 onChange={handleChange("pronouns")}
-                required
               />
             </label>
 

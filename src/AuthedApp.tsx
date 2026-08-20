@@ -2153,10 +2153,6 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setProfileSaveMessage("Name is required.");
       return;
     }
-    if (!profileForm.pronouns.trim()) {
-      setProfileSaveMessage("Pronouns are required.");
-      return;
-    }
     if (!profileForm.phone.trim()) {
       setProfileSaveMessage("Phone number is required.");
       return;
@@ -2172,7 +2168,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       .from("profiles")
       .update({
         full_name: profileForm.full_name.trim(),
-        pronouns: profileForm.pronouns.trim(),
+        pronouns: profileForm.pronouns.trim() || null,
         phone: profileForm.phone.trim(),
         joined_at: profileForm.joined_at.trim(),
       })
