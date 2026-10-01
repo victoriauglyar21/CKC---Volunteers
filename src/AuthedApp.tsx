@@ -179,6 +179,19 @@ function formatLeaveRange(startsOn: string, endsOn: string) {
     : `${startLabel}, ${start.getFullYear()}-${endLabel}, ${end.getFullYear()}`;
 }
 
+function formatVolunteerNameWithLastInitial(
+  volunteer: { full_name?: string | null; preferred_name?: string | null } | null | undefined,
+) {
+  const preferredName = volunteer?.preferred_name?.trim();
+  const fullName = volunteer?.full_name?.trim();
+  if (!fullName) return preferredName || "Volunteer";
+
+  const parts = fullName.split(/\s+/).filter(Boolean);
+  const firstName = preferredName || parts[0] || fullName;
+  const lastInitial = parts.length > 1 ? parts[parts.length - 1]?.slice(0, 1).toUpperCase() : "";
+  return lastInitial ? `${firstName} ${lastInitial}.` : firstName;
+}
+
 function isMissingVolunteerLeavePeriodsTableError(
   error: { message?: string; code?: string } | string | null | undefined,
 ) {
@@ -4604,7 +4617,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     >();
 
     const getDisplayName = (assignment: ShiftAssignmentDetail) =>
-      assignment.volunteer?.preferred_name || assignment.volunteer?.full_name || "Volunteer";
+      formatVolunteerNameWithLastInitial(assignment.volunteer);
 
     displayDayKeys.forEach((dayKey) => {
       const dayShifts = orderedShiftsByDate[dayKey] ?? [];
@@ -4918,7 +4931,9 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </div>
             ) : null}
             {slotAssignments.map((assignment, index) => {
-              const name = assignment?.volunteer?.preferred_name || assignment?.volunteer?.full_name || null;
+              const name = assignment?.volunteer
+                ? formatVolunteerNameWithLastInitial(assignment.volunteer)
+                : null;
               const hasVolunteer = Boolean(assignment?.volunteer?.id);
               const parsedOtherNote = parseOtherAssignmentNote(assignment?.notes);
               const shadowShiftNumber =
@@ -8175,10 +8190,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                 )
                                 .map((assignment) => ({
                                   key: `asg-${assignment.id}`,
-                                  label:
-                                    assignment.volunteer?.preferred_name ||
-                                    assignment.volunteer?.full_name ||
-                                    "Volunteer",
+                                  label: formatVolunteerNameWithLastInitial(assignment.volunteer),
                                   color:
                                     isLeadAssignmentRole(assignment.assignment_role) ||
                                     isLeadRole(assignment.volunteer?.role) ||
