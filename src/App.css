@@ -2526,6 +2526,17 @@ html[data-theme="dark"] .capacity-slot-extra {
   opacity: 0.85;
 }
 
+.capacity-slot-role-label {
+  font-size: 0.64rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  color: #1d4ed8;
+}
+
+html[data-theme="dark"] .capacity-slot-role-label {
+  color: #bfdbfe;
+}
+
 .capacity-slot-phone-link {
   color: inherit;
   text-decoration: underline;
@@ -3049,6 +3060,56 @@ html[data-theme="dark"] .shift-appointment-button:hover {
   justify-content: flex-end;
   gap: 8px;
   padding-top: 2px;
+}
+
+.volunteer-lead-status-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(75, 85, 99, 0.28);
+  background: rgba(75, 85, 99, 0.08);
+}
+
+.volunteer-lead-status-title,
+.volunteer-lead-status-meta {
+  margin: 0;
+}
+
+.volunteer-lead-status-title {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--ink-primary);
+}
+
+.volunteer-lead-status-meta {
+  margin-top: 2px;
+  font-size: 0.68rem;
+  color: var(--ink-muted);
+}
+
+.volunteer-lead-status-button {
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid rgba(75, 85, 99, 0.42);
+  background: rgba(75, 85, 99, 0.16);
+  color: var(--ink-primary);
+  padding: 0 9px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.volunteer-lead-status-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.volunteer-lead-status-message {
+  grid-column: 1 / -1;
 }
 
 .repeat-days {
@@ -4812,12 +4873,24 @@ html[data-theme="dark"] .modal-panel .volunteer-row,
 html[data-theme="dark"] .modal-panel .notification-card,
 html[data-theme="dark"] .modal-panel .helpful-section,
 html[data-theme="dark"] .modal-panel .volunteer-hours-card,
+html[data-theme="dark"] .modal-panel .volunteer-lead-status-card,
 html[data-theme="dark"] .week-glance-table-wrap,
 html[data-theme="dark"] .shift-chip,
 html[data-theme="dark"] .loading-banner,
 html[data-theme="dark"] .error-banner {
   background: #102744;
   border-color: color-mix(in srgb, var(--calendar-border) 88%, transparent);
+  color: var(--ink-primary);
+}
+
+html[data-theme="dark"] .volunteer-lead-status-card {
+  background: rgba(148, 163, 184, 0.1);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+html[data-theme="dark"] .volunteer-lead-status-button {
+  background: rgba(148, 163, 184, 0.16);
+  border-color: rgba(148, 163, 184, 0.36);
   color: var(--ink-primary);
 }
 

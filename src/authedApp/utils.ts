@@ -189,7 +189,8 @@ export function normalizeOtherAssignmentName(noteOrName: string | null | undefin
     .replace(/\s+/g, " ");
 }
 
-export function parseDateOnly(value: string) {
+export function parseDateOnly(value: string | null | undefined) {
+  if (!value) return null;
   const [year, month, day] = value.split("-").map((part) => Number(part));
   if (!year || !month || !day) return null;
   return new Date(year, month - 1, day);
@@ -490,7 +491,7 @@ export function isAdminRole(role: string | null | undefined) {
 
 export function isLeadRole(role: string | null | undefined) {
   const normalizedRole = getNormalizedRole(role);
-  return normalizedRole === "lead" || normalizedRole === "lead volunteer";
+  return normalizedRole === "lead" || normalizedRole === "lead volunteer" || normalizedRole === "new lead";
 }
 
 export function isLeadAssignmentRole(role: string | null | undefined) {

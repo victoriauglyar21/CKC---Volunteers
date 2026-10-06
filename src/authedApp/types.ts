@@ -1,5 +1,8 @@
 import type { Session } from "@supabase/supabase-js";
 
+export type VolunteerRole = "Regular Volunteer" | "Lead" | "New Lead" | "Admin";
+export type ProfileRole = "Regular Volunteer" | "Lead" | "Admin";
+
 export type ShiftTemplate = {
   id: string;
   title: string;
@@ -36,7 +39,9 @@ export type ShiftAssignmentDetail = {
     full_name: string | null;
     preferred_name: string | null;
     phone?: string | null;
-    role?: "Regular Volunteer" | "Lead" | "Admin" | null;
+    role?: VolunteerRole | null;
+    joined_at?: string | null;
+    lead_started_at?: string | null;
   } | null;
   shift_instance?: {
     id: number;
@@ -57,7 +62,7 @@ export type CalendarCell = {
 
 export type ProfileRecord = {
   id: string;
-  role: "Regular Volunteer" | "Lead" | "Admin";
+  role: ProfileRole;
   full_name: string | null;
   preferred_name: string | null;
   pronouns: string | null;
@@ -67,6 +72,7 @@ export type ProfileRecord = {
   emergency_contact_phone: string | null;
   status: string | null;
   joined_at: string | null;
+  lead_started_at?: string | null;
   internal_notes: string | null;
   interests: string[] | null;
   training_completed: boolean | null;
@@ -81,8 +87,9 @@ export type VolunteerRow = {
   full_name: string | null;
   preferred_name: string | null;
   pronouns: string | null;
-  role: "Regular Volunteer" | "Lead" | "Admin";
+  role: ProfileRole;
   joined_at: string | null;
+  lead_started_at?: string | null;
   date_of_birth: string | null;
   phone: string | null;
   emergency_contact_name: string | null;
@@ -256,7 +263,7 @@ export type ShadowFollowUpNotificationItem = {
     id: string;
     full_name: string | null;
     preferred_name: string | null;
-    role?: "Regular Volunteer" | "Lead" | "Admin" | null;
+    role?: ProfileRole | null;
     phone?: string | null;
   } | null;
   shift_instance?: {
@@ -293,7 +300,7 @@ export type ShiftUpdateNotificationItem = {
   title: string;
   body: string | null;
   volunteer_name?: string | null;
-  volunteer_role?: "Regular Volunteer" | "Lead" | "Admin" | null;
+  volunteer_role?: ProfileRole | null;
   shift_instance?: ShiftAssignmentDetail["shift_instance"];
 };
 

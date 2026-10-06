@@ -59,6 +59,7 @@ import type {
   AppointmentKind,
   AppointmentNotificationItem,
   PersonalAssignment,
+  ProfileRole,
   ProfileRecord,
   RecurringAssignment,
   RecurringAssignmentNotificationItem,
@@ -136,6 +137,18 @@ const WEEK_ASSIGNMENTS_CACHE_PREFIX = "weekAssignments:";
 const RECURRING_ASSIGNMENT_BLACKOUT_DATES = new Set(["2026-07-08", "2026-07-09"]);
 const VOLUNTEER_HOURS_AUTOMATIC_START_AT = "2026-07-17T00:00:00-06:00";
 const VOLUNTEER_DROPPED_SHIFTS_TRACKING_START_AT = "2026-07-27T00:00:00-06:00";
+const NEW_LEAD_DISPLAY_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const NEW_LEAD_ASSIGNMENT_NOTE = "lead assist";
+const NEW_LEAD_MANUAL_DISPLAY_END_DATE = "2026-10-19";
+const NEW_LEAD_DISPLAY_NAME_KEYS = new Set([
+  "kylee m",
+  "kylee mercer",
+  "sarah j",
+  "sarah john",
+  "kristin m",
+  "kristin mckay",
+  "reyna",
+]);
 const MIN_WEEK_OFFSET = -52;
 const RECENT_CALENDAR_VIEW_STORAGE_PREFIX = "ckc:recent-calendar-view";
 const RECENT_CALENDAR_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -190,6 +203,14 @@ function formatVolunteerNameWithLastInitial(
   const firstName = preferredName || parts[0] || fullName;
   const lastInitial = parts.length > 1 ? parts[parts.length - 1]?.slice(0, 1).toUpperCase() : "";
   return lastInitial ? `${firstName} ${lastInitial}.` : firstName;
+}
+
+function normalizeVolunteerNameKey(value: string | null | undefined) {
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\./g, "")
+    .replace(/\s+/g, " ");
 }
 
 function isMissingVolunteerLeavePeriodsTableError(
@@ -281,6 +302,54 @@ function compareAppointmentsByTime(left: ShiftAppointment, right: ShiftAppointme
   const timeDiff = getAppointmentStartMs(left) - getAppointmentStartMs(right);
   if (timeDiff !== 0) return timeDiff;
   return (left.created_at ?? "").localeCompare(right.created_at ?? "");
+}
+
+function shouldShowNewLeadLabel(
+  volunteer:
+    | {
+        full_name?: string | null;
+        preferred_name?: string | null;
+        role?: string | null;
+        joined_at?: string | null;
+        lead_started_at?: string | null;
+      }
+    | null
+    | undefined,
+  shiftDayStartMs: number,
+  assignmentNote?: string | null,
+) {
+  const manualDisplayEnd = parseDateOnly(NEW_LEAD_MANUAL_DISPLAY_END_DATE);
+  const isManualDisplayWindow =
+    Boolean(manualDisplayEnd) && shiftDayStartMs < startOfDay(manualDisplayEnd as Date).getTime();
+  if (isManualDisplayWindow && (assignmentNote ?? "").trim().toLowerCase() === NEW_LEAD_ASSIGNMENT_NOTE) {
+    return true;
+  }
+  const volunteerNameKeys = [
+    normalizeVolunteerNameKey(volunteer?.full_name),
+    normalizeVolunteerNameKey(volunteer?.preferred_name),
+    normalizeVolunteerNameKey(formatVolunteerNameWithLastInitial(volunteer)),
+  ].filter(Boolean);
+  if (isManualDisplayWindow && volunteerNameKeys.some((nameKey) => NEW_LEAD_DISPLAY_NAME_KEYS.has(nameKey))) {
+    return true;
+  }
+  const normalizedRole = (volunteer?.role ?? "").trim().toLowerCase();
+  if (normalizedRole === "new lead") return isManualDisplayWindow;
+  if (!isLeadRole(volunteer?.role)) return false;
+  const leadStartedAt = parseDateOnly(volunteer?.lead_started_at);
+  if (!leadStartedAt) return false;
+  const leadStartedMs = startOfDay(leadStartedAt).getTime();
+  return shiftDayStartMs >= leadStartedMs && shiftDayStartMs - leadStartedMs < NEW_LEAD_DISPLAY_WINDOW_MS;
+}
+
+function toNotificationVolunteerRole(role: string | null | undefined): ProfileRole | null {
+  if (role === "Regular Volunteer" || role === "Lead" || role === "Admin") return role;
+  if ((role ?? "").trim().toLowerCase() === "new lead") return "Lead";
+  return null;
+}
+
+function isMissingLeadStartedAtColumnError(error: { message?: string; code?: string } | null | undefined) {
+  const message = error?.message ?? "";
+  return /lead_started_at/i.test(message) || /schema cache/i.test(message);
 }
 
 function getShadowShiftSortMs(shiftInstance: {
@@ -866,6 +935,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [selectedVolunteerCallOutLogs, setSelectedVolunteerCallOutLogs] = useState<ShiftCallOutLog[]>([]);
   const [selectedVolunteerCallOutLogsLoading, setSelectedVolunteerCallOutLogsLoading] = useState(false);
   const [selectedVolunteerCallOutLogsMessage, setSelectedVolunteerCallOutLogsMessage] = useState("");
+  const [volunteerLeadStatusSaving, setVolunteerLeadStatusSaving] = useState(false);
+  const [volunteerLeadStatusMessage, setVolunteerLeadStatusMessage] = useState("");
   const [myCallOutLogs, setMyCallOutLogs] = useState<ShiftCallOutLog[]>([]);
   const [myCallOutLogsLoading, setMyCallOutLogsLoading] = useState(false);
   const [myCallOutLogsMessage, setMyCallOutLogsMessage] = useState("");
@@ -995,6 +1066,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const baseDocumentTitleRef = useRef<string>("CKC Volunteers");
   const displayProfile = profileOverride ? { ...profile, ...profileOverride } : profile;
   const isAdminAccount = profile?.role === "Admin";
+  const canManageVolunteerLeadStatus =
+    session.user.email?.trim().toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase();
   const canSeeVolunteerRecurringFlag = isAdminRole(displayProfile?.role);
   const prefersReducedMotion = useReducedMotion();
   const [notificationDeletingIds, setNotificationDeletingIds] = useState<Set<string>>(new Set());
@@ -1833,7 +1906,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
-    const assignmentSelect = `
+    const assignmentSelectBase = `
         id,
         shift_instance_id,
         volunteer_id,
@@ -1846,7 +1919,8 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           full_name,
           preferred_name,
           phone,
-          role
+          role,
+          joined_at
         ),
         shift_instance:shift_instances (
           id,
@@ -1859,9 +1933,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           )
         )
       `;
+    const assignmentSelectWithLeadStartedAt = assignmentSelectBase.replace("joined_at", "joined_at,\n          lead_started_at");
     const pageSize = 1000;
     let from = 0;
     const allAssignments: ShiftAssignmentDetail[] = [];
+    let assignmentSelect = assignmentSelectWithLeadStartedAt;
     while (true) {
       const { data, error } = await supabase
         .from("shift_assignments")
@@ -1871,6 +1947,12 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         .order("created_at", { ascending: true })
         .range(from, from + pageSize - 1);
       if (error || !data) {
+        if (assignmentSelect === assignmentSelectWithLeadStartedAt && isMissingLeadStartedAtColumnError(error)) {
+          assignmentSelect = assignmentSelectBase;
+          from = 0;
+          allAssignments.length = 0;
+          continue;
+        }
         if (fetchSeq === weekAssignmentsFetchSeqRef.current) {
           finishInitialCalendarLoad();
         }
@@ -2203,15 +2285,26 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const fetchVolunteers = useCallback(async () => {
     setVolunteersLoading(true);
     setVolunteersMessage("");
-    const [profilesResult, recurringResult] = await Promise.all([
+    const profilesSelectBase =
+      "id, full_name, preferred_name, pronouns, role, joined_at, date_of_birth, phone, emergency_contact_name, emergency_contact_phone, status, internal_notes, interests, training_completed, training_completed_at, notification_pref, created_at";
+    const profilesSelectWithLeadStartedAt =
+      "id, full_name, preferred_name, pronouns, role, joined_at, lead_started_at, date_of_birth, phone, emergency_contact_name, emergency_contact_phone, status, internal_notes, interests, training_completed, training_completed_at, notification_pref, created_at";
+    const [profilesWithLeadStartedAtResult, recurringResult] = await Promise.all([
       supabase
         .from("profiles")
-        .select(
-          "id, full_name, preferred_name, pronouns, role, joined_at, date_of_birth, phone, emergency_contact_name, emergency_contact_phone, status, internal_notes, interests, training_completed, training_completed_at, notification_pref, created_at",
-        )
+        .select(profilesSelectWithLeadStartedAt)
         .order("joined_at", { ascending: false, nullsFirst: false }),
       supabase.from("recurring_assignments").select("volunteer_id"),
     ]);
+
+    const profilesResult =
+      profilesWithLeadStartedAtResult.error &&
+      isMissingLeadStartedAtColumnError(profilesWithLeadStartedAtResult.error)
+        ? await supabase
+        .from("profiles")
+        .select(profilesSelectBase)
+            .order("joined_at", { ascending: false, nullsFirst: false })
+        : profilesWithLeadStartedAtResult;
 
     if (profilesResult.error || !profilesResult.data) {
       setVolunteers([]);
@@ -2441,6 +2534,72 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     session.user.id,
     volunteerBaselineHoursDraft,
   ]);
+
+  const handleVolunteerLeadStatusChange = useCallback(
+    async (nextRole: Exclude<ProfileRole, "Admin">) => {
+      if (!canManageVolunteerLeadStatus || !selectedVolunteer || selectedVolunteer.role === "Admin") return;
+      const leadStartedAt = nextRole === "Lead" ? getDateKey(today) : null;
+
+      setVolunteerLeadStatusSaving(true);
+      setVolunteerLeadStatusMessage("");
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .update({
+          role: nextRole,
+          lead_started_at: leadStartedAt,
+        })
+        .eq("id", selectedVolunteer.id)
+        .select(
+          "id, full_name, preferred_name, pronouns, role, joined_at, lead_started_at, date_of_birth, phone, emergency_contact_name, emergency_contact_phone, status, internal_notes, interests, training_completed, training_completed_at, notification_pref, created_at",
+        )
+        .single();
+
+      if (error || !data) {
+        setVolunteerLeadStatusMessage(
+          isMissingLeadStartedAtColumnError(error)
+            ? "Apply the lead_started_at Supabase migration before changing lead status."
+            : error?.message ?? "Unable to update lead status.",
+        );
+        setVolunteerLeadStatusSaving(false);
+        return;
+      }
+
+      const updatedVolunteer = data as unknown as VolunteerRow;
+      setSelectedVolunteer(updatedVolunteer);
+      setVolunteers((current) =>
+        current.map((volunteer) => (volunteer.id === updatedVolunteer.id ? updatedVolunteer : volunteer)),
+      );
+      setWeekAssignments((current) => {
+        const next: typeof current = {};
+        Object.entries(current).forEach(([instanceId, assignments]) => {
+          next[Number(instanceId)] = assignments.map((assignment) =>
+            assignment.volunteer?.id === updatedVolunteer.id
+              ? {
+                  ...assignment,
+                  volunteer: {
+                    ...assignment.volunteer,
+                    role: updatedVolunteer.role,
+                    lead_started_at: updatedVolunteer.lead_started_at ?? null,
+                  },
+                }
+              : assignment,
+          );
+        });
+        return next;
+      });
+      if (updatedVolunteer.id === session.user.id) {
+        setProfileOverride(updatedVolunteer);
+      }
+      setVolunteerLeadStatusMessage(
+        nextRole === "Lead"
+          ? "Lead status added. New Lead will show for two weeks."
+          : "Lead status removed.",
+      );
+      setVolunteerLeadStatusSaving(false);
+    },
+    [canManageVolunteerLeadStatus, selectedVolunteer, session.user.id, today],
+  );
 
   useEffect(() => {
     if (!showAssignVolunteer) return;
@@ -4931,18 +5090,27 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </div>
             ) : null}
             {slotAssignments.map((assignment, index) => {
+              const shiftDayStartMs = startOfDay(shift.start).getTime();
               const name = assignment?.volunteer
                 ? formatVolunteerNameWithLastInitial(assignment.volunteer)
                 : null;
               const hasVolunteer = Boolean(assignment?.volunteer?.id);
               const parsedOtherNote = parseOtherAssignmentNote(assignment?.notes);
+              const showNewLeadLabel =
+                assignment && hasVolunteer
+                  ? shouldShowNewLeadLabel(assignment.volunteer, shiftDayStartMs, parsedOtherNote.display)
+                  : false;
+              const isNewLeadAssignmentNote =
+                parsedOtherNote.display.trim().toLowerCase() === NEW_LEAD_ASSIGNMENT_NOTE;
               const shadowShiftNumber =
                 assignment && parsedOtherNote.isShadowShift ? shadowShiftNumbersByAssignmentId[assignment.id] : null;
               const volunteerNoteDisplay =
                 assignment && hasVolunteer
                   ? parsedOtherNote.isShadowShift
                     ? parsedOtherNote.details
-                    : (assignment.notes ?? "")
+                    : isNewLeadAssignmentNote
+                      ? ""
+                      : (assignment.notes ?? "")
                   : "";
               const hasOtherLabel = Boolean(!hasVolunteer && parsedOtherNote.display);
               const isLeadCoverageSlot = index === 0 && !hasVolunteer;
@@ -5075,13 +5243,17 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     <span className="capacity-slot-badge" aria-hidden="true">{slotBadgeLabel}</span>
                     <div className="capacity-slot-content">
                       <span className="capacity-slot-name">{name ?? "No Volunteer Assigned"}</span>
+                      {showNewLeadLabel ? (
+                        <span className="capacity-slot-role-label">New Lead</span>
+                      ) : null}
                       {parsedOtherNote.isShadowShift ? (
                         <span className="capacity-slot-phone">
                           Shadow Shift {shadowShiftNumber ? `(${shadowShiftNumber})` : ""}
                         </span>
                       ) : volunteerNoteDisplay ? (
                         <span className="capacity-slot-phone">{volunteerNoteDisplay}</span>
-                      ) : (isLeadAssignmentRole(assignment.assignment_role) ||
+                      ) : !showNewLeadLabel &&
+                        (isLeadAssignmentRole(assignment.assignment_role) ||
                         isLeadRole(assignment.volunteer?.role) ||
                         assignment.volunteer?.role === "Admin") &&
                         assignment.volunteer?.phone ? (
@@ -6360,7 +6532,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         title: `${approvedVolunteerName} added`,
         body: approvedShiftLabel,
         volunteerName: approvedVolunteerName,
-        volunteerRole: approvedRequest?.volunteer?.role ?? null,
+        volunteerRole: toNotificationVolunteerRole(approvedRequest?.volunteer?.role),
       });
       if (shiftUpdateEventError) {
         approvalNotificationErrors.push(`notification center event failed: ${shiftUpdateEventError}`);
@@ -6529,7 +6701,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
         title: "Shift Removed",
         body: `${volunteerName}\n${removedShiftLabel}`,
         volunteerName,
-        volunteerRole: removeTarget.volunteer?.role ?? null,
+        volunteerRole: toNotificationVolunteerRole(removeTarget.volunteer?.role),
       });
       if (shiftUpdateEventError) {
         removalNotificationErrors.push(`notification center event failed: ${shiftUpdateEventError}`);
@@ -10358,6 +10530,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                       <p className="volunteer-meta">
                         Joined {formatDate(selectedVolunteer.joined_at)}
                       </p>
+                      {selectedVolunteer.lead_started_at && selectedVolunteer.role === "Lead" ? (
+                        <p className="volunteer-meta">
+                          Lead since {formatDate(selectedVolunteer.lead_started_at)}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
 
@@ -10739,6 +10916,39 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                           <Check size={20} strokeWidth={2.8} aria-hidden="true" />
                         </button>
                       </div>
+                    </div>
+                  ) : null}
+                  {canManageVolunteerLeadStatus && selectedVolunteer.role !== "Admin" ? (
+                    <div className="volunteer-lead-status-card">
+                      <div>
+                        <p className="volunteer-lead-status-title">Lead status</p>
+                        <p className="volunteer-lead-status-meta">
+                          {selectedVolunteer.role === "Lead"
+                            ? `Lead since ${formatDate(selectedVolunteer.lead_started_at)}`
+                            : "Regular Volunteer"}
+                        </p>
+                      </div>
+                      <button
+                        className="volunteer-lead-status-button"
+                        type="button"
+                        onClick={() =>
+                          void handleVolunteerLeadStatusChange(
+                            selectedVolunteer.role === "Lead" ? "Regular Volunteer" : "Lead",
+                          )
+                        }
+                        disabled={volunteerLeadStatusSaving}
+                      >
+                        {volunteerLeadStatusSaving
+                          ? "Saving..."
+                          : selectedVolunteer.role === "Lead"
+                            ? "Remove lead"
+                            : "Make lead"}
+                      </button>
+                      {volunteerLeadStatusMessage ? (
+                        <div className="error-banner volunteer-lead-status-message">
+                          {volunteerLeadStatusMessage}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
