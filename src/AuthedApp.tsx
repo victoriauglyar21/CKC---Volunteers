@@ -856,6 +856,11 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [takeShiftMode, setTakeShiftMode] = useState<"request" | "join">("request");
   const [showNotifications, setShowNotifications] = useState(false);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [bulkApprovalProgress, setBulkApprovalProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
+  const notificationApprovalInFlightRef = useRef(false);
   const [notificationsMessage, setNotificationsMessage] = useState("");
   const [notifications, setNotifications] = useState<AppNotificationItem[]>([]);
   const [adminNotificationTab, setAdminNotificationTab] = useState<"requests" | "notifications">("requests");
@@ -6469,6 +6474,83 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
     session.user.id,
   ]);
 
+  const approveShiftRequest = async (assignmentId: string) => {
+    const { error } = await approveNotificationAssignment(assignmentId);
+    if (error) return { error, warnings: [] as string[] };
+
+    updateWeekAssignmentsLocally(assignmentId, (assignment) => ({ ...assignment, status: "active" }));
+    removeNotificationFromList(assignmentId);
+    const approvalNotificationErrors: string[] = [];
+    try {
+      let approvedRequest = notifications.find(
+        (item): item is ShiftAssignmentDetail => item.id === assignmentId && !isAppointmentNotification(item),
+      );
+      if (!approvedRequest) {
+        const { data: approvedData } = await fetchAssignmentById(assignmentId);
+        approvedRequest = approvedData ?? undefined;
+      }
+      const approvedVolunteerId = approvedRequest?.volunteer?.id;
+      const approvedVolunteerName =
+        approvedRequest?.volunteer?.preferred_name ||
+        approvedRequest?.volunteer?.full_name ||
+        "A volunteer";
+      const approvedShiftInstanceId = approvedRequest?.shift_instance?.id;
+      const approvedShiftTitle = approvedRequest?.shift_instance?.template?.title ?? "your shift";
+      const approvedShiftLabel = formatShiftAddedNotificationLabel(approvedRequest?.shift_instance);
+      if (approvedVolunteerId) {
+        const pushError = await sendVolunteerPush({
+          userId: approvedVolunteerId,
+          title: "Shift approved",
+          body: `Your request for ${approvedShiftTitle} was approved.`,
+          notificationType: "shift_approved",
+        });
+        if (pushError && !isExpectedPushSkip(pushError)) {
+          approvalNotificationErrors.push(`push notification failed: ${pushError}`);
+        }
+      }
+
+      if (approvedShiftInstanceId) {
+        const shiftUpdateEventError = await recordShiftUpdateNotificationEvent({
+          eventType: "approved",
+          actorId: session.user.id,
+          targetUserId: approvedVolunteerId ?? null,
+          shiftInstanceId: approvedShiftInstanceId,
+          title: `${approvedVolunteerName} added`,
+          body: approvedShiftLabel,
+          volunteerName: approvedVolunteerName,
+          volunteerRole: toNotificationVolunteerRole(approvedRequest?.volunteer?.role),
+        });
+        if (shiftUpdateEventError) {
+          approvalNotificationErrors.push(`notification center event failed: ${shiftUpdateEventError}`);
+        }
+        const adminPushError = await sendAdminPush({
+          title: `${approvedVolunteerName} added`,
+          body: approvedShiftLabel,
+        });
+        if (adminPushError) {
+          approvalNotificationErrors.push(`admin notification failed: ${adminPushError}`);
+        }
+        const leadNotifyError = await notifyLeadsOnShiftInstance({
+          shiftInstanceId: approvedShiftInstanceId,
+          excludeVolunteerIds: [approvedVolunteerId, session.user.id].filter(
+            (value): value is string => Boolean(value),
+          ),
+          title: `${approvedVolunteerName} added`,
+          body: approvedShiftLabel,
+          notificationType: "shift_added",
+        });
+        if (leadNotifyError) {
+          approvalNotificationErrors.push(leadNotifyError);
+        }
+      }
+    } catch (error) {
+      approvalNotificationErrors.push(
+        `notification failed: ${error instanceof Error ? error.message : "Unexpected error"}`,
+      );
+    }
+    return { error: null, warnings: approvalNotificationErrors };
+  };
+
   const handleNotificationDecision = async (
     assignmentId: string,
     decision: "approve" | "deny",
@@ -6477,6 +6559,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setNotificationsMessage("Only admins can approve or deny requests.");
       return;
     }
+    if (notificationApprovalInFlightRef.current) return;
     if (decision === "deny") {
       setDenyTargetId(assignmentId);
       setDenyReason("");
@@ -6484,90 +6567,68 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       return;
     }
 
+    notificationApprovalInFlightRef.current = true;
     setNotificationsLoading(true);
     setNotificationsMessage("");
-
-    const { error } = await approveNotificationAssignment(assignmentId);
-
-    if (error) {
-      setNotificationsMessage(error);
+    try {
+      const { error, warnings } = await approveShiftRequest(assignmentId);
+      if (error) setNotificationsMessage(error);
+      else if (warnings.length > 0) {
+        setNotificationsMessage(`Approved, but ${warnings.join(" | ")}`);
+      }
+    } catch (error) {
+      setNotificationsMessage(error instanceof Error ? error.message : "Could not approve request.");
+    } finally {
+      notificationApprovalInFlightRef.current = false;
       setNotificationsLoading(false);
-      return;
+      refreshShiftViewsInBackground();
     }
+  };
 
-    let approvedRequest = notifications.find(
-      (item): item is ShiftAssignmentDetail => item.id === assignmentId && !isAppointmentNotification(item),
-    );
-    if (!approvedRequest) {
-      const { data: approvedData } = await fetchAssignmentById(assignmentId);
-      approvedRequest = approvedData ?? undefined;
-    }
-    const approvedVolunteerId = approvedRequest?.volunteer?.id;
-    const approvedVolunteerName =
-      approvedRequest?.volunteer?.preferred_name ||
-      approvedRequest?.volunteer?.full_name ||
-      "A volunteer";
-    const approvedShiftInstanceId = approvedRequest?.shift_instance?.id;
-    const approvedShiftTitle = approvedRequest?.shift_instance?.template?.title ?? "your shift";
-    const approvedShiftLabel = formatShiftAddedNotificationLabel(approvedRequest?.shift_instance);
-    const approvalNotificationErrors: string[] = [];
-    if (approvedVolunteerId) {
-      const pushError = await sendVolunteerPush({
-        userId: approvedVolunteerId,
-        title: "Shift approved",
-        body: `Your request for ${approvedShiftTitle} was approved.`,
-        notificationType: "shift_approved",
-      });
-      if (pushError && !isExpectedPushSkip(pushError)) {
-        approvalNotificationErrors.push(`push notification failed: ${pushError}`);
-      }
-    }
+  const handleApproveAllRequests = async () => {
+    if (!isAdminAccount || notificationsLoading || notificationApprovalInFlightRef.current) return;
+    const requests = notifications.filter(isAdminRequestNotification);
+    if (requests.length < 2) return;
 
-    if (approvedShiftInstanceId) {
-      const shiftUpdateEventError = await recordShiftUpdateNotificationEvent({
-        eventType: "approved",
-        actorId: session.user.id,
-        targetUserId: approvedVolunteerId ?? null,
-        shiftInstanceId: approvedShiftInstanceId,
-        title: `${approvedVolunteerName} added`,
-        body: approvedShiftLabel,
-        volunteerName: approvedVolunteerName,
-        volunteerRole: toNotificationVolunteerRole(approvedRequest?.volunteer?.role),
-      });
-      if (shiftUpdateEventError) {
-        approvalNotificationErrors.push(`notification center event failed: ${shiftUpdateEventError}`);
+    notificationApprovalInFlightRef.current = true;
+    setNotificationsLoading(true);
+    setNotificationsMessage("");
+    setBulkApprovalProgress({ completed: 0, total: requests.length });
+    let approvedCount = 0;
+    let notificationWarningCount = 0;
+    const errors: string[] = [];
+    try {
+      for (const [index, request] of requests.entries()) {
+        try {
+          const { error, warnings } = await approveShiftRequest(request.id);
+          if (error) errors.push(error);
+          else {
+            approvedCount += 1;
+            if (warnings.length > 0) notificationWarningCount += 1;
+          }
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : "Unexpected error");
+        }
+        setBulkApprovalProgress({ completed: index + 1, total: requests.length });
       }
-      const adminPushError = await sendAdminPush({
-        title: `${approvedVolunteerName} added`,
-        body: approvedShiftLabel,
-      });
-      if (adminPushError) {
-        approvalNotificationErrors.push(`admin notification failed: ${adminPushError}`);
+      const messages = [`Approved ${approvedCount} of ${requests.length} shift requests.`];
+      if (errors.length > 0) {
+        messages.push(`${errors.length} could not be approved. Please retry the remaining requests. ${[...new Set(errors)].join(" | ")}`);
       }
-      const leadNotifyError = await notifyLeadsOnShiftInstance({
-        shiftInstanceId: approvedShiftInstanceId,
-        excludeVolunteerIds: [approvedVolunteerId, session.user.id].filter(
-          (value): value is string => Boolean(value),
-        ),
-        title: `${approvedVolunteerName} added`,
-        body: approvedShiftLabel,
-        notificationType: "shift_added",
-      });
-      if (leadNotifyError) {
-        approvalNotificationErrors.push(leadNotifyError);
+      if (notificationWarningCount > 0) {
+        messages.push(`Notifications could not be fully delivered for ${notificationWarningCount} approved request(s).`);
       }
+      setNotificationsMessage(messages.join(" "));
+    } finally {
+      notificationApprovalInFlightRef.current = false;
+      setBulkApprovalProgress(null);
+      setNotificationsLoading(false);
+      refreshShiftViewsInBackground();
     }
-    if (approvalNotificationErrors.length > 0) {
-      setNotificationsMessage(`Approved, but ${approvalNotificationErrors.join(" | ")}`);
-    }
-
-    updateWeekAssignmentsLocally(assignmentId, (assignment) => ({ ...assignment, status: "active" }));
-    removeNotificationFromList(assignmentId);
-    setNotificationsLoading(false);
-    refreshShiftViewsInBackground();
   };
 
   const handleConfirmDeny = async () => {
+    if (notificationApprovalInFlightRef.current) return;
     if (!isAdminAccount) {
       setNotificationsMessage("Only admins can deny requests.");
       return;
@@ -9364,11 +9425,26 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
               </button>
             </div>
             <div className="notifications-toolbar">
+              {isAdminAccount && adminNotificationTab === "requests" &&
+              (adminRequestCount > 1 || bulkApprovalProgress !== null) ? (
+                <button
+                  className="account-button notification-approve-all"
+                  type="button"
+                  onClick={() => void handleApproveAllRequests()}
+                  disabled={notificationsLoading || bulkApprovalProgress !== null}
+                  aria-busy={bulkApprovalProgress !== null}
+                >
+                  <Check size={18} strokeWidth={2.4} aria-hidden="true" />
+                  {bulkApprovalProgress
+                    ? `Approving ${bulkApprovalProgress.completed}/${bulkApprovalProgress.total}…`
+                    : `Approve All (${adminRequestCount})`}
+                </button>
+              ) : null}
               <button
                 className="account-button notification-delete-action"
                 type="button"
                 onClick={handleDeleteAllNotifications}
-                disabled={notifications.length === 0}
+                disabled={notifications.length === 0 || bulkApprovalProgress !== null}
                 aria-label="Hide all notifications"
                 title="Hide all notifications"
               >
@@ -9408,7 +9484,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 </div>
               ) : null}
               {notificationsMessage ? (
-                <div className="error-banner">{notificationsMessage}</div>
+                <div className="error-banner" role="status">{notificationsMessage}</div>
               ) : null}
               {visibleNotifications.length === 0 && !notificationsInitialLoading ? (
                 <div className="empty-banner">
@@ -9805,6 +9881,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                 event.stopPropagation();
                                 void handleNotificationDecision(request.id, "deny");
                               }}
+                              disabled={notificationsLoading || bulkApprovalProgress !== null}
                               aria-label="Deny"
                               title="Deny"
                             >
@@ -9817,6 +9894,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                                 event.stopPropagation();
                                 void handleNotificationDecision(request.id, "approve");
                               }}
+                              disabled={notificationsLoading || bulkApprovalProgress !== null}
                               aria-label="Approve"
                               title="Approve"
                             >
@@ -10301,6 +10379,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     setPendingDecisionTarget(null);
                     void handleNotificationDecision(targetId, "deny");
                   }}
+                  disabled={notificationsLoading || bulkApprovalProgress !== null}
                   aria-label="Deny"
                   title="Deny"
                 >
@@ -10316,6 +10395,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     setPendingDecisionTarget(null);
                     void handleNotificationDecision(targetId, "approve");
                   }}
+                  disabled={notificationsLoading || bulkApprovalProgress !== null}
                   aria-label="Approve"
                   title="Approve"
                 >

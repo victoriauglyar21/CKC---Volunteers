@@ -1954,9 +1954,18 @@ html[data-theme="dark"] .weekday-today {
 
 .notifications-toolbar {
   display: flex;
+  align-items: center;
+  gap: 8px;
   justify-content: flex-end;
   margin-top: -8px;
   padding-right: 8px;
+}
+
+.notification-approve-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
 }
 
 .notification-tabs {
