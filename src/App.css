@@ -2806,28 +2806,6 @@ html[data-theme="dark"] .shift-appointment-button:hover {
   opacity: 0.7;
 }
 
-.leave-form-section {
-  display: grid;
-  gap: 12px;
-}
-
-.leave-submit-button {
-  width: fit-content;
-  justify-self: end;
-}
-
-.leave-cancel-button {
-  width: fit-content;
-  justify-self: end;
-}
-
-.leave-period-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .myshift-detail-row {
   display: flex;
   justify-content: space-between;

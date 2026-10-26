@@ -112,6 +112,7 @@ export type VolunteerHoursSummary = {
   completedShiftCount: number;
   droppedShiftCount: number;
   automaticStartAt: string;
+  lastAttendedShift?: { date: string; title: string } | null;
 };
 
 export type ShiftCallOutLog = {
@@ -147,17 +148,6 @@ export type VolunteerHourBaseline = {
   automatic_start_at: string | null;
   updated_at?: string | null;
   updated_by?: string | null;
-};
-
-export type VolunteerLeavePeriod = {
-  id: string;
-  volunteer_id: string;
-  starts_on: string;
-  ends_on: string;
-  reason: string;
-  created_by?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
 };
 
 export type RecurringAssignment = {
