@@ -883,6 +883,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   const [showAssignVolunteer, setShowAssignVolunteer] = useState(false);
   const [assignShiftInstanceId, setAssignShiftInstanceId] = useState<number | null>(null);
   const [assignLoading, setAssignLoading] = useState(false);
+  const assignInFlightRef = useRef(false);
   const [assignMessage, setAssignMessage] = useState("");
   const [showAssignOtherForm, setShowAssignOtherForm] = useState(false);
   const [assignOtherMode, setAssignOtherMode] = useState<"other" | "shadow">("other");
@@ -5759,6 +5760,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
   }, []);
 
   const handleAssignVolunteer = async (volunteerId: string) => {
+    if (assignInFlightRef.current || assignOtherLoading) return;
     if (!assignShiftInstanceId) {
       setAssignMessage("Shift instance not found.");
       return;
@@ -5768,138 +5770,82 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
       setAssignMessage("Volunteer not found.");
       return;
     }
+    assignInFlightRef.current = true;
     setAssignLoading(true);
     setAssignMessage("");
-    const assignmentRole = volunteer.role === "Lead" ? "lead" : "regular";
-    const isShadowAssignment = assignOtherMode === "shadow";
-    const volunteerName = volunteer.preferred_name || volunteer.full_name || "A volunteer";
-    const existingLocalAssignment = (weekAssignments[assignShiftInstanceId] ?? []).find(
-      (assignment) => assignment.volunteer?.id === volunteerId,
-    );
-    const notes = isShadowAssignment
-      ? buildVolunteerShadowShiftNote(volunteerName, existingLocalAssignment?.notes ?? null)
-      : undefined;
-    const assignmentPayload: {
-      shift_instance_id: number;
-      volunteer_id: string;
-      status: "active";
-      assignment_role: "lead" | "regular";
-      dropped_at: null;
-      dropped_reason: null;
-      notes?: string | null;
-    } = {
-      shift_instance_id: assignShiftInstanceId,
-      volunteer_id: volunteerId,
-      status: "active",
-      assignment_role: assignmentRole,
-      dropped_at: null,
-      dropped_reason: null,
-    };
-    if (isShadowAssignment) {
-      assignmentPayload.notes = notes ?? null;
-    }
-    const { data: previousAssignments, error: previousAssignmentError } = await supabase
-      .from("shift_assignments")
-      .select("id, status")
-      .eq("shift_instance_id", assignShiftInstanceId)
-      .eq("volunteer_id", volunteerId)
-      .limit(1);
+    try {
+      const assignedShift = instanceShifts.find((shift) => shift.instanceId === assignShiftInstanceId);
+      const assignmentRole = volunteer.role === "Lead" ? "lead" : "regular";
+      const isShadowAssignment = assignOtherMode === "shadow";
+      const volunteerName = volunteer.preferred_name || volunteer.full_name || "A volunteer";
+      const existingLocalAssignment = (weekAssignments[assignShiftInstanceId] ?? []).find(
+        (assignment) => assignment.volunteer?.id === volunteerId,
+      );
+      const notes = isShadowAssignment
+        ? buildVolunteerShadowShiftNote(volunteerName, existingLocalAssignment?.notes ?? null)
+        : undefined;
+      const assignmentPayload: {
+        shift_instance_id: number;
+        volunteer_id: string;
+        status: "active";
+        assignment_role: "lead" | "regular";
+        dropped_at: null;
+        dropped_reason: null;
+        notes?: string | null;
+      } = {
+        shift_instance_id: assignShiftInstanceId,
+        volunteer_id: volunteerId,
+        status: "active",
+        assignment_role: assignmentRole,
+        dropped_at: null,
+        dropped_reason: null,
+      };
+      if (isShadowAssignment) {
+        assignmentPayload.notes = notes ?? null;
+      }
+      const { data: previousAssignments, error: previousAssignmentError } = await supabase
+        .from("shift_assignments")
+        .select("id, status")
+        .eq("shift_instance_id", assignShiftInstanceId)
+        .eq("volunteer_id", volunteerId)
+        .limit(1);
 
-    if (previousAssignmentError) {
-      setAssignMessage(previousAssignmentError.message);
-      setAssignLoading(false);
-      return;
-    }
+      if (previousAssignmentError) {
+        setAssignMessage(previousAssignmentError.message);
+        return;
+      }
 
-    const previousAssignment = previousAssignments?.[0] ?? null;
-    if (previousAssignment && previousAssignment.status !== "dropped") {
-      setAssignMessage("This volunteer is already on this shift.");
-      setAssignLoading(false);
-      return;
-    }
+      const previousAssignment = previousAssignments?.[0] ?? null;
+      if (previousAssignment && previousAssignment.status !== "dropped") {
+        setAssignMessage("This volunteer is already on this shift.");
+        return;
+      }
 
-    const saveResult = previousAssignment?.status === "dropped"
-      ? await supabase
-          .from("shift_assignments")
-          .update(assignmentPayload)
-          .eq("id", previousAssignment.id)
-          .select("id, created_at, notes")
-      : await supabase
-          .from("shift_assignments")
-          .insert(assignmentPayload)
-          .select("id, created_at, notes");
-    const { data: savedAssignments, error } = saveResult;
+      const saveResult = previousAssignment?.status === "dropped"
+        ? await supabase
+            .from("shift_assignments")
+            .update(assignmentPayload)
+            .eq("id", previousAssignment.id)
+            .select("id, created_at, notes")
+        : await supabase
+            .from("shift_assignments")
+            .insert(assignmentPayload)
+            .select("id, created_at, notes");
+      const { data: savedAssignments, error } = saveResult;
 
-    if (error) {
-      setAssignMessage(error.message);
-      setAssignLoading(false);
-      return;
-    }
+      if (error) {
+        setAssignMessage(error.message);
+        return;
+      }
 
-    const notificationErrors: string[] = [];
-    const savedAssignment = Array.isArray(savedAssignments) ? (savedAssignments[0] ?? null) : null;
-    const savedAssignmentId = savedAssignment?.id ?? `${assignShiftInstanceId}-${volunteerId}`;
-    const savedAssignmentCreatedAt = savedAssignment?.created_at ?? new Date().toISOString();
-    const savedAssignmentNotes = isShadowAssignment
-      ? (savedAssignment?.notes ?? notes ?? null)
-      : null;
-    const assignmentLabel = isShadowAssignment ? "Shadow shift" : "Shift";
-    const shiftAddedBody = formatShiftAddedNotificationLabel(
-      assignedShift
-        ? {
-            starts_at: assignedShift.start.toISOString(),
-            title: assignedShift.title,
-          }
-        : null,
-    );
-
-    const shiftUpdateEventError = await recordShiftUpdateNotificationEvent({
-      eventType: "added",
-      actorId: session.user.id,
-      targetUserId: volunteerId,
-      shiftInstanceId: assignShiftInstanceId,
-      title: `${volunteerName} added`,
-      body: shiftAddedBody,
-      volunteerName,
-      volunteerRole: volunteer.role,
-    });
-    if (shiftUpdateEventError) {
-      notificationErrors.push(`notification center event failed: ${shiftUpdateEventError}`);
-    }
-
-    const adminPushError = await sendAdminPush({
-      title: `${volunteerName} added`,
-      body: shiftAddedBody,
-    });
-    if (adminPushError) {
-      notificationErrors.push(`admin notification failed: ${adminPushError}`);
-    }
-
-    const leadNotifyError = await notifyLeadsOnShiftInstance({
-      shiftInstanceId: assignShiftInstanceId,
-      excludeVolunteerIds: [volunteerId],
-      title: `${volunteerName} added`,
-      body: shiftAddedBody,
-      notificationType: "shift_added",
-    });
-    if (leadNotifyError) {
-      notificationErrors.push(leadNotifyError);
-    }
-
-    const pushError = await sendVolunteerPush({
-      userId: volunteerId,
-      title: `${volunteerName} added`,
-      body: shiftAddedBody,
-      notificationType: "shift_added",
-      shiftInstanceId: assignShiftInstanceId,
-    });
-    if (pushError && !isExpectedPushSkip(pushError)) {
-      notificationErrors.push(`volunteer notification failed: ${pushError}`);
-    }
-    if (notificationErrors.length > 0) {
-      setAssignMessage(`${assignmentLabel} added, but ${notificationErrors.join(" | ")}`);
-      setAssignLoading(false);
-      closeAssignVolunteerModal();
+      const savedAssignment = savedAssignments?.[0];
+      if (!savedAssignment) {
+        setAssignMessage("The assignment could not be confirmed. Please refresh the shift before trying again.");
+        return;
+      }
+      const savedAssignmentId = savedAssignment.id;
+      const savedAssignmentCreatedAt = savedAssignment.created_at;
+      const savedAssignmentNotes = savedAssignment.notes ?? null;
       addWeekAssignmentLocally({
         id: savedAssignmentId,
         shift_instance_id: assignShiftInstanceId,
@@ -5928,41 +5874,55 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
           : null,
       });
       setShiftInstancesRefreshToken((value) => value + 1);
+      closeAssignVolunteerModal();
       refreshShiftViewsInBackground();
-      return;
-    }
-
-    closeAssignVolunteerModal();
-    addWeekAssignmentLocally({
-      id: savedAssignmentId,
-      shift_instance_id: assignShiftInstanceId,
-      created_at: savedAssignmentCreatedAt,
-      status: "active",
-      assignment_role: assignmentRole,
-      notes: savedAssignmentNotes,
-      volunteer: {
-        id: volunteer.id,
-        full_name: volunteer.full_name,
-        preferred_name: volunteer.preferred_name,
-        phone: volunteer.phone,
-        role: volunteer.role,
-      },
-      shift_instance: assignedShift
-        ? {
-            id: assignShiftInstanceId,
-            shift_date: getDateKey(startOfDay(assignedShift.start)),
-            starts_at: assignedShift.start.toISOString(),
-            ends_at: assignedShift.end.toISOString(),
-            template: {
-              id: assignedShift.templateId,
-              title: assignedShift.title,
-            },
+      const shiftAddedBody = formatShiftAddedNotificationLabel(
+        assignedShift
+          ? { starts_at: assignedShift.start.toISOString(), title: assignedShift.title }
+          : null,
+      );
+      void (async () => {
+        const results = await Promise.allSettled([
+          recordShiftUpdateNotificationEvent({
+            eventType: "added",
+            actorId: session.user.id,
+            targetUserId: volunteerId,
+            shiftInstanceId: assignShiftInstanceId,
+            title: `${volunteerName} added`,
+            body: shiftAddedBody,
+            volunteerName,
+            volunteerRole: volunteer.role,
+          }),
+          sendAdminPush({ title: `${volunteerName} added`, body: shiftAddedBody }),
+          notifyLeadsOnShiftInstance({
+            shiftInstanceId: assignShiftInstanceId,
+            excludeVolunteerIds: [volunteerId],
+            title: `${volunteerName} added`,
+            body: shiftAddedBody,
+            notificationType: "shift_added",
+          }),
+          sendVolunteerPush({
+            userId: volunteerId,
+            title: `${volunteerName} added`,
+            body: shiftAddedBody,
+            notificationType: "shift_added",
+            shiftInstanceId: assignShiftInstanceId,
+          }),
+        ]);
+        results.forEach((result) => {
+          const error = result.status === "rejected" ? String(result.reason) : result.value;
+          if (error && !isExpectedPushSkip(error)) {
+            console.warn("Assignment saved, but notification failed:", error);
           }
-        : null,
-    });
-    setShiftInstancesRefreshToken((value) => value + 1);
-    setAssignLoading(false);
-    refreshShiftViewsInBackground();
+        });
+      })().catch((error) => console.warn("Assignment saved, but notifications failed:", error));
+    } catch (error) {
+      console.error("Unable to assign volunteer:", error);
+      setAssignMessage("Unable to confirm the assignment. Please refresh the shift before trying again.");
+    } finally {
+      assignInFlightRef.current = false;
+      setAssignLoading(false);
+    }
   };
 
   const handleAssignOther = useCallback(async () => {
@@ -7229,6 +7189,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
 
   const handleModalBackdropClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
+    if (showAssignVolunteer && (assignInFlightRef.current || assignOtherLoading)) return;
     setShowMyShifts(false);
     setShowWeekGlance(false);
     setShowMonthDayDetails(false);
@@ -9444,12 +9405,18 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 className="modal-close"
                 type="button"
                 onClick={closeAssignVolunteerModal}
+                disabled={assignLoading || assignOtherLoading}
               >
                 <X size={22} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
-              {assignMessage ? <div className="error-banner">{assignMessage}</div> : null}
+              {assignMessage ? <div className="error-banner" role="alert">{assignMessage}</div> : null}
+              {assignLoading ? (
+                <div className="loading-banner" role="status">
+                  {assignOtherMode === "shadow" ? "Adding shadow shift..." : "Adding volunteer..."}
+                </div>
+              ) : null}
               {volunteersLoading ? (
                 <div className="loading-banner">Loading volunteers...</div>
               ) : null}
@@ -9516,6 +9483,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <button
                   className="account-button"
                   type="button"
+                  disabled={assignLoading || assignOtherLoading}
                   onClick={() => {
                     setAssignOtherMode("other");
                     setShowAssignOtherForm((current) => !(current && assignOtherMode === "other"));
@@ -9526,6 +9494,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                 <button
                   className={`account-button ${assignOtherMode === "shadow" ? "active" : ""}`}
                   type="button"
+                  disabled={assignLoading || assignOtherLoading}
                   onClick={() => {
                     setShowAssignOtherForm(false);
                     setAssignOtherMode((current) => (current === "shadow" ? "other" : "shadow"));
@@ -9561,7 +9530,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                     <button
                       className="account-button"
                       type="button"
-                      disabled={assignOtherLoading}
+                      disabled={assignLoading || assignOtherLoading}
                       onClick={() => void handleAssignOther()}
                     >
                       {assignOtherLoading
@@ -9594,7 +9563,7 @@ export default function AuthedApp({ session, profile }: AuthedAppProps) {
                         key={volunteer.id}
                         className="volunteer-row"
                         type="button"
-                        disabled={assignLoading}
+                        disabled={assignLoading || assignOtherLoading}
                         onClick={() => handleAssignVolunteer(volunteer.id)}
                       >
                         <div className="volunteer-main">
